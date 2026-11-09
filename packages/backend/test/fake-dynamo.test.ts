@@ -4,6 +4,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it } from 'vitest';
@@ -394,5 +395,117 @@ describe('FakeDynamo batch write, TTL sweep, access control and call log', () =>
     await fake.send(new GetCommand({ TableName: TABLE, Key: { PK: 'A', SK: 'B' } }));
     expect(fake.writeCalls).toBe(2);
     expect(fake.calls.map((call) => call.operation)).toEqual(['PutItem', 'DeleteItem', 'GetItem']);
+  });
+});
+
+describe('FakeDynamo Scan and the GSI projection', () => {
+  const profile = (id: number, extra: Record<string, unknown> = {}) => ({
+    PK: 'USER#' + String(id),
+    SK: 'PROFILE',
+    GSI1PK: 'LOGIN#player-' + String(id),
+    GSI1SK: 'USER#' + String(id),
+    login: 'Player-' + String(id),
+    level: 7,
+    xp: 12345,
+    renown: 2,
+    vocation: 'Smith',
+    gold: 999,
+    charms: [{ id: 'rubber-duck' }],
+    ...extra,
+  });
+
+  async function seeded() {
+    const fake = setup();
+    for (const id of [3, 1, 2]) {
+      await put(fake, profile(id));
+    }
+    await put(fake, { PK: 'USER#1', SK: 'WEEK#2026-46', weekly_xp: 5 });
+    return fake;
+  }
+
+  const scan = (fake: FakeDynamo, input: object = {}) =>
+    fake.send(new ScanCommand({ TableName: TABLE, IndexName: 'GSI1', ...input }));
+
+  it('scans only the sparse GSI1: profiles, in index order, never the other items', async () => {
+    const fake = await seeded();
+    const result = await scan(fake);
+    expect(result.Items?.map((item) => item.PK)).toEqual(['USER#1', 'USER#2', 'USER#3']);
+    expect(result.LastEvaluatedKey).toBeUndefined();
+  });
+
+  it('projects the keys and the INCLUDE attributes, not the whole item (template.yaml)', async () => {
+    const fake = await seeded();
+    const [item] = (await scan(fake)).Items ?? [];
+    expect(item).toEqual({
+      PK: 'USER#1',
+      SK: 'PROFILE',
+      GSI1PK: 'LOGIN#player-1',
+      GSI1SK: 'USER#1',
+      login: 'Player-1',
+      level: 7,
+      xp: 12345,
+      renown: 2,
+      vocation: 'Smith',
+    });
+    // A query through the index is projected the same way.
+    const queried = await fake.send(
+      new QueryCommand({
+        TableName: TABLE,
+        IndexName: 'GSI1',
+        KeyConditionExpression: '#g = :g',
+        ExpressionAttributeNames: { '#g': 'GSI1PK' },
+        ExpressionAttributeValues: { ':g': 'LOGIN#player-2' },
+      }),
+    );
+    expect(queried.Items?.[0]).not.toHaveProperty('gold');
+    expect(queried.Items?.[0]).toHaveProperty('vocation', 'Smith');
+    // The table read still has everything.
+    expect(fake.peek('USER#1', 'PROFILE')).toHaveProperty('gold', 999);
+  });
+
+  it('pages with Limit and LastEvaluatedKey until the index is exhausted', async () => {
+    const fake = await seeded();
+    const first = await scan(fake, { Limit: 2 });
+    expect(first.Items).toHaveLength(2);
+    expect(first.LastEvaluatedKey).toMatchObject({ PK: 'USER#2', SK: 'PROFILE' });
+    const second = await scan(fake, { Limit: 2, ExclusiveStartKey: first.LastEvaluatedKey });
+    expect(second.Items?.map((item) => item.PK)).toEqual(['USER#3']);
+    expect(second.LastEvaluatedKey).toBeUndefined();
+  });
+
+  it('refuses a Scan of the table itself, whatever the role may call', async () => {
+    const fake = await seeded();
+    await expectError(fake.send(new ScanCommand({ TableName: TABLE })), 'AccessDeniedException');
+  });
+
+  it('refuses a Scan to a role without it, and tags each call with its role', async () => {
+    const fake = await seeded();
+    const ingest = fake.forRole('ingest', ['PutItem', 'GetItem', 'UpdateItem', 'Query']);
+    const api = fake.forRole('api', ['Scan']);
+    await expectError(
+      ingest.send(new ScanCommand({ TableName: TABLE, IndexName: 'GSI1' })),
+      'AccessDeniedException',
+    );
+    expect(
+      (await api.send(new ScanCommand({ TableName: TABLE, IndexName: 'GSI1' }))).Items,
+    ).toHaveLength(3);
+    expect(
+      fake.calls.filter((call) => call.role).map((call) => [call.role, call.operation]),
+    ).toEqual([
+      ['ingest', 'Scan'],
+      ['api', 'Scan'],
+    ]);
+    // A role view shares the store with every other.
+    await expectError(
+      api.send(new PutCommand({ TableName: TABLE, Item: { PK: 'X', SK: 'Y' } })),
+      'AccessDeniedException',
+    );
+  });
+
+  it('rejects filters, projections and segments it does not emulate', async () => {
+    const fake = await seeded();
+    await expectError(scan(fake, { FilterExpression: 'level > :l' }), 'ValidationException');
+    await expectError(scan(fake, { ProjectionExpression: 'PK' }), 'ValidationException');
+    await expectError(scan(fake, { Limit: 0 }), 'ValidationException');
   });
 });

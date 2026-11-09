@@ -38,6 +38,8 @@ export interface IngestDeps {
   log: Logger;
   /** Epoch milliseconds; injectable for tests. */
   now?: () => number;
+  /** Seeds for runs started by a player's first event of a week; injectable for tests. */
+  newSeed?: () => number;
 }
 
 export function createIngestHandler(
@@ -84,7 +86,13 @@ export function createIngestHandler(
         return json(200, { ok: true });
       }
       await processDelivery(
-        { db: deps.db, metrics: deps.metrics, log: deps.log, now },
+        {
+          db: deps.db,
+          metrics: deps.metrics,
+          log: deps.log,
+          now,
+          ...(deps.newSeed ? { newSeed: deps.newSeed } : {}),
+        },
         deliveryId,
         events,
       );

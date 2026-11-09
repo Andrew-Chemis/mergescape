@@ -1,7 +1,8 @@
 import { emptySkillXp } from '@mergescape/shared';
 import { jwtVerify } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApiHandler, handler as lambdaHandler, LOG_PAGE_SIZE } from '../src/handlers/api';
+import { createApiHandler, LOG_PAGE_SIZE } from '../src/handlers/api';
+import { isRolloverEvent } from '../src/rollover';
 import type { FunctionUrlResult } from '../src/http';
 import { JWT_AUDIENCE, JWT_ISSUER, JWT_TTL_SECONDS } from '../src/jwt';
 import { OAUTH_STATE_TTL_SECONDS } from '../src/db';
@@ -559,7 +560,8 @@ describe('GET /me', () => {
     const result = await h.handler(apiRequest({ path: '/me', token: await h.token() }));
     expect(result.statusCode).toBe(200);
     expect(result.headers?.['content-type']).toBe('application/json');
-    expect(body(result)).toEqual({
+    const me = body(result);
+    expect(me).toEqual({
       githubId: 1001001,
       login: 'Octo-Cat',
       createdAt: new Date(START).toISOString(),
@@ -567,11 +569,40 @@ describe('GET /me', () => {
       skillXp: { smithing: 733, vigilance: 0, oratory: 0, endurance: 60 },
       gold: 26,
       renown: 0,
-      vocation: 'Journeyman',
+      // Starting the run recomputes the Vocation: 733 of 793 XP is Smithing.
+      vocation: 'Smith',
       charms: [],
       charmSlots: 5,
-      week: null,
+      vouchers: [],
+      deck: [
+        { id: 'strike', name: 'Strike', upgraded: false },
+        { id: 'defend', name: 'Defend', upgraded: false },
+        { id: 'big-game-hunter', name: 'Big Game Hunter', upgraded: false },
+        { id: 'mentor', name: 'Mentor', upgraded: false },
+        { id: 'tidy', name: 'Tidy', upgraded: false },
+      ],
+      biome: 'Town',
+      kills: {},
+      firstSeen: {},
+      // The first request of the week starts the run on the spot (a new player has no rollover yet).
+      week: expect.objectContaining({
+        weekKey: '2026-W46',
+        act: 'scout',
+        clearedActs: [],
+        weeklyXp: 0,
+        targets: { scout: 1200, raid: 2000, boss: 3000 },
+        mogul: 'two-pizza-boss',
+        nextMogul: null,
+        played: [],
+        pledgeWindowOpen: true,
+        pledgeProgress: {},
+        shop: null,
+        freePack: null,
+        freePackOptions: null,
+        legendaryOffer: null,
+      }),
     });
+    expect((me.week as { hand: unknown[] }).hand).toHaveLength(5);
   });
 
   it('answers 404 for a valid token whose profile is gone', async () => {
@@ -772,10 +803,13 @@ describe('failures', () => {
 });
 
 describe('the Lambda entry point', () => {
-  it('answers the weekly EventBridge input with 200 and does nothing else', async () => {
-    // No environment, no clients: the stub must not need either.
-    const result = await lambdaHandler({ action: 'rollover' });
-    expect(result).toEqual({ statusCode: 200 });
+  it('recognises the weekly EventBridge input and nothing that came over HTTP', async () => {
+    expect(isRolloverEvent({ action: 'rollover' })).toBe(true);
+    expect(isRolloverEvent({ action: 'other' })).toBe(false);
+    expect(isRolloverEvent(null)).toBe(false);
+    const h = makeApiHarness();
+    expect(isRolloverEvent(apiRequest({ path: '/rollover', token: await h.token() }))).toBe(false);
+    expect(isRolloverEvent({ ...apiRequest({ path: '/x' }), action: 'rollover' })).toBe(false);
   });
 
   it('does not treat an HTTP request that mentions rollover as the schedule', async () => {

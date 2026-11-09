@@ -11,6 +11,13 @@ import { AUTHOR_ID, INSTALLATION_ID, MERGER_ID, REVIEWER_ID, WEBHOOK_SECRET } fr
 /** Monday 2026-11-09 12:00 UTC: the Scout window, same day as the fixtures' timestamps. */
 export const START = Date.UTC(2026, 10, 9, 12, 0, 0);
 
+/**
+ * The seed every test run starts with. It makes the week's Mogul The Two-Pizza Boss, whose modifier applies
+ * only Friday to Sunday, so Monday-start fixture tests score exactly as the shared scorer says without a
+ * Mogul (the next week's Mogul is The Rocket Man).
+ */
+export const SEED = 1;
+
 /** The operations the ingest role may call (Requirement 12.2): no DeleteItem, no BatchWriteItem. */
 export const INGEST_ROLE = ['PutItem', 'GetItem', 'UpdateItem', 'Query'] as const;
 
@@ -45,7 +52,14 @@ export function makeIngestHarness(): Harness {
   };
   const secrets: Secrets = { get: () => Promise.resolve(WEBHOOK_SECRET) };
   const clock = { now: START };
-  const handler = createIngestHandler({ db, secrets, metrics, log, now: () => clock.now });
+  const handler = createIngestHandler({
+    db,
+    secrets,
+    metrics,
+    log,
+    now: () => clock.now,
+    newSeed: () => SEED,
+  });
   return {
     fake,
     db,

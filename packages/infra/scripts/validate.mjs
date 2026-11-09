@@ -136,6 +136,8 @@ const FUNCTIONS = {
     entryPoint: 'backend/src/handlers/ingest.ts',
     handler: 'ingest.handler',
     logGroup: 'IngestLogGroup',
+    timeout: undefined,
+    statements: 3,
   },
   ApiFunction: {
     tableActions: API_TABLE_ACTIONS,
@@ -143,6 +145,10 @@ const FUNCTIONS = {
     entryPoint: 'backend/src/handlers/api.ts',
     handler: 'api.handler',
     logGroup: 'ApiLogGroup',
+    // The weekly rollover walks every profile in this function.
+    timeout: 60,
+    // Table access, the rollover's GSI1 scan, SSM and KMS.
+    statements: 4,
   },
 };
 
@@ -199,7 +205,7 @@ check('table: PK/SK strings, provisioned 5/5, TTL on ttl', () => {
   equal(props.TimeToLiveSpecification, { AttributeName: 'ttl', Enabled: true });
 });
 
-check('table: GSI1 on GSI1PK/GSI1SK, projection ALL, own 5/5', () => {
+check('table: GSI1 on GSI1PK/GSI1SK, INCLUDE projection of the badge fields, own 5/5', () => {
   equal(resources.Table?.Properties?.GlobalSecondaryIndexes, [
     {
       IndexName: 'GSI1',
@@ -207,7 +213,10 @@ check('table: GSI1 on GSI1PK/GSI1SK, projection ALL, own 5/5', () => {
         { AttributeName: 'GSI1PK', KeyType: 'HASH' },
         { AttributeName: 'GSI1SK', KeyType: 'RANGE' },
       ],
-      Projection: { ProjectionType: 'ALL' },
+      Projection: {
+        ProjectionType: 'INCLUDE',
+        NonKeyAttributes: ['login', 'level', 'xp', 'renown', 'vocation'],
+      },
       ProvisionedThroughput: { ReadCapacityUnits: 5, WriteCapacityUnits: 5 },
     },
   ]);
@@ -238,13 +247,20 @@ for (const [id, expected] of Object.entries(FUNCTIONS)) {
     });
   });
 
-  check(`${id}: no role override, no managed policies, exactly three inline statements`, () => {
-    equal(props.Role, undefined);
-    equal(props.PermissionsBoundary, undefined);
-    equal(props.Policies.length, 1);
-    equal(typeof props.Policies[0], 'object');
-    equal(props.Policies[0].Version, '2012-10-17');
-    equal(props.Policies[0].Statement.length, 3);
+  check(
+    `${id}: no role override, no managed policies, exactly ${expected.statements} inline statements`,
+    () => {
+      equal(props.Role, undefined);
+      equal(props.PermissionsBoundary, undefined);
+      equal(props.Policies.length, 1);
+      equal(typeof props.Policies[0], 'object');
+      equal(props.Policies[0].Version, '2012-10-17');
+      equal(props.Policies[0].Statement.length, expected.statements);
+    },
+  );
+
+  check(`${id}: timeout ${expected.timeout ?? 'inherited from Globals (10 s)'}`, () => {
+    equal(props.Timeout, expected.timeout);
   });
 
   const statements = props.Policies?.[0]?.Statement ?? [];
@@ -293,6 +309,24 @@ for (const [id, expected] of Object.entries(FUNCTIONS)) {
     }
   });
 }
+
+check('Scan: only the api role has it, and only on the GSI1 index ARN (Requirement 12.2)', () => {
+  for (const [id, fn] of Object.entries(resources)) {
+    if (fn.Type !== 'AWS::Serverless::Function') continue;
+    const scans = (fn.Properties?.Policies?.[0]?.Statement ?? []).filter((s) =>
+      [s.Action].flat().includes('dynamodb:Scan'),
+    );
+    if (id === 'ApiFunction') {
+      equal(scans.length, 1);
+      equal(scans[0].Effect, 'Allow');
+      equal(scans[0].Action, 'dynamodb:Scan');
+      equal(scans[0].Resource, INDEX_ARN);
+      equal(scans[0].Condition, undefined);
+    } else {
+      equal(scans.length, 0);
+    }
+  }
+});
 
 check('IngestFunction: Function URL with AuthType NONE and no CORS block', () => {
   equal(resources.IngestFunction?.Properties?.FunctionUrlConfig, { AuthType: 'NONE' });

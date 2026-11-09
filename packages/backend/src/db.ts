@@ -14,21 +14,31 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { emptySkillXp, SKILLS } from '@mergescape/shared';
+import { emptySkillXp, SKILLS, starterDeck } from '@mergescape/shared';
 import type {
+  ActId,
+  BenchedCharm,
   BreakdownLine,
+  Charm,
+  MogulId,
   MonsterId,
+  PackKind,
   PlayerCounters,
+  Pledge,
   PullRequestFacts,
   ReviewState,
   RunState,
+  ShopStock,
   Skill,
   SkillXp,
   Supplies,
+  VoucherId,
 } from '@mergescape/shared';
+import type { Vocation } from './api-types';
 import {
   EVENT_SK_PREFIX,
   deliveryKey,
@@ -100,18 +110,82 @@ export interface ProfileItem {
   opensCount: number;
   dailyFirstDay: string | null;
   streakWeeks: number;
+  /** Lifetime Moguls beaten. */
+  renown: number;
+  /** Recomputed at each rollover (Requirement 5.3). */
+  vocation: Vocation;
+  vouchers: VoucherId[];
+  /** The Pledge deck; a profile that never stored one holds the starter deck. */
+  deck: Pledge[];
+  /** Ids of cosmetics kept from Mogul packs. */
+  cosmetics: string[];
+  charms: Charm[];
+  /** Lifetime scored merges per repository id (Grey Beard, Mentor). */
+  repoMerges: Record<string, number>;
+  /** The shuffled bag of Moguls still to come; `bag[0]` is next week's. */
+  mogulBag: MogulId[];
+  mogulBenched: BenchedCharm | null;
+  mogulBoardWeek: string | null;
+  /** The week key the profile has been rolled into (the run exists once this equals the current week). */
+  runWeek: string | null;
+  /** Weekly XP of the last 8 closed weeks, oldest first. */
+  history: number[];
+  /** Bestiary: kills per monster and the instant each was first seen. */
+  kills: Partial<Record<MonsterId, number>>;
+  firstSeen: Partial<Record<MonsterId, string>>;
+  /** Week-scoped scorer state; stale (another week) means empty. */
+  weekState: WeekScorerState | null;
   /** Optimistic-lock counter, bumped by every score write. */
   version: number;
+}
+
+/** Pledge progress, the Leather Jacket chain and Loaded Dice's charge, stamped with their week. */
+export interface WeekScorerState {
+  week: string;
+  pledgeProgress: Record<string, number>;
+  pledgesCompleted: string[];
+  mogulChain: number;
+  loadedDiceUsed: boolean;
+}
+
+/**
+ * Absolute values to SET on a profile. Every writer of these holds the profile `version` it read them at,
+ * so an absolute value can never overwrite a concurrent change. `null` removes an optional attribute.
+ */
+export interface ProfilePatch {
+  xp?: number;
+  skillXp?: SkillXp;
+  level?: number;
+  gold?: number;
+  counters?: Partial<PlayerCounters>;
+  renown?: number;
+  vocation?: Vocation;
+  vouchers?: readonly VoucherId[];
+  deck?: readonly Pledge[];
+  cosmetics?: readonly string[];
+  charms?: readonly Charm[];
+  repoMerges?: Readonly<Record<string, number>>;
+  mogulBag?: readonly MogulId[];
+  mogulBenched?: BenchedCharm | null;
+  mogulBoardWeek?: string | null;
+  runWeek?: string;
+  history?: readonly number[];
+  kills?: Readonly<Partial<Record<MonsterId, number>>>;
+  firstSeen?: Readonly<Partial<Record<MonsterId, string>>>;
+  weekState?: WeekScorerState;
 }
 
 /** What one scored event changes on a profile. */
 export interface ScoreWrite {
   xp: number;
   skillXp: SkillXp;
+  /** Gold earned (added atomically). */
   gold: number;
   /** `levelFor(xp after this event)`. */
   level: number;
   counters: Partial<PlayerCounters>;
+  /** Further absolute values for the same guarded write (repository merges, week state, kills). */
+  patch?: Omit<ProfilePatch, 'xp' | 'skillXp' | 'gold' | 'level' | 'counters'>;
 }
 
 /** One Combat Log row (`EVT#`). */
@@ -122,9 +196,10 @@ export interface EventRow {
   deliveryId: string;
   /** The `GameEvent` kind that scored: pr_opened, pr_merged, review_submitted, and so on. */
   kind: string;
-  repoId: number;
-  repoPrivate: boolean;
-  prNumber: number;
+  /** Absent on rows that belong to no PR (the weekly streak). */
+  repoId?: number;
+  repoPrivate?: boolean;
+  prNumber?: number;
   points: number;
   power: number;
   zone: number;
@@ -228,6 +303,23 @@ function bool(item: Attrs, name: string, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function list<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function record<T>(value: unknown): Record<string, T> {
+  return isPlainRecord(value) ? (value as Record<string, T>) : {};
+}
+
+function isPlainRecord(value: unknown): value is Attrs {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A copy that is safe to marshal: no `undefined` members anywhere (the marshaller rejects them). */
+function clean<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function numberList(value: unknown): number[] {
   const entries = value instanceof Set ? [...(value as Set<unknown>)] : [];
   return entries
@@ -270,7 +362,38 @@ function toProfile(item: Attrs): ProfileItem {
     opensCount: num(item, 'opens_count', 0),
     dailyFirstDay: str(item, 'daily_first_day'),
     streakWeeks: num(item, 'streak_weeks', 0),
+    renown: num(item, 'renown', 0),
+    vocation: (str(item, 'vocation') as Vocation | null) ?? 'Journeyman',
+    vouchers: list<VoucherId>(item.vouchers),
+    deck: Array.isArray(item.deck) ? (item.deck as Pledge[]) : starterDeck(),
+    cosmetics: list<string>(item.cosmetics),
+    charms: list<Charm>(item.charms),
+    repoMerges: record<number>(item.repo_merges),
+    mogulBag: list<MogulId>(item.mogul_bag),
+    mogulBenched: isPlainRecord(item.mogul_benched)
+      ? (item.mogul_benched as unknown as BenchedCharm)
+      : null,
+    mogulBoardWeek: str(item, 'mogul_board_week'),
+    runWeek: str(item, 'run_week'),
+    history: list<number>(item.history),
+    kills: record<number>(item.kills),
+    firstSeen: record<string>(item.first_seen),
+    weekState: toWeekState(item),
     version: num(item, 'version', 0),
+  };
+}
+
+function toWeekState(item: Attrs): WeekScorerState | null {
+  const week = str(item, 'wk_week');
+  if (week === null) {
+    return null;
+  }
+  return {
+    week,
+    pledgeProgress: record<number>(item.wk_progress),
+    pledgesCompleted: list<string>(item.wk_completed),
+    mogulChain: num(item, 'wk_chain', 0),
+    loadedDiceUsed: bool(item, 'wk_dice', false),
   };
 }
 
@@ -291,9 +414,9 @@ function toEventRow(item: Attrs): StoredEventRow {
     ts: str(item, 'ts') ?? '',
     deliveryId: str(item, 'delivery_id') ?? '',
     kind: str(item, 'kind') ?? '',
-    repoId: num(item, 'repo_id', 0),
-    repoPrivate: bool(item, 'repo_private', true),
-    prNumber: num(item, 'pr_number', 0),
+    ...(numOrNull(item, 'repo_id') !== null ? { repoId: num(item, 'repo_id', 0) } : {}),
+    ...(typeof item.repo_private === 'boolean' ? { repoPrivate: item.repo_private } : {}),
+    ...(numOrNull(item, 'pr_number') !== null ? { prNumber: num(item, 'pr_number', 0) } : {}),
     points: num(item, 'points', 0),
     power: num(item, 'power', 1),
     zone: num(item, 'zone', 1),
@@ -424,6 +547,85 @@ function mergeCondition(
   const names = { ...update.names, ...(condition?.names ?? {}) };
   const values = { ...update.values, ...(condition?.values ?? {}) };
   return { names, values };
+}
+
+/** The SET and REMOVE operations that write a `ProfilePatch` (absolute values, nested data cleaned). */
+function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
+  const set: Attrs = {};
+  const remove: string[] = [];
+  if (patch.xp !== undefined) {
+    set.xp = patch.xp;
+  }
+  if (patch.skillXp !== undefined) {
+    for (const skill of SKILLS) {
+      set[SKILL_ATTRIBUTE[skill]] = patch.skillXp[skill];
+    }
+  }
+  if (patch.level !== undefined) {
+    set.level = patch.level;
+  }
+  if (patch.gold !== undefined) {
+    set.gold = patch.gold;
+  }
+  const { opens, dailyFirstDay, streakWeeks } = patch.counters ?? {};
+  if (opens) {
+    set.opens_day = opens.day;
+    set.opens_count = opens.count;
+  }
+  if (dailyFirstDay !== undefined) {
+    if (dailyFirstDay === null) {
+      remove.push('daily_first_day');
+    } else {
+      set.daily_first_day = dailyFirstDay;
+    }
+  }
+  if (streakWeeks !== undefined) {
+    set.streak_weeks = streakWeeks;
+  }
+  const direct: [string, unknown][] = [
+    ['renown', patch.renown],
+    ['vocation', patch.vocation],
+    ['run_week', patch.runWeek],
+  ];
+  for (const [attribute, value] of direct) {
+    if (value !== undefined) {
+      set[attribute] = value;
+    }
+  }
+  const nested: [string, unknown][] = [
+    ['vouchers', patch.vouchers],
+    ['deck', patch.deck],
+    ['cosmetics', patch.cosmetics],
+    ['charms', patch.charms],
+    ['repo_merges', patch.repoMerges],
+    ['mogul_bag', patch.mogulBag],
+    ['history', patch.history],
+    ['kills', patch.kills],
+    ['first_seen', patch.firstSeen],
+  ];
+  for (const [attribute, value] of nested) {
+    if (value !== undefined) {
+      set[attribute] = clean(value);
+    }
+  }
+  for (const [attribute, value] of [
+    ['mogul_benched', patch.mogulBenched],
+    ['mogul_board_week', patch.mogulBoardWeek],
+  ] as const) {
+    if (value === null) {
+      remove.push(attribute);
+    } else if (value !== undefined) {
+      set[attribute] = clean(value);
+    }
+  }
+  if (patch.weekState !== undefined) {
+    set.wk_week = patch.weekState.week;
+    set.wk_progress = clean(patch.weekState.pledgeProgress);
+    set.wk_completed = [...patch.weekState.pledgesCompleted];
+    set.wk_chain = patch.weekState.mogulChain;
+    set.wk_dice = patch.weekState.loadedDiceUsed;
+  }
+  return { set, remove };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -580,8 +782,9 @@ export class Db {
   }
 
   /**
-   * Apply one scored event: atomic `ADD` of XP, skill XP and gold, `SET` of the level cache and the
-   * counters the scorer changed, guarded by the profile `version` the scorer's inputs were read at.
+   * Apply one scored event: atomic `ADD` of XP, skill XP and gold, `SET` of the level cache, the counters
+   * the scorer changed and the further absolute values in `write.patch`, guarded by the profile
+   * `version` the scorer's inputs were read at.
    * @throws VersionConflictError when another writer got there first (re-read and re-score).
    */
   async applyScore(userId: number, expectedVersion: number, write: ScoreWrite): Promise<void> {
@@ -597,40 +800,95 @@ export class Db {
         add[SKILL_ATTRIBUTE[skill]] = write.skillXp[skill];
       }
     }
-    const set: Attrs = { level: write.level };
-    const remove: string[] = [];
-    const { opens, dailyFirstDay, streakWeeks } = write.counters;
-    if (opens) {
-      set.opens_day = opens.day;
-      set.opens_count = opens.count;
-    }
-    if (dailyFirstDay !== undefined) {
-      if (dailyFirstDay === null) {
-        remove.push('daily_first_day');
-      } else {
-        set.daily_first_day = dailyFirstDay;
-      }
-    }
-    if (streakWeeks !== undefined) {
-      set.streak_weeks = streakWeeks;
-    }
+    const { set, remove } = profileOps({
+      ...write.patch,
+      level: write.level,
+      counters: write.counters,
+    });
+    await this.guardedProfileUpdate(userId, { set, add, remove }, expectedVersion);
+  }
+
+  /**
+   * Replace fields of the profile with absolute values (shop purchases, the rollover, the Founder's Board),
+   * guarded by the `version` they were computed from, which this bumps.
+   * @param extra an additional condition with its own placeholders (they must not start with `#a`, `#c0`,
+   *   `#c1`, `:a` or `:c0`)
+   * @throws VersionConflictError when the version moved or `extra` does not hold.
+   */
+  async saveProfile(
+    userId: number,
+    expectedVersion: number,
+    patch: ProfilePatch,
+    extra?: ConditionSpec,
+  ): Promise<void> {
+    const { set, remove } = profileOps(patch);
+    await this.guardedProfileUpdate(
+      userId,
+      { set, add: { version: 1 }, remove },
+      expectedVersion,
+      extra,
+    );
+  }
+
+  private async guardedProfileUpdate(
+    userId: number,
+    ops: UpdateOps,
+    expectedVersion: number,
+    extra?: ConditionSpec,
+  ): Promise<void> {
     try {
-      await this.update(
-        'PROFILE',
-        profileKey(userId),
-        { set, add, remove },
-        {
-          expression: 'attribute_exists(#c0) AND #c1 = :c0',
-          names: { '#c0': 'PK', '#c1': 'version' },
-          values: { ':c0': expectedVersion },
-        },
-      );
+      await this.update('PROFILE', profileKey(userId), ops, {
+        expression: `attribute_exists(#c0) AND #c1 = :c0${extra ? ` AND (${extra.expression})` : ''}`,
+        names: { '#c0': 'PK', '#c1': 'version', ...extra?.names },
+        values: { ':c0': expectedVersion, ...extra?.values },
+      });
     } catch (error) {
       if (isConditionalCheckFailed(error)) {
         throw new VersionConflictError();
       }
       throw error;
     }
+  }
+
+  /**
+   * Credit what an act clear paid: gold and Renown added atomically, with no version guard (addition
+   * commutes with a concurrent score), bumping the version so an in-flight score re-reads.
+   */
+  async addPayout(userId: number, payout: { gold: number; renown: number }): Promise<void> {
+    const add: Attrs = { version: 1 };
+    if (payout.gold > 0) {
+      add.gold = payout.gold;
+    }
+    if (payout.renown > 0) {
+      add.renown = payout.renown;
+    }
+    await this.update('PROFILE', profileKey(userId), { add });
+  }
+
+  /**
+   * Every profile id, via a paginated Scan of GSI1 (the only Scan the api role may call, Requirement
+   * 12.2). GSI1 is sparse: only profiles carry its keys. Items arrive page by page.
+   */
+  async *scanProfileIds(pageSize = 100): AsyncGenerator<number> {
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const output = await this.client.send(
+        new ScanCommand({
+          TableName: this.tableName,
+          IndexName: 'GSI1',
+          Limit: pageSize,
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        }),
+      );
+      for (const item of (output.Items ?? []) as Attrs[]) {
+        const pk = String(item.PK);
+        const id = pk.startsWith('USER#') ? Number(pk.slice('USER#'.length)) : Number.NaN;
+        if (Number.isSafeInteger(id)) {
+          yield id;
+        }
+      }
+      startKey = output.LastEvaluatedKey;
+    } while (startKey);
   }
 
   // ----- Combat Log: USER#<id> / EVT#<ts>#<delivery> -----
@@ -641,9 +899,6 @@ export class Db {
       ts: row.ts,
       delivery_id: row.deliveryId,
       kind: row.kind,
-      repo_id: row.repoId,
-      repo_private: row.repoPrivate,
-      pr_number: row.prNumber,
       points: row.points,
       power: row.power,
       zone: row.zone,
@@ -659,6 +914,15 @@ export class Db {
       })),
       ttl: seconds(Date.parse(row.ts)) + EVENT_TTL_SECONDS,
     };
+    if (row.repoId !== undefined) {
+      attributes.repo_id = row.repoId;
+    }
+    if (row.repoPrivate !== undefined) {
+      attributes.repo_private = row.repoPrivate;
+    }
+    if (row.prNumber !== undefined) {
+      attributes.pr_number = row.prNumber;
+    }
     if (row.monster !== null) {
       attributes.monster = row.monster;
     }
@@ -999,6 +1263,101 @@ export class Db {
     return item ? toRunState(item) : null;
   }
 
+  /** The run with its bookkeeping (lock version, request ids, counters, free pack, Legendary offer). */
+  async getWeekItem(userId: number, weekKey: string): Promise<WeekItem | null> {
+    const item = await this.getItem(weekKeyOf(userId, weekKey), true);
+    return item ? toWeekItem(item) : null;
+  }
+
+  /**
+   * Add a scored event's XP to the week, and count it toward the weekly streak, in one atomic update.
+   * Returns the week as it is afterwards, or null when there is no such week.
+   */
+  async addWeekCredit(
+    userId: number,
+    weekKey: string,
+    credit: { xp: number; merge: boolean; review: boolean },
+  ): Promise<WeekItem | null> {
+    const add: Attrs = { weekly_xp: credit.xp };
+    if (credit.merge) {
+      add.merges = 1;
+    }
+    if (credit.review) {
+      add.reviews = 1;
+    }
+    try {
+      const attributes = await this.update(
+        'WEEK',
+        weekKeyOf(userId, weekKey),
+        { add },
+        { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } },
+      );
+      return attributes ? toWeekItem(attributes) : null;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Change the mutable parts of an existing week and bump its `version`, provided it still has the
+   * `version` (and, for the act-clear claim, the current act) the caller read. Returns false when it does
+   * not, in which case nothing changed and the caller re-reads.
+   */
+  async saveWeek(
+    userId: number,
+    weekKey: string,
+    expect: { version?: number; act?: ActId },
+    patch: WeekPatch,
+  ): Promise<boolean> {
+    const set: Attrs = {};
+    const remove: string[] = [];
+    const assign = (attribute: string, value: unknown): void => {
+      if (value === null) {
+        remove.push(attribute);
+      } else if (value !== undefined) {
+        set[attribute] = clean(value);
+      }
+    };
+    assign('act', patch.act);
+    assign('cleared_acts', patch.clearedActs);
+    assign('played', patch.played);
+    assign('shop', patch.shop);
+    assign('free_pack', patch.freePack);
+    assign('legendary', patch.legendary);
+    assign('request_ids', patch.requestIds);
+    const clauses = ['attribute_exists(#c0)'];
+    const names: Record<string, string> = { '#c0': 'PK' };
+    const values: Record<string, unknown> = {};
+    if (expect.version !== undefined) {
+      // A week written before versions existed has no `version` attribute: that reads as 0.
+      clauses.push(expect.version === 0 ? '(attribute_not_exists(#c1) OR #c1 = :c1)' : '#c1 = :c1');
+      names['#c1'] = 'version';
+      values[':c1'] = expect.version;
+    }
+    if (expect.act !== undefined) {
+      clauses.push('#c2 = :c2');
+      names['#c2'] = 'act';
+      values[':c2'] = expect.act;
+    }
+    try {
+      await this.update(
+        'WEEK',
+        weekKeyOf(userId, weekKey),
+        { set, add: { version: 1 }, remove },
+        { expression: clauses.join(' AND '), names, values },
+      );
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   /** Create the week (rollover). Returns false when it already exists. */
   async createWeek(userId: number, run: RunState): Promise<boolean> {
     try {
@@ -1052,6 +1411,33 @@ export class Db {
   }
 }
 
+/** A run plus what the endpoints keep beside it on the `WEEK#` item. */
+export interface WeekItem {
+  run: RunState;
+  /** Optimistic-lock counter of the shop and Pledge endpoints and the act-clear claim. */
+  version: number;
+  /** The last 20 client request ids, oldest first. */
+  requestIds: string[];
+  /** Merged PRs and scored reviews this week (the weekly streak needs a merge or three reviews). */
+  merges: number;
+  reviews: number;
+  /** A free Pledge pack granted by the Raid clear and not yet picked. */
+  freePack: PackKind | null;
+  /** A Legendary Charm offered on a 4th Renown and not yet taken. */
+  legendary: Charm | null;
+}
+
+/** The fields of a week the shop, Pledge and clear writes change; `null` removes one. */
+export interface WeekPatch {
+  act?: ActId | null;
+  clearedActs?: readonly ActId[];
+  played?: readonly Pledge[];
+  shop?: ShopStock | null;
+  freePack?: PackKind | null;
+  legendary?: Charm | null;
+  requestIds?: readonly string[];
+}
+
 const WEEK_ATTRIBUTE: Readonly<Record<string, string>> = {
   weekKey: 'week_key',
   act: 'act',
@@ -1067,6 +1453,10 @@ const WEEK_ATTRIBUTE: Readonly<Record<string, string>> = {
 
 function runToAttributes(run: RunState): Attrs {
   const attributes: Attrs = {
+    version: 0,
+    request_ids: [],
+    merges: 0,
+    reviews: 0,
     week_key: run.weekKey,
     cleared_acts: run.clearedActs,
     weekly_xp: run.weeklyXp,
@@ -1099,5 +1489,19 @@ function toRunState(item: Attrs): RunState {
     played: (Array.isArray(item.played) ? item.played : []) as RunState['played'],
     shopSeed: num(item, 'shop_seed', 0),
     shop: (item.shop ?? null) as RunState['shop'],
+  };
+}
+
+function toWeekItem(item: Attrs): WeekItem {
+  const freePack = str(item, 'free_pack');
+  return {
+    run: toRunState(item),
+    version: num(item, 'version', 0),
+    requestIds: list<string>(item.request_ids),
+    merges: num(item, 'merges', 0),
+    reviews: num(item, 'reviews', 0),
+    freePack:
+      freePack === 'pledge' || freePack === 'charm' || freePack === 'mogul' ? freePack : null,
+    legendary: isPlainRecord(item.legendary) ? (item.legendary as unknown as Charm) : null,
   };
 }

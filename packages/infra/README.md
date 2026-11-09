@@ -2,14 +2,14 @@
 
 `template.yaml` is the whole AWS side of Mergescape as one SAM stack (Requirement 12). At personal scale it runs inside the always-free allowances.
 
-| Resource                                                                        | Logical id                      | Notes                                                                                                                                |
-| ------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| DynamoDB table `mergescape` (`mergescape-<Stage>` when the stage is not `prod`) | `Table`                         | PK/SK strings, provisioned 5/5, TTL on `ttl`, `GSI1` on `GSI1PK`/`GSI1SK` (projection ALL, own 5/5). Kept when the stack is deleted. |
-| Lambda `ingest` + Function URL (auth NONE)                                      | `IngestFunction`                | Node 22, 256 MB, 10 s, reserved concurrency 10. GitHub webhook target; the HMAC check is the security.                               |
-| Lambda `api` + Function URL (auth NONE, CORS)                                   | `ApiFunction`                   | Reserved concurrency 5. CORS allows only `PagesOrigin`. Also runs the Monday 00:05 UTC rollover (`{"action":"rollover"}`).           |
-| Log groups, 14-day retention                                                    | `IngestLogGroup`, `ApiLogGroup` |                                                                                                                                      |
-| CloudFront distribution                                                         | `BadgeDistribution`             | Origin is the `api` Function URL. `/badge/*` is cached 6 h (`BadgeCachePolicy`); every other path is a 404 at the edge.              |
-| AWS Budgets, 1 USD and 10 USD monthly                                           | `Budget1Usd`, `Budget10Usd`     | E-mail to `AlertEmail` at 100 % of actual spend. Budgets cover the whole AWS account, not only this stack.                           |
+| Resource                                                                        | Logical id                      | Notes                                                                                                                                    |
+| ------------------------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| DynamoDB table `mergescape` (`mergescape-<Stage>` when the stage is not `prod`) | `Table`                         | PK/SK strings, provisioned 5/5, TTL on `ttl`, `GSI1` on `GSI1PK`/`GSI1SK` (projection INCLUDE, own 5/5). Kept when the stack is deleted. |
+| Lambda `ingest` + Function URL (auth NONE)                                      | `IngestFunction`                | Node 22, 256 MB, 10 s, reserved concurrency 10. GitHub webhook target; the HMAC check is the security.                                   |
+| Lambda `api` + Function URL (auth NONE, CORS)                                   | `ApiFunction`                   | 60 s, reserved concurrency 5. CORS allows only `PagesOrigin`. Also runs the Monday 00:05 UTC rollover (`{"action":"rollover"}`).         |
+| Log groups, 14-day retention                                                    | `IngestLogGroup`, `ApiLogGroup` |                                                                                                                                          |
+| CloudFront distribution                                                         | `BadgeDistribution`             | Origin is the `api` Function URL. `/badge/*` is cached 6 h (`BadgeCachePolicy`); every other path is a 404 at the edge.                  |
+| AWS Budgets, 1 USD and 10 USD monthly                                           | `Budget1Usd`, `Budget10Usd`     | E-mail to `AlertEmail` at 100 % of actual spend. Budgets cover the whole AWS account, not only this stack.                               |
 
 Outputs: `TableName`, `IngestUrl` (the GitHub App webhook URL), `ApiUrl` (the client's `VITE_API_ORIGIN`), `BadgeDomain`.
 
@@ -17,10 +17,10 @@ Outputs: `TableName`, `IngestUrl` (the GitHub App webhook URL), `ApiUrl` (the cl
 
 Each function gets one inline policy on top of the managed `AWSLambdaBasicExecutionRole` (CloudWatch Logs).
 
-| Function | DynamoDB on the table and `index/GSI1`                                  | SSM                                                          | KMS                                                               |
-| -------- | ----------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `ingest` | `GetItem`, `PutItem`, `UpdateItem`, `Query`                             | `GetParameter`, `GetParameters` on `parameter${SsmPrefix}/*` | `Decrypt` on `key/*` only for alias `alias/aws/ssm`, only via SSM |
-| `api`    | the same plus `DeleteItem`, `BatchWriteItem` (export/delete everything) | same                                                         | same                                                              |
+| Function | DynamoDB on the table and `index/GSI1`                                                                                  | SSM                                                          | KMS                                                               |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `ingest` | `GetItem`, `PutItem`, `UpdateItem`, `Query`                                                                             | `GetParameter`, `GetParameters` on `parameter${SsmPrefix}/*` | `Decrypt` on `key/*` only for alias `alias/aws/ssm`, only via SSM |
+| `api`    | the same plus `DeleteItem`, `BatchWriteItem` (export/delete everything), and `Scan` on `index/GSI1` only (the rollover) | same                                                         | same                                                              |
 
 The KMS key ARN has to be a wildcard because the id of the AWS managed key `alias/aws/ssm` is not known at template time; the two conditions are what narrow it. The secrets must therefore be stored with the default key (omit `--key-id`).
 
@@ -115,5 +115,6 @@ Why `CodeUri` is `../` (the `packages/` directory) and the entry points read `ba
 
 - **Reserved concurrency needs headroom.** Lambda keeps 100 executions unreserved. A brand-new account whose total concurrency quota is still 10 cannot reserve 10 + 5; request a quota increase or the deploy fails on the function.
 - **The table survives `sam delete`** (`DeletionPolicy: Retain`) so player data is never lost by accident. Redeploying a deleted stack with the same name then fails on the existing table; delete the table by hand or deploy another `Stage`.
-- **`Projection: ALL` on `GSI1`** rewrites the index entry on every profile update. Switch to `INCLUDE` with the badge fields if write capacity gets tight.
+- **`GSI1` projects only `login`, `level`, `xp`, `renown` and `vocation`** (`INCLUDE`): the badge reads them from the index, and the rollover scan needs only the keys. Pinned Feats join the list with task 22. DynamoDB cannot change a deployed index's projection in place, so a stack that was deployed with `ALL` needs the index dropped and re-created in two deploys.
+- **The `api` function has a 60 s timeout** because the Monday rollover walks every profile in it. The scan is paged (100 per page) and four profiles are rolled at a time, so a few hundred players take seconds; at 5 write units the SDK retries throttled writes with back-off.
 - **checkov** reports, by design: no point-in-time recovery, no customer-managed KMS keys for the table and log groups, no Lambda DLQ or VPC, no CloudFront access logging or WAF, and the default CloudFront certificate's TLS floor. Each one costs money or does not apply to a public function URL; the IAM, CORS and concurrency checks pass.

@@ -308,19 +308,21 @@ describe('buildPRState', () => {
         { reviewerId: 22, count: 1 },
       ],
     };
-    const state = buildPRState(bundle, facts);
+    const state = buildPRState(bundle, facts, 14);
     expect(state).toMatchObject({
       authorId: 10,
       additions: 7,
       deletions: 8,
       reviewRoundCount: 2,
       syncCount: 5,
+      // The author's lifetime merges, for the Mentor Pledge; the Hoodie reads the review times.
+      authorMerges: 14,
     });
     expect(state.reviews).toEqual([
-      { reviewerId: 20, state: 'CHANGES_REQUESTED' },
-      { reviewerId: 20, state: 'APPROVED' },
-      { reviewerId: 20, state: 'COMMENTED' },
-      { reviewerId: 21, state: 'COMMENTED' },
+      { reviewerId: 20, state: 'CHANGES_REQUESTED', submittedAt: 'a' },
+      { reviewerId: 20, state: 'APPROVED', submittedAt: 'b' },
+      { reviewerId: 20, state: 'COMMENTED', submittedAt: 'c' },
+      { reviewerId: 21, state: 'COMMENTED', submittedAt: 'd' },
     ]);
     expect(state.reviewerCounters).toEqual({
       '20': { decisions: 2, comments: 1, inline: 2 },
@@ -331,7 +333,12 @@ describe('buildPRState', () => {
 
   it('prefers the size on the event and falls back to an unseen PR', () => {
     const empty: PRBundle = { meta: null, reviews: [], inline: [] };
-    expect(buildPRState(empty, facts)).toMatchObject({ additions: 0, deletions: 0, reviews: [] });
+    expect(buildPRState(empty, facts)).toMatchObject({
+      additions: 0,
+      deletions: 0,
+      reviews: [],
+      authorMerges: 0,
+    });
     const withStats = {
       ...facts,
       stats: { additions: 5, deletions: 6, changedFiles: 1, commits: 1 },

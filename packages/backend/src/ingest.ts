@@ -13,23 +13,37 @@
  * profile credit is not. If anything throws before the first credit, the claim is released so GitHub's
  * "Redeliver" works; after a credit the claim is kept, so a redelivery cannot credit XP twice.
  */
-import { createPlayerState, score, verifiedKillEvents } from '@mergescape/shared';
+import {
+  applyScoreResult,
+  clearAct,
+  createPlayerState,
+  levelFor,
+  lifetimeMerges,
+  riposteCreditEvents,
+  score,
+  verifiedKillEvents,
+} from '@mergescape/shared';
 import type {
   EventActor,
   GameEvent,
   InstallationEvent,
   InstallationRepositoriesEvent,
+  PlayerState,
   PRState,
   PullRequestEvent,
+  RiposteCreditEvent,
   ScoreResult,
   VerifiedKillEvent,
 } from '@mergescape/shared';
 import { VersionConflictError } from './db';
-import type { Db, EventRow, InstallationItem, PRBundle, ProfileItem } from './db';
+import type { Db, EventRow, InstallationItem, PRBundle, ProfileItem, ScoreWrite } from './db';
 import type { Logger } from './log';
 import type { MetricName, Metrics } from './metrics';
 import { buildPRState } from './pr-state';
-import { toPlayerState, toScoreWrite } from './player';
+import { scorerStateOf, toPlayerState } from './player';
+import { loadCurrent } from './runs';
+import type { RunContext } from './runs';
+import { randomSeed } from './seed';
 
 export interface IngestContext {
   db: Db;
@@ -37,6 +51,8 @@ export interface IngestContext {
   log: Logger;
   /** Epoch milliseconds. */
   now: () => number;
+  /** A fresh random uint32 for a run started lazily by a player's first event of a week. */
+  newSeed?: () => number;
 }
 
 export type ProcessOutcome = 'processed' | 'duplicate' | 'dropped';
@@ -83,6 +99,11 @@ class Resolver {
     return found;
   }
 
+  /** A profile by id, or null; memoised for the delivery. */
+  lookup(id: number): Promise<ProfileItem | null> {
+    return this.profile(id);
+  }
+
   private installation(id: number): Promise<InstallationItem | null> {
     let found = this.installations.get(id);
     if (!found) {
@@ -125,8 +146,13 @@ interface PullRequestPlan {
   bundle: PRBundle;
   /** The acting player, when linked and accessible. */
   actor: ProfileItem | null;
-  /** Approvers of a merged PR who are linked and accessible: each earns a verified kill. */
-  kills: { profile: ProfileItem; event: VerifiedKillEvent }[];
+  /**
+   * Players a merge credits besides its author: approvers earn a verified kill, and reviewers who
+   * requested changes a Riposte credit (which scores only for Jester's Rebase).
+   */
+  credits: { profile: ProfileItem; event: VerifiedKillEvent | RiposteCreditEvent }[];
+  /** Lifetime merges of the PR's author when a player, for the Mentor Pledge. */
+  authorMerges: number;
   /** Write the shared `PR#` META item (and counters) for this event. */
   upsertFacts: boolean;
 }
@@ -196,13 +222,21 @@ async function planPullRequest(
       upsertFacts = authorLinked || mergerLinked || known;
   }
 
-  const prState = buildPRState(bundle, pr);
-  const kills: PullRequestPlan['kills'] = [];
+  const authorProfile =
+    event.kind === 'review_submitted' && actor !== null
+      ? await resolver.lookup(pr.author.id)
+      : null;
+  const authorMerges = authorProfile ? lifetimeMerges(toPlayerState(authorProfile)) : 0;
+  const prState = buildPRState(bundle, pr, authorMerges);
+  const credits: PullRequestPlan['credits'] = [];
   if (event.kind === 'pr_merged' && pr.merged) {
-    for (const kill of verifiedKillEvents(event, prState)) {
-      const approver = profileOf(await resolver.resolve(kill.actor, installationId));
-      if (approver) {
-        kills.push({ profile: approver, event: kill });
+    for (const credited of [
+      ...verifiedKillEvents(event, prState),
+      ...riposteCreditEvents(event, prState),
+    ]) {
+      const target = profileOf(await resolver.resolve(credited.actor, installationId));
+      if (target) {
+        credits.push({ profile: target, event: credited });
       }
     }
   }
@@ -211,7 +245,7 @@ async function planPullRequest(
   if (SCORING_KINDS.has(event.kind) && 'drop' in actorResolved) {
     drops.push(actorResolved.drop);
   }
-  return { type: 'pull_request', event, bundle, actor, kills, upsertFacts, drops };
+  return { type: 'pull_request', event, bundle, actor, credits, authorMerges, upsertFacts, drops };
 }
 
 async function planEvent(resolver: Resolver, db: Db, event: GameEvent): Promise<Plan | null> {
@@ -235,7 +269,7 @@ function isRelevant(plan: Plan): boolean {
   return (
     plan.upsertFacts ||
     (SCORING_KINDS.has(plan.event.kind) && plan.actor !== null) ||
-    plan.kills.length > 0
+    plan.credits.length > 0
   );
 }
 
@@ -246,6 +280,13 @@ function isRelevant(plan: Plan): boolean {
 interface Progress {
   /** A profile credit has been committed in this delivery. */
   committed: boolean;
+}
+
+function creditSuffix(event: PullRequestEvent, deliveryId: string): string {
+  if (event.kind === 'verified_kill') {
+    return `${deliveryId}-vk`;
+  }
+  return event.kind === 'riposte_credit' ? `${deliveryId}-rc` : deliveryId;
 }
 
 function eventRow(
@@ -264,8 +305,8 @@ function eventRow(
   const row: EventRow = {
     userId,
     ts: new Date(now).toISOString(),
-    // A person can both merge a bot's PR and have approved it; the suffix keeps the two rows apart.
-    deliveryId: event.kind === 'verified_kill' ? `${deliveryId}-vk` : deliveryId,
+    // A person can both merge a bot's PR and have approved it; the suffix keeps the rows apart.
+    deliveryId: creditSuffix(event, deliveryId),
     kind: event.kind,
     repoId: pr.repoId,
     repoPrivate: pr.repoPrivate,
@@ -284,7 +325,12 @@ function eventRow(
   if (event.kind === 'review_submitted') {
     row.reviewState = event.state;
   }
-  if (event.kind === 'pr_opened' || event.kind === 'pr_merged' || event.kind === 'verified_kill') {
+  if (
+    event.kind === 'pr_opened' ||
+    event.kind === 'pr_merged' ||
+    event.kind === 'verified_kill' ||
+    event.kind === 'riposte_credit'
+  ) {
     const additions = pr.stats?.additions ?? bundle.meta?.additions ?? null;
     const deletions = pr.stats?.deletions ?? bundle.meta?.deletions ?? null;
     if (additions !== null && deletions !== null) {
@@ -301,10 +347,110 @@ function eventRow(
   return row;
 }
 
+/** True when the result changes anything stored on the profile besides XP. */
+function changesProfile(result: ScoreResult): boolean {
+  const updates = result.counterUpdates;
+  return (
+    Object.keys(updates.player).length > 0 ||
+    updates.pledges !== undefined ||
+    updates.mogulChain !== undefined ||
+    updates.loadedDiceUsed !== undefined ||
+    updates.repoMerges !== undefined
+  );
+}
+
+/** Everything one scored event writes to the profile, as one guarded update. */
+function scoreWrite(
+  profile: ProfileItem,
+  weekKey: string,
+  before: PlayerState,
+  after: PlayerState,
+  result: ScoreResult,
+  now: number,
+): ScoreWrite {
+  const updates = result.counterUpdates;
+  const patch: NonNullable<ScoreWrite['patch']> = {};
+  if (updates.repoMerges !== undefined) {
+    patch.repoMerges = after.repoMerges;
+  }
+  if (
+    updates.pledges !== undefined ||
+    updates.mogulChain !== undefined ||
+    updates.loadedDiceUsed !== undefined
+  ) {
+    patch.weekState = scorerStateOf(weekKey, after);
+  }
+  if (result.skip === null && result.monster !== null) {
+    // Bestiary (Requirement 10.1): every scored event is a kill, remembered with when it first happened.
+    patch.kills = { ...profile.kills, [result.monster]: (profile.kills[result.monster] ?? 0) + 1 };
+    if (profile.firstSeen[result.monster] === undefined) {
+      patch.firstSeen = { ...profile.firstSeen, [result.monster]: new Date(now).toISOString() };
+    }
+  }
+  return {
+    xp: result.xp,
+    skillXp: result.skillXp,
+    gold: after.gold - before.gold,
+    level: levelFor(profile.xp + result.xp),
+    counters: updates.player,
+    patch,
+  };
+}
+
 /**
- * Score one event for one player and persist it. The profile is read strongly consistent, scored, and
- * written with a version condition; a concurrent write (two webhooks for one player at once) re-reads and
- * re-scores, so caps and Zone always see the latest state.
+ * Add a scored event's XP to the week and clear the act if the target is now met (Requirement 6.5). The
+ * atomic add returns the week's new total, so concurrent events agree on whose XP crossed the line; the
+ * clear is claimed with a write conditional on the act still being current, so exactly one event pays it.
+ */
+async function creditWeek(
+  ctx: IngestContext,
+  userId: number,
+  weekKey: string,
+  event: PullRequestEvent,
+  result: ScoreResult,
+  after: PlayerState,
+): Promise<void> {
+  if (result.xp <= 0) {
+    return;
+  }
+  const week = await ctx.db.addWeekCredit(userId, weekKey, {
+    xp: result.xp,
+    merge: event.kind === 'pr_merged',
+    review: event.kind === 'review_submitted',
+  });
+  const act = week?.run.act ?? null;
+  if (!week || act === null) {
+    return;
+  }
+  const cleared = clearAct(week.run, after);
+  if (!cleared) {
+    return;
+  }
+  const claimed = await ctx.db.saveWeek(
+    userId,
+    weekKey,
+    { act },
+    {
+      act: cleared.run.act,
+      clearedActs: cleared.run.clearedActs,
+      shop: cleared.run.shop,
+      ...(cleared.clear.freePack !== null ? { freePack: cleared.clear.freePack } : {}),
+      ...(cleared.clear.legendary !== null ? { legendary: cleared.clear.legendary } : {}),
+    },
+  );
+  if (claimed) {
+    await ctx.db.addPayout(userId, {
+      gold: cleared.player.gold - after.gold,
+      renown: cleared.clear.renown - after.renown,
+    });
+  }
+}
+
+/**
+ * Score one event for one player and persist it. The player is loaded with this week's run (started on
+ * the spot if the rollover has not reached them), scored, and written with a version condition on the
+ * profile; a concurrent write (two webhooks for one player at once) re-reads and re-scores, so caps and
+ * Zone always see the latest state. The week gets the XP afterwards, and an act clear pays out.
  */
 async function credit(
   ctx: IngestContext,
@@ -316,16 +462,22 @@ async function credit(
   deliveryId: string,
   now: number,
 ): Promise<void> {
+  const runContext: RunContext = { db: ctx.db, now, newSeed: ctx.newSeed ?? randomSeed };
   for (let attempt = 0; attempt < MAX_CREDIT_ATTEMPTS; attempt += 1) {
-    const profile = await ctx.db.getProfile(userId, true);
-    if (!profile) {
+    const current = await loadCurrent(runContext, userId);
+    if (!current) {
       return;
     }
-    const result = score(event, toPlayerState(profile), prState, now);
-    const touchesProfile = result.xp > 0 || Object.keys(result.counterUpdates.player).length > 0;
-    if (touchesProfile) {
+    const { profile, player, run } = current;
+    const result = score(event, player, prState, now);
+    if (result.xp > 0 || changesProfile(result)) {
+      const after = applyScoreResult(player, prState, result).player;
       try {
-        await ctx.db.applyScore(userId, profile.version, toScoreWrite(profile, result));
+        await ctx.db.applyScore(
+          userId,
+          profile.version,
+          scoreWrite(profile, run.weekKey, player, after, result, now),
+        );
       } catch (error) {
         if (error instanceof VersionConflictError) {
           continue;
@@ -333,6 +485,12 @@ async function credit(
         throw error;
       }
       progress.committed = true;
+      try {
+        await creditWeek(ctx, userId, run.weekKey, event, result, after);
+      } catch (error) {
+        // The profile is already credited: keep the Combat Log row and report the week's failure.
+        ctx.log.error('ingest.week_failed', { userId }, error);
+      }
     }
     const row = eventRow(userId, event, prState, bundle, result, deliveryId, now);
     if (row) {
@@ -357,7 +515,7 @@ async function executePullRequest(
 ): Promise<void> {
   const { event, bundle } = plan;
   const { pr } = event;
-  const prState = buildPRState(bundle, pr);
+  const prState = buildPRState(bundle, pr, plan.authorMerges);
 
   // The scorer is the single authority on what the event does to the PR (review rounds, pushes, the
   // review record, the inline tally). Score once for the PR side, with the real player when there is one.
@@ -391,8 +549,8 @@ async function executePullRequest(
   if (plan.actor && SCORING_KINDS.has(event.kind)) {
     await credit(ctx, progress, plan.actor.id, event, prState, bundle, deliveryId, now);
   }
-  for (const kill of plan.kills) {
-    await credit(ctx, progress, kill.profile.id, kill.event, prState, bundle, deliveryId, now);
+  for (const other of plan.credits) {
+    await credit(ctx, progress, other.profile.id, other.event, prState, bundle, deliveryId, now);
   }
 }
 

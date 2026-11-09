@@ -3,7 +3,7 @@
  *
  * It sits behind the same `DynamoDBDocumentClient.send(command)` interface the repository uses and
  * understands the lib-dynamodb command objects (`PutCommand`, `GetCommand`, `UpdateCommand`,
- * `DeleteCommand`, `QueryCommand`, `BatchWriteCommand`) by reading `command.input` in native JS values
+ * `DeleteCommand`, `QueryCommand`, `ScanCommand` on the GSI, `BatchWriteCommand`) by reading `command.input` in native JS values
  * (numbers, strings, booleans, arrays, maps and `Set`s), exactly as lib-dynamodb receives them before
  * marshalling.
  *
@@ -19,6 +19,10 @@
  *   (`ADD x` with `DELETE x` in one call), writes to key attributes, missing key attributes
  * - an optional IAM-style allow-list of operations so a test can prove a handler never calls an API its
  *   role lacks (the ingest role has no DeleteItem or BatchWriteItem)
+ * - Scan on the GSI only, as the api role has it (Requirement 12.2): a Scan of the table itself is always
+ *   refused with AccessDeniedException, whatever the allow-list says
+ * - the GSI's INCLUDE projection (template.yaml): an item read through GSI1 carries the table keys, the
+ *   index keys and the projected attributes only, not the whole item
  *
  * What it does NOT emulate (all real behaviour, none exercised by these tests):
  * - provisioned capacity and throttling (`ProvisionedThroughputExceededException`), consumed-capacity
@@ -26,8 +30,8 @@
  * - TTL deletion in the background: expired items stay readable until `expireTtl(nowSeconds)` is called
  * - eventual consistency (every read is strongly consistent), the 1 MB page limit on Query and the
  *   400 KB item size limit
- * - transactions, streams, `Scan`, `BatchGetItem`, filter and projection expressions, `IN` and `BETWEEN`
- * - GSI propagation delay (the GSI is a view computed at query time and always projects ALL)
+ * - transactions, streams, `BatchGetItem`, filter and projection expressions, `IN` and `BETWEEN`
+ * - GSI propagation delay (the GSI is a view computed at query time)
  * - DynamoDB's 38-digit decimal numbers (JS doubles are used), binary and NULL types, and the full
  *   reserved-word list (a representative subset is checked)
  * - the exact wording of error messages
@@ -43,6 +47,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 
@@ -59,10 +64,21 @@ export interface FakeOutput {
 }
 
 export type FakeOperation =
-  'PutItem' | 'GetItem' | 'UpdateItem' | 'DeleteItem' | 'Query' | 'BatchWriteItem';
+  'PutItem' | 'GetItem' | 'UpdateItem' | 'DeleteItem' | 'Query' | 'Scan' | 'BatchWriteItem';
+
+/** The non-key attributes GSI1 projects (`NonKeyAttributes` in packages/infra/template.yaml). */
+export const GSI1_PROJECTED_ATTRIBUTES: readonly string[] = [
+  'login',
+  'level',
+  'xp',
+  'renown',
+  'vocation',
+];
 
 export interface FakeDynamoOptions {
   tableName?: string;
+  /** Non-key attributes GSI1 projects. Default: `GSI1_PROJECTED_ATTRIBUTES`. */
+  gsi1Projection?: readonly string[];
   /** Operations the "role" may call; any other throws AccessDeniedException. Default: all. */
   allowedOperations?: readonly FakeOperation[];
 }
@@ -809,13 +825,20 @@ export class FakeDynamo {
   private readonly table: string;
   private readonly allowed: ReadonlySet<FakeOperation> | null;
   private readonly store = new Map<string, Item>();
+  private readonly projection: ReadonlySet<string>;
 
-  /** Every call received, in order (operation name and the raw input). */
-  readonly calls: { operation: FakeOperation; input: Record<string, unknown> }[] = [];
+  /** Every call received, in order (operation name, the raw input and the role view that made it). */
+  readonly calls: { operation: FakeOperation; input: Record<string, unknown>; role?: string }[] =
+    [];
 
   constructor(options: FakeDynamoOptions = {}) {
     this.table = options.tableName ?? 'mergescape';
     this.allowed = options.allowedOperations ? new Set(options.allowedOperations) : null;
+    this.projection = new Set([
+      ...KEY_ATTRIBUTES,
+      ...INDEX_ATTRIBUTES,
+      ...(options.gsi1Projection ?? GSI1_PROJECTED_ATTRIBUTES),
+    ]);
   }
 
   // ----- test helpers -----
@@ -859,31 +882,60 @@ export class FakeDynamo {
   /** The `DynamoDBDocumentClient.send` surface used by the repository. */
   send(command: unknown): Promise<FakeOutput> {
     try {
-      return Promise.resolve(this.dispatch(command));
+      return Promise.resolve(this.dispatch(command, this.allowed));
     } catch (error) {
       return Promise.reject(error);
     }
   }
 
-  private dispatch(command: unknown): FakeOutput {
+  /**
+   * A client for the same table restricted to one role's operations (the ingest and api Lambdas share the
+   * table but not their IAM permissions). Calls land in the shared `calls` log, tagged with `role`.
+   */
+  forRole(
+    role: string,
+    allowedOperations: readonly FakeOperation[],
+  ): { send(command: unknown): Promise<FakeOutput> } {
+    const allowed = new Set(allowedOperations);
+    return {
+      send: (command) => {
+        try {
+          return Promise.resolve(this.dispatch(command, allowed, role));
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+    };
+  }
+
+  private dispatch(
+    command: unknown,
+    allowed: ReadonlySet<FakeOperation> | null,
+    role?: string,
+  ): FakeOutput {
     const input = (command as CommandLike).input;
+    const guard = (operation: FakeOperation, run: () => FakeOutput): FakeOutput =>
+      this.guard(operation, input, run, allowed, role);
     if (command instanceof PutCommand) {
-      return this.guard('PutItem', input, () => this.put(input));
+      return guard('PutItem', () => this.put(input));
     }
     if (command instanceof GetCommand) {
-      return this.guard('GetItem', input, () => this.get(input));
+      return guard('GetItem', () => this.get(input));
     }
     if (command instanceof UpdateCommand) {
-      return this.guard('UpdateItem', input, () => this.update(input));
+      return guard('UpdateItem', () => this.update(input));
     }
     if (command instanceof DeleteCommand) {
-      return this.guard('DeleteItem', input, () => this.delete(input));
+      return guard('DeleteItem', () => this.delete(input));
     }
     if (command instanceof QueryCommand) {
-      return this.guard('Query', input, () => this.query(input));
+      return guard('Query', () => this.query(input));
+    }
+    if (command instanceof ScanCommand) {
+      return guard('Scan', () => this.scan(input));
     }
     if (command instanceof BatchWriteCommand) {
-      return this.guard('BatchWriteItem', input, () => this.batchWrite(input));
+      return guard('BatchWriteItem', () => this.batchWrite(input));
     }
     throw serviceError('UnsupportedOperation', 'The fake DynamoDB does not implement this command');
   }
@@ -892,9 +944,11 @@ export class FakeDynamo {
     operation: FakeOperation,
     input: Record<string, unknown>,
     run: () => FakeOutput,
+    allowed: ReadonlySet<FakeOperation> | null,
+    role?: string,
   ): FakeOutput {
-    this.calls.push({ operation, input: clone(input) });
-    if (this.allowed && !this.allowed.has(operation)) {
+    this.calls.push({ operation, input: clone(input), ...(role ? { role } : {}) });
+    if (allowed && !allowed.has(operation)) {
       throw serviceError(
         'AccessDeniedException',
         `User is not authorized to perform: dynamodb:${operation} on the table`,
@@ -1172,7 +1226,7 @@ export class FakeDynamo {
     const more = typeof limit === 'number' && matches.length > limit;
     const last = page[page.length - 1];
     const result: Record<string, unknown> = {
-      Items: page.map((item) => clone(item)),
+      Items: page.map((item) => (indexName === 'GSI1' ? this.project(item) : clone(item))),
       Count: page.length,
     };
     if (more && last) {
@@ -1180,6 +1234,71 @@ export class FakeDynamo {
         indexName === 'GSI1'
           ? { PK: last.PK, SK: last.SK, [hashName]: last[hashName], [rangeName]: last[rangeName] }
           : { PK: last.PK, SK: last.SK };
+    }
+    return result;
+  }
+
+  /** An item as the GSI returns it: the keys and the projected attributes. */
+  private project(item: Item): Item {
+    return clone(
+      Object.fromEntries(Object.entries(item).filter(([name]) => this.projection.has(name))),
+    );
+  }
+
+  /** Scan, which exists only on GSI1: the api role may not read the table itself (Requirement 12.2). */
+  private scan(input: Record<string, unknown>): FakeOutput {
+    this.checkTable(input);
+    if (input.IndexName !== 'GSI1') {
+      throw serviceError(
+        'AccessDeniedException',
+        'User is not authorized to perform: dynamodb:Scan on the table (only on the GSI1 index)',
+      );
+    }
+    for (const unsupported of [
+      'FilterExpression',
+      'ProjectionExpression',
+      'Segment',
+      'TotalSegments',
+    ]) {
+      if (input[unsupported] !== undefined) {
+        throw validation(`${unsupported} is not supported by the fake`);
+      }
+    }
+    let matches = [...this.store.values()]
+      .filter((item) => typeof item.GSI1PK === 'string' && typeof item.GSI1SK === 'string')
+      .sort((a, b) => {
+        const ka = [a.GSI1PK, a.GSI1SK, a.PK, a.SK].map(String).join('\u0000');
+        const kb = [b.GSI1PK, b.GSI1SK, b.PK, b.SK].map(String).join('\u0000');
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+    const start = input.ExclusiveStartKey;
+    if (start !== undefined) {
+      if (!isPlainObject(start)) {
+        throw validation('ExclusiveStartKey must be a key');
+      }
+      const startIndex = matches.findIndex((item) => item.PK === start.PK && item.SK === start.SK);
+      matches = startIndex === -1 ? matches : matches.slice(startIndex + 1);
+    }
+    const limit = input.Limit;
+    if (
+      limit !== undefined &&
+      (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)
+    ) {
+      throw validation('Limit must be a positive integer');
+    }
+    const page = typeof limit === 'number' ? matches.slice(0, limit) : matches;
+    const last = page[page.length - 1];
+    const result: Record<string, unknown> = {
+      Items: page.map((item) => this.project(item)),
+      Count: page.length,
+    };
+    if (typeof limit === 'number' && matches.length > limit && last) {
+      result.LastEvaluatedKey = {
+        PK: last.PK,
+        SK: last.SK,
+        GSI1PK: last.GSI1PK,
+        GSI1SK: last.GSI1SK,
+      };
     }
     return result;
   }

@@ -92,8 +92,16 @@ Resources:
               KeyType: HASH
             - AttributeName: GSI1SK
               KeyType: RANGE
+          # The badge (login, level, vocation, Renown) and the weekly rollover's scan read only these; the
+          # rest of the profile is fetched from the table. Pinned Feats join the list with task 22.
           Projection:
-            ProjectionType: ALL
+            ProjectionType: INCLUDE
+            NonKeyAttributes:
+              - login
+              - level
+              - xp
+              - renown
+              - vocation
           ProvisionedThroughput:
             ReadCapacityUnits: 5
             WriteCapacityUnits: 5
@@ -182,6 +190,9 @@ Resources:
       FunctionName: !Sub 'mergescape-${Stage}-api'
       Description: OAuth callback, JWT-protected game API, badge SVG and the weekly rollover.
       Handler: api.handler
+      # The Monday rollover walks every profile in this function, so it gets a longer limit than the
+      # 10 s of the request paths.
+      Timeout: 60
       ReservedConcurrentExecutions: 5
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup
@@ -220,6 +231,12 @@ Resources:
               Resource:
                 - !GetAtt Table.Arn
                 - !Sub '${Table.Arn}/index/GSI1'
+            # The weekly rollover pages through every profile with a Scan of the sparse GSI1, which holds
+            # only profiles. The table itself can never be scanned.
+            - Sid: RolloverScan
+              Effect: Allow
+              Action: dynamodb:Scan
+              Resource: !Sub '${Table.Arn}/index/GSI1'
             - Sid: ReadSecrets
               Effect: Allow
               Action:

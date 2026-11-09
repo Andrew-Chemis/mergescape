@@ -1,4 +1,4 @@
-import { emptySkillXp } from '@mergescape/shared';
+import { charmDefinition, emptySkillXp, makeCharm, starterDeck } from '@mergescape/shared';
 import type { PullRequestFacts, RunState } from '@mergescape/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -11,6 +11,10 @@ import type { EventRow } from '../src/db';
 import { deliveryKey, prMetaKey, profileKey } from '../src/keys';
 import { ALLOWED_ATTRIBUTES, assertItemAllowed, SchemaViolationError } from '../src/schema';
 import { auditSchema, makeDb } from './support';
+
+const rubberDuck = makeCharm(
+  charmDefinition('rubber-duck') as NonNullable<ReturnType<typeof charmDefinition>>,
+);
 
 const NOW = Date.UTC(2026, 10, 9, 12, 0, 0);
 const NOW_S = NOW / 1000;
@@ -588,6 +592,264 @@ describe('weekly run', () => {
   });
 });
 
+describe('run-layer profile fields', () => {
+  async function profile() {
+    const made = makeDb();
+    await made.db.upsertProfileOnLogin({
+      id: USER,
+      login: 'Octo-Cat',
+      installations: [],
+      nowMs: NOW,
+    });
+    return made;
+  }
+
+  it('starts a new profile with no Renown, the starter deck and nothing else', async () => {
+    const { db } = await profile();
+    expect(await db.getProfile(USER)).toMatchObject({
+      renown: 0,
+      vocation: 'Journeyman',
+      vouchers: [],
+      deck: starterDeck(),
+      cosmetics: [],
+      charms: [],
+      repoMerges: {},
+      mogulBag: [],
+      mogulBenched: null,
+      mogulBoardWeek: null,
+      runWeek: null,
+      history: [],
+      kills: {},
+      firstSeen: {},
+      weekState: null,
+      version: 0,
+    });
+  });
+
+  it('saves absolute values under the version it read, and bumps it', async () => {
+    const { fake, db } = await profile();
+    await db.saveProfile(USER, 0, {
+      gold: 120,
+      renown: 2,
+      vocation: 'Warden',
+      vouchers: ['overclock'],
+      charms: [rubberDuck],
+      cosmetics: ['cosmetic-tiny-rocket'],
+      repoMerges: { '424242': 3 },
+      mogulBag: ['founder', 'hoodie'],
+      mogulBenched: { charm: rubberDuck, weekKey: '2026-46' },
+      mogulBoardWeek: '2026-46',
+      runWeek: '2026-46',
+      history: [10, 20],
+      kills: { 'merge-goblin': 4 },
+      firstSeen: { 'merge-goblin': '2026-11-09T12:00:00.000Z' },
+      weekState: {
+        week: '2026-46',
+        pledgeProgress: { strike: 2 },
+        pledgesCompleted: ['tidy'],
+        mogulChain: 3,
+        loadedDiceUsed: true,
+      },
+    });
+    expect(await db.getProfile(USER, true)).toMatchObject({
+      gold: 120,
+      renown: 2,
+      vocation: 'Warden',
+      vouchers: ['overclock'],
+      charms: [rubberDuck],
+      cosmetics: ['cosmetic-tiny-rocket'],
+      repoMerges: { '424242': 3 },
+      mogulBag: ['founder', 'hoodie'],
+      mogulBenched: { charm: rubberDuck, weekKey: '2026-46' },
+      mogulBoardWeek: '2026-46',
+      runWeek: '2026-46',
+      history: [10, 20],
+      kills: { 'merge-goblin': 4 },
+      firstSeen: { 'merge-goblin': '2026-11-09T12:00:00.000Z' },
+      weekState: {
+        week: '2026-46',
+        pledgeProgress: { strike: 2 },
+        pledgesCompleted: ['tidy'],
+        mogulChain: 3,
+        loadedDiceUsed: true,
+      },
+      version: 1,
+    });
+
+    // A stale version is a conflict and writes nothing; so is a failing extra condition.
+    await expect(db.saveProfile(USER, 0, { gold: 1 })).rejects.toThrow(VersionConflictError);
+    await expect(
+      db.saveProfile(
+        USER,
+        1,
+        { gold: 1 },
+        { expression: '#r <> :r', names: { '#r': 'run_week' }, values: { ':r': '2026-46' } },
+      ),
+    ).rejects.toThrow(VersionConflictError);
+    expect((await db.getProfile(USER, true))?.gold).toBe(120);
+
+    // Null removes the optional attributes.
+    await db.saveProfile(USER, 1, { mogulBenched: null, mogulBoardWeek: null });
+    expect(fake.peek('USER#1001001', 'PROFILE')).not.toHaveProperty('mogul_benched');
+    expect(fake.peek('USER#1001001', 'PROFILE')).not.toHaveProperty('mogul_board_week');
+    auditSchema(fake);
+  });
+
+  it('applies a score with extra absolute fields in the same guarded write', async () => {
+    const { db } = await profile();
+    await db.applyScore(USER, 0, {
+      xp: 100,
+      skillXp: { ...emptySkillXp(), smithing: 100 },
+      gold: 7,
+      level: 1,
+      counters: { streakWeeks: 2 },
+      patch: { repoMerges: { '5': 1 }, kills: { 'merge-goblin': 1 } },
+    });
+    expect(await db.getProfile(USER, true)).toMatchObject({
+      xp: 100,
+      gold: 7,
+      streakWeeks: 2,
+      repoMerges: { '5': 1 },
+      kills: { 'merge-goblin': 1 },
+      version: 1,
+    });
+    await expect(
+      db.applyScore(USER, 0, {
+        xp: 1,
+        skillXp: emptySkillXp(),
+        gold: 0,
+        level: 1,
+        counters: {},
+        patch: { repoMerges: { '5': 2 } },
+      }),
+    ).rejects.toThrow(VersionConflictError);
+    expect((await db.getProfile(USER, true))?.repoMerges).toEqual({ '5': 1 });
+  });
+
+  it('adds a payout without a guard and bumps the version', async () => {
+    const { db } = await profile();
+    await db.applyScore(USER, 0, {
+      xp: 0,
+      skillXp: emptySkillXp(),
+      gold: 10,
+      level: 1,
+      counters: {},
+    });
+    await db.addPayout(USER, { gold: 25, renown: 1 });
+    await db.addPayout(USER, { gold: 0, renown: 0 });
+    expect(await db.getProfile(USER, true)).toMatchObject({ gold: 35, renown: 1, version: 3 });
+  });
+
+  it('lists every profile id through the GSI, page by page', async () => {
+    const { db } = makeDb();
+    for (const id of [3, 1, 2, 4]) {
+      await db.upsertProfileOnLogin({
+        id,
+        login: 'player-' + String(id),
+        installations: [],
+        nowMs: NOW,
+      });
+    }
+    const found: number[] = [];
+    for await (const id of db.scanProfileIds(3)) {
+      found.push(id);
+    }
+    expect(found.sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it('stores a Combat Log row that belongs to no pull request', async () => {
+    const { fake, db } = await profile();
+    const full = eventRow({
+      kind: 'weekly_streak',
+      skill: 'endurance',
+      monster: null,
+      deliveryId: 'streak-2026-47',
+    });
+    delete full.repoId;
+    delete full.repoPrivate;
+    delete full.prNumber;
+    await db.putEvent(full);
+    const { rows } = await db.listEvents(USER, { limit: 5 });
+    expect(rows[0]).toMatchObject({ kind: 'weekly_streak', skill: 'endurance' });
+    expect(rows[0]).not.toHaveProperty('repoId');
+    expect(rows[0]).not.toHaveProperty('prNumber');
+    expect(
+      fake.peek('USER#1001001', 'EVT#2026-11-09T12:00:00.000Z#streak-2026-47'),
+    ).not.toHaveProperty('repo_id');
+  });
+});
+
+describe('week items', () => {
+  const baseRun = (): RunState => ({
+    weekKey: '2026-46',
+    act: 'scout',
+    clearedActs: [],
+    weeklyXp: 0,
+    targets: { scout: 1200, raid: 2000, boss: 3000 },
+    mogul: 'rocket-man',
+    hand: [],
+    played: [],
+    shopSeed: 1,
+    shop: null,
+  });
+
+  it('starts at version 0 with no request ids, counters, free pack or offer', async () => {
+    const { db } = makeDb();
+    await db.createWeek(USER, baseRun());
+    expect(await db.getWeekItem(USER, '2026-46')).toEqual({
+      run: baseRun(),
+      version: 0,
+      requestIds: [],
+      merges: 0,
+      reviews: 0,
+      freePack: null,
+      legendary: null,
+    });
+    expect(await db.getWeekItem(USER, '2026-47')).toBeNull();
+  });
+
+  it('saves only under the version (and the act) it was read at, bumping the version', async () => {
+    const { fake, db } = makeDb();
+    await db.createWeek(USER, baseRun());
+    expect(
+      await db.saveWeek(USER, '2026-46', { version: 0 }, { requestIds: ['a'], freePack: 'pledge' }),
+    ).toBe(true);
+    expect(await db.saveWeek(USER, '2026-46', { version: 0 }, { requestIds: ['b'] })).toBe(false);
+    expect(await db.getWeekItem(USER, '2026-46')).toMatchObject({
+      version: 1,
+      requestIds: ['a'],
+      freePack: 'pledge',
+    });
+
+    // The act-clear claim: conditional on the act, and a null act removes the attribute.
+    expect(await db.saveWeek(USER, '2026-46', { act: 'raid' }, { act: 'boss' })).toBe(false);
+    expect(
+      await db.saveWeek(USER, '2026-46', { act: 'scout' }, { act: null, legendary: rubberDuck }),
+    ).toBe(true);
+    expect(fake.peek('USER#1001001', 'WEEK#2026-46')).not.toHaveProperty('act');
+    expect((await db.getWeekItem(USER, '2026-46'))?.legendary).toEqual(rubberDuck);
+    // There is no such week to save to.
+    expect(await db.saveWeek(USER, '2026-99', { version: 0 }, { requestIds: [] })).toBe(false);
+    auditSchema(fake);
+  });
+
+  it('adds XP and the streak counters atomically and returns the week', async () => {
+    const { db } = makeDb();
+    await db.createWeek(USER, baseRun());
+    const merged = await db.addWeekCredit(USER, '2026-46', { xp: 700, merge: true, review: false });
+    expect(merged).toMatchObject({ run: { weeklyXp: 700 }, merges: 1, reviews: 0, version: 0 });
+    const reviewed = await db.addWeekCredit(USER, '2026-46', {
+      xp: 90,
+      merge: false,
+      review: true,
+    });
+    expect(reviewed).toMatchObject({ run: { weeklyXp: 790 }, merges: 1, reviews: 1 });
+    expect(
+      await db.addWeekCredit(USER, '2026-47', { xp: 5, merge: false, review: false }),
+    ).toBeNull();
+  });
+});
+
 describe('schema guard', () => {
   it('fails on an extra attribute on a PR# item, before anything is sent', async () => {
     const { fake, db } = makeDb();
@@ -674,6 +936,75 @@ describe('schema guard', () => {
       expect(ALLOWED_ATTRIBUTES.PR).not.toContain(forbidden);
       expect(ALLOWED_ATTRIBUTES.EVENT).not.toContain(forbidden);
       expect(ALLOWED_ATTRIBUTES.REVIEW).not.toContain(forbidden);
+    }
+  });
+
+  it('allows exactly the run-layer attributes on PROFILE and WEEK items', () => {
+    expect([...ALLOWED_ATTRIBUTES.PROFILE].sort()).toEqual(
+      [
+        'login',
+        'created',
+        'installations',
+        'xp',
+        'xp_smithing',
+        'xp_vigilance',
+        'xp_oratory',
+        'xp_endurance',
+        'level',
+        'gold',
+        'opens_day',
+        'opens_count',
+        'daily_first_day',
+        'streak_weeks',
+        'version',
+        'GSI1PK',
+        'GSI1SK',
+        'renown',
+        'vocation',
+        'vouchers',
+        'deck',
+        'cosmetics',
+        'charms',
+        'repo_merges',
+        'mogul_bag',
+        'mogul_benched',
+        'mogul_board_week',
+        'run_week',
+        'history',
+        'kills',
+        'first_seen',
+        'wk_week',
+        'wk_progress',
+        'wk_completed',
+        'wk_chain',
+        'wk_dice',
+      ].sort(),
+    );
+    expect([...ALLOWED_ATTRIBUTES.WEEK].sort()).toEqual(
+      [
+        'week_key',
+        'act',
+        'cleared_acts',
+        'weekly_xp',
+        'targets',
+        'mogul',
+        'hand',
+        'played',
+        'shop_seed',
+        'shop',
+        'version',
+        'request_ids',
+        'merges',
+        'reviews',
+        'free_pack',
+        'legendary',
+      ].sort(),
+    );
+    // Game state is ids, counts and timestamps: never text from a pull request.
+    for (const kind of ['PROFILE', 'WEEK'] as const) {
+      for (const forbidden of ['title', 'body', 'comment', 'path', 'diff', 'repo_name', 'branch']) {
+        expect(ALLOWED_ATTRIBUTES[kind]).not.toContain(forbidden);
+      }
     }
   });
 

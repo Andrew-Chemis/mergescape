@@ -9,7 +9,7 @@ import { JWT_AUDIENCE, JWT_ISSUER, signSessionToken } from '../src/jwt';
 import type { Logger } from '../src/log';
 import type { SecretName, Secrets } from '../src/secrets';
 import { FakeDynamo } from './fake-dynamo';
-import { START } from './harness';
+import { SEED, START } from './harness';
 import { TABLE_NAME } from './support';
 
 export const PAGES_ORIGIN = 'https://octo.github.io';
@@ -135,6 +135,7 @@ export function makeApiHarness(script: GitHubScript = {}): ApiHarness {
     log,
     now: () => clock.now,
     fetch: github.fetch,
+    newSeed: () => SEED,
   });
   return {
     fake,

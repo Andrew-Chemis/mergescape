@@ -1,0 +1,291 @@
+/**
+ * The weekly run in the database (tasks.md 15): starting a week for a player, closing the last one, and
+ * loading the player's current state for scoring and for the endpoints.
+ *
+ * Starting a week is shared by the Monday rollover and by a lazy start (a new player, or a missed
+ * rollover), so both are `ensureRun`. It is idempotent and safe to repeat after a crash at any point:
+ *
+ *   1. read the profile and this week's `WEEK#` item;
+ *   2. if the profile's `run_week` is this week, there is nothing to do;
+ *   3. otherwise plan the transition from the profile as it is now (streak, Vocation, history, Mogul bag,
+ *      new run) with the seed stored on the `WEEK#` item if one exists, else a fresh one;
+ *   4. create the `WEEK#` item (conditional on it not existing: whoever creates it fixes the seed);
+ *   5. write the profile, guarded by its `version` and by `run_week` not being this week yet, which is
+ *      the single step that credits the streak. A crash after 4 leaves a week the next call finishes with
+ *      the same seed, so the plan is the same.
+ *
+ * Week-scoped scorer state lives on the profile stamped with its week (see `player.ts`), so the Monday
+ * transition resets it by changing `run_week` alone.
+ */
+import {
+  applyFounderBoard,
+  applyScoreResult,
+  autoPlayPledges,
+  isoWeekKey,
+  levelFor,
+  MEDIAN_WEEKS,
+  playerWithRun,
+  score,
+  startRun,
+  weekStartUtc,
+} from '@mergescape/shared';
+import type { PlayerState, PRState, RunState, WeeklyStreakEvent } from '@mergescape/shared';
+import { VersionConflictError } from './db';
+import type { Db, EventRow, ProfileItem, ProfilePatch, WeekItem } from './db';
+import { runWithScorerState, toPlayerState } from './player';
+import { vocationFor } from './vocation';
+import { weeksBetween } from './weeks';
+
+/** The weekly streak needs "at least one merged PR or three reviews that week" (types.ts, WeeklyStreakEvent). */
+export const STREAK_MIN_MERGES = 1;
+export const STREAK_MIN_REVIEWS = 3;
+
+/** Retries of one optimistic read-modify-write before giving up. */
+const MAX_ATTEMPTS = 6;
+
+export interface RunContext {
+  db: Db;
+  /** Epoch milliseconds. */
+  now: number;
+  /** A fresh random unsigned 32-bit seed for a new run. */
+  newSeed: () => number;
+}
+
+/** The profile and week as stored, with the week for `profile.runWeek` being the current one. */
+export interface Rolled {
+  profile: ProfileItem;
+  week: WeekItem;
+}
+
+/** A player ready to score or to serve: the stored items and the scorer's view of them. */
+export interface Current extends Rolled {
+  /** With the run's state applied, the Founder's Board settled and unplayed Pledges auto-played. */
+  player: PlayerState;
+  /** The week's run with the scorer state filled in (and any auto-played Pledges). */
+  run: RunState;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The transition, as a pure plan
+// ---------------------------------------------------------------------------------------------
+
+export interface RolloverPlan {
+  run: RunState;
+  /** What to write to the profile; null when only the week item is missing. */
+  profilePatch: ProfilePatch | null;
+  /** The Combat Log row of the weekly streak, when last week qualified. */
+  streakRow: EventRow | null;
+}
+
+/** A PRState for the events that belong to no PR (the weekly streak never reads one). */
+function noPr(playerId: number): PRState {
+  return {
+    repoId: 0,
+    number: 0,
+    authorId: playerId,
+    additions: 0,
+    deletions: 0,
+    reviewRoundCount: 0,
+    syncCount: 0,
+    reviews: [],
+    reviewerCounters: {},
+  };
+}
+
+/**
+ * Close last week and open this one for a player (Requirements 5.3, 6.1, 6.2, 7.2, 9.3), as data.
+ *
+ * - Last week's weekly XP joins the profile's history (8 entries); skipped weeks count as zero.
+ * - The weekly streak is scored for last week (1 merge or 3 reviews qualifies); a week with no activity
+ *   breaks it. Its XP and gold go to the character only, not to last week's total or this week's.
+ * - Vocation is recomputed from skill XP, and the Mogul bag, the Founder's Board and the Pledge hand move
+ *   on through the shared `startRun`.
+ *
+ * @param previous the `WEEK#` item of `profile.runWeek`, if any
+ * @param profileRolled the profile is already in this week (only the week item is missing)
+ */
+export function planRollover(
+  profile: ProfileItem,
+  previous: WeekItem | null,
+  seed: number,
+  now: number,
+  profileRolled: boolean,
+): RolloverPlan {
+  const weekKey = isoWeekKey(now);
+  let player = toPlayerState(profile);
+  if (profileRolled) {
+    return {
+      run: startRun({ player, now, seed, history: profile.history }).run,
+      profilePatch: null,
+      streakRow: null,
+    };
+  }
+
+  let history = [...profile.history];
+  let streakRow: EventRow | null = null;
+  if (profile.runWeek !== null) {
+    const gap = Math.max(1, weeksBetween(profile.runWeek, weekKey));
+    history = [
+      ...history,
+      previous?.run.weeklyXp ?? 0,
+      ...new Array<number>(gap - 1).fill(0),
+    ].slice(-MEDIAN_WEEKS);
+
+    const qualified =
+      gap === 1 &&
+      previous !== null &&
+      (previous.merges >= STREAK_MIN_MERGES || previous.reviews >= STREAK_MIN_REVIEWS);
+    const event: WeeklyStreakEvent = {
+      kind: 'weekly_streak',
+      actor: { id: profile.id, isBot: false },
+      qualified,
+    };
+    const pr = noPr(profile.id);
+    const result = score(event, player, pr, now);
+    player = applyScoreResult(player, pr, result).player;
+    if (result.skip === null && result.skill !== null) {
+      streakRow = {
+        userId: profile.id,
+        // Fixed to the start of the week, so a retried rollover rewrites the same row.
+        ts: new Date(weekStartUtc(now)).toISOString(),
+        deliveryId: `streak-${weekKey}`,
+        kind: 'weekly_streak',
+        points: result.points,
+        power: result.power,
+        zone: result.zone,
+        level: result.level,
+        xp: result.xp,
+        skill: result.skill,
+        skillXp: result.skillXp,
+        supplies: result.supplies,
+        monster: null,
+        breakdown: result.breakdown,
+      };
+    }
+  }
+
+  const started = startRun({ player, now, seed, history });
+  const next = started.player;
+  return {
+    run: started.run,
+    streakRow,
+    profilePatch: {
+      xp: next.xp,
+      skillXp: next.skillXp,
+      level: levelFor(next.xp),
+      gold: next.gold,
+      counters: { streakWeeks: next.counters.streakWeeks },
+      charms: next.charms,
+      mogulBag: next.moguls.bag,
+      mogulBenched: next.moguls.benched,
+      mogulBoardWeek: next.moguls.boardWeek,
+      vocation: vocationFor(next.skillXp),
+      runWeek: weekKey,
+      history,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Doing it
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Make sure the player has this week's run, starting it (and closing last week) if not. Returns null when
+ * the player has no profile. Safe to call concurrently and to repeat; see the module comment.
+ */
+export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled | null> {
+  const weekKey = isoWeekKey(ctx.now);
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const profile = await ctx.db.getProfile(userId, true);
+    if (!profile) {
+      return null;
+    }
+    const existing = await ctx.db.getWeekItem(userId, weekKey);
+    const profileRolled = profile.runWeek === weekKey;
+    if (existing && profileRolled) {
+      return { profile, week: existing };
+    }
+
+    const previous =
+      profile.runWeek !== null && !profileRolled
+        ? await ctx.db.getWeekItem(userId, profile.runWeek)
+        : null;
+    const seed = existing?.run.shopSeed ?? ctx.newSeed();
+    const plan = planRollover(profile, previous, seed, ctx.now, profileRolled);
+    if (!existing && !(await ctx.db.createWeek(userId, plan.run))) {
+      continue; // someone else created it first: start over with their seed
+    }
+    if (plan.profilePatch) {
+      if (plan.streakRow) {
+        await ctx.db.putEvent(plan.streakRow);
+      }
+      try {
+        await ctx.db.saveProfile(userId, profile.version, plan.profilePatch, {
+          expression: 'attribute_not_exists(#r) OR #r <> :r',
+          names: { '#r': 'run_week' },
+          values: { ':r': weekKey },
+        });
+      } catch (error) {
+        if (!(error instanceof VersionConflictError)) {
+          throw error;
+        }
+      }
+    }
+    // Loop to read the result back: it also covers a writer that beat us to the profile.
+  }
+  throw new Error('Could not start the run');
+}
+
+/**
+ * Load a player for scoring or serving: ensure the run, then settle the two things that depend only on
+ * the clock and are stored (the Founder's Board's Charm moves on Wednesday and Friday, unplayed Pledges
+ * auto-play after Tuesday). Both are idempotent, so this is safe on every load. Returns null for a player
+ * with no profile.
+ */
+export async function loadCurrent(ctx: RunContext, userId: number): Promise<Current | null> {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const rolled = await ensureRun(ctx, userId);
+    if (!rolled) {
+      return null;
+    }
+    const { profile, week } = rolled;
+    const run = runWithScorerState(week.run, profile);
+    const base = playerWithRun(toPlayerState(profile), run);
+    const board = applyFounderBoard(base, run.weekKey, ctx.now, run.shopSeed);
+    const auto = autoPlayPledges(run, board.player, ctx.now);
+    const boardChanged = board.player !== base;
+    const playedChanged = auto.run !== run;
+    if (!boardChanged && !playedChanged) {
+      return { profile, week, player: base, run };
+    }
+
+    if (boardChanged) {
+      try {
+        await ctx.db.saveProfile(userId, profile.version, {
+          charms: board.player.charms,
+          mogulBenched: board.player.moguls.benched,
+          mogulBoardWeek: board.player.moguls.boardWeek,
+        });
+      } catch (error) {
+        if (error instanceof VersionConflictError) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (
+      playedChanged &&
+      !(await ctx.db.saveWeek(
+        userId,
+        run.weekKey,
+        { version: week.version },
+        { played: auto.run.played },
+      ))
+    ) {
+      continue;
+    }
+    // Loop to read the settled state back.
+  }
+  throw new Error('The run kept changing');
+}

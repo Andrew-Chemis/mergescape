@@ -10,8 +10,14 @@ import type { PRBundle } from './db';
  *
  * @param bundle everything stored for the PR (an empty bundle for an unseen PR)
  * @param facts the PR facts on the event being scored; its size wins over the stored one
+ * @param authorMerges lifetime merges of the PR's author when they are a player (the Mentor Pledge compares
+ *   them to the reviewer's own); 0 for an author the game does not know
  */
-export function buildPRState(bundle: PRBundle, facts: PullRequestFacts): PRState {
+export function buildPRState(
+  bundle: PRBundle,
+  facts: PullRequestFacts,
+  authorMerges: number = 0,
+): PRState {
   const base = createPRState(facts);
   const meta = bundle.meta;
   const reviewerCounters: Record<string, ReviewerCounters> = {};
@@ -25,7 +31,11 @@ export function buildPRState(bundle: PRBundle, facts: PullRequestFacts): PRState
     if (review.reviewerIsBot) {
       continue;
     }
-    reviews.push({ reviewerId: review.reviewerId, state: review.state });
+    reviews.push({
+      reviewerId: review.reviewerId,
+      state: review.state,
+      submittedAt: review.submittedAt,
+    });
     const entry = counters(review.reviewerId);
     if (review.state === 'COMMENTED') {
       entry.comments += 1;
@@ -46,5 +56,6 @@ export function buildPRState(bundle: PRBundle, facts: PullRequestFacts): PRState
     syncCount: meta?.syncCount ?? 0,
     reviews,
     reviewerCounters,
+    authorMerges,
   };
 }

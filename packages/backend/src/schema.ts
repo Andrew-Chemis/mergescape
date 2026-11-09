@@ -30,6 +30,31 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'version',
     'GSI1PK',
     'GSI1SK',
+    // Run layer (tasks 14 to 16). All of it is derived game state: ids, counts and timestamps.
+    'renown',
+    'vocation',
+    'vouchers',
+    'deck',
+    'cosmetics',
+    'charms',
+    'repo_merges',
+    'mogul_bag',
+    'mogul_benched',
+    'mogul_board_week',
+    // The week the profile has been rolled into, and the closed weeks' XP the next targets come from.
+    'run_week',
+    'history',
+    // Bestiary: kill counts and first-seen instants per monster id.
+    'kills',
+    'first_seen',
+    // Week-scoped scorer state (Pledge progress, Leather Jacket chain, Loaded Dice), stamped with its week
+    // so it resets itself on Monday. It lives here, not on WEEK#, so one version-guarded write covers a
+    // scored event completely (see runs.ts).
+    'wk_week',
+    'wk_progress',
+    'wk_completed',
+    'wk_chain',
+    'wk_dice',
   ],
   // USER#<id> / EVT#<ts>#<delivery>: one Combat Log row. Numbers and scorer-generated labels only.
   EVENT: [
@@ -91,7 +116,7 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
   DELIVERY: ['ttl', 'released'],
   // STATE#<nonce> / META.
   STATE: ['ttl'],
-  // USER#<id> / WEEK#<yyyy-ww>: the RunState fields (tasks 14 to 16 extend this list).
+  // USER#<id> / WEEK#<yyyy-ww>: the RunState fields plus the bookkeeping the endpoints need.
   WEEK: [
     'week_key',
     'act',
@@ -103,6 +128,16 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'played',
     'shop_seed',
     'shop',
+    // Optimistic-lock counter for the shop and Pledge endpoints and the act-clear claim.
+    'version',
+    // The last 20 client request ids, so a replayed mutation answers instead of applying twice.
+    'request_ids',
+    // Merged PRs and scored reviews this week: the weekly streak needs "a merge or three reviews".
+    'merges',
+    'reviews',
+    // A free Pledge pack granted by the Raid clear, and a Legendary Charm offered on every 4th Renown.
+    'free_pack',
+    'legendary',
   ],
 };
 

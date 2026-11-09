@@ -589,11 +589,10 @@ describe('ingest: attribution', () => {
     // No EVT#, profile or any USER# item for the unlinked reviewer or merger.
     expect(itemsWithPrefix(h.fake, `USER#${REVIEWER_ID}`)).toHaveLength(0);
     expect(itemsWithPrefix(h.fake, `USER#${MERGER_ID}`)).toHaveLength(0);
-    expect(itemsWithPrefix(h.fake, 'USER#').map((item) => item.PK)).toEqual([
-      `USER#${AUTHOR_ID}`,
-      `USER#${AUTHOR_ID}`,
-      `USER#${AUTHOR_ID}`,
-    ]);
+    // The author's profile, this week's run and the two Combat Log rows are all there is.
+    expect(itemsWithPrefix(h.fake, 'USER#').map((item) => item.PK)).toEqual(
+      new Array<string>(4).fill(`USER#${AUTHOR_ID}`),
+    );
     // The PR facts and the human review record exist, because the author is a player.
     const pr = await h.db.getPR(REPO_ID, PR_NUMBER);
     expect(pr.meta?.merged).toBe(true);
@@ -813,19 +812,23 @@ describe('ingest: failures and concurrency', () => {
     // One open earned the daily bonus (30 points -> 90 XP), the other did not (10 points -> 30 XP).
     expect(profile?.xp).toBe(120);
     expect(profile?.opensCount).toBe(2);
-    expect(profile?.version).toBe(2);
+    // Version 1 is the lazy start of the week; each credit then adds one.
+    expect(profile?.version).toBe(3);
     const rows = (await h.db.listEvents(AUTHOR_ID, { limit: 5 })).rows;
     expect(rows).toHaveLength(2);
     const daily = rows.filter((row) =>
       row.breakdown.some((line) => line.label === 'First event of the day'),
     );
     expect(daily).toHaveLength(1);
-    // The loser of the race re-read and re-scored, so there were more profile writes than events.
+    // The loser of the race re-read and re-scored, so there were more profile writes than the one lazy
+    // start and the two events.
     const profileWrites = h.fake.calls.filter(
       (call) =>
         call.operation === 'UpdateItem' && (call.input.Key as { SK?: string }).SK === 'PROFILE',
     );
-    expect(profileWrites.length).toBe(3);
+    expect(profileWrites.length).toBeGreaterThan(3);
+    // The week got both events' XP exactly once, whatever the interleaving.
+    expect((await h.db.getWeek(AUTHOR_ID, '2026-46'))?.weeklyXp).toBe(120);
   });
 
   it('stores nothing from the payload in the logs when a delivery fails', async () => {

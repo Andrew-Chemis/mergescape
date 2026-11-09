@@ -5,7 +5,8 @@
  * |-------------------------|--------------|--------|-------------------------------------------------|
  * | GET /auth/login         | no           | none   | 302 to GitHub with a single-use `state`         |
  * | GET /auth/callback      | no           | none   | exchange code, upsert profile, 302 with a JWT   |
- * | GET /me                 | yes          | bearer | the player's profile                            |
+ * | GET /me                 | yes          | bearer | the player's profile and current run            |
+ * | GET /week               | yes          | bearer | the current run: acts, Pledges, the shop        |
  * | GET /log?cursor=        | yes          | bearer | Combat Log page, newest first                   |
  * | GET /installations      | yes          | bearer | the App installations the player can see        |
  *
@@ -23,8 +24,11 @@ import type { FunctionUrlEvent, FunctionUrlResult } from '../http';
 import { signSessionToken, verifySessionToken } from '../jwt';
 import type { Logger } from '../log';
 import { getRuntime } from '../runtime';
-import { isRolloverEvent, rollover } from '../rollover';
-import type { RolloverEvent } from '../rollover';
+import { isRolloverEvent, runRollover } from '../rollover';
+import type { RolloverEvent, RolloverResult } from '../rollover';
+import { loadCurrent } from '../runs';
+import type { RunContext } from '../runs';
+import { randomSeed } from '../seed';
 import type { Secrets } from '../secrets';
 import type { InstallationsResponse, LogResponse } from '../api-types';
 import {
@@ -33,6 +37,7 @@ import {
   toInstallationSummary,
   toLogEntry,
   toMeResponse,
+  toWeekSummary,
 } from '../views';
 
 /** Combat Log rows per page. */
@@ -41,6 +46,15 @@ export const LOG_PAGE_SIZE = 20;
 const STATE_FORMAT = /^[A-Za-z0-9_-]{20,128}$/;
 const CODE_FORMAT = /^[A-Za-z0-9_-]{1,200}$/;
 const BEARER = /^Bearer ([A-Za-z0-9._-]+)$/i;
+
+type Route = { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' };
+
+const ROUTES: Readonly<Record<string, Route>> = {
+  '/me': { kind: 'get', handler: 'me' },
+  '/week': { kind: 'get', handler: 'week' },
+  '/log': { kind: 'get', handler: 'log' },
+  '/installations': { kind: 'get', handler: 'installations' },
+};
 
 export interface ApiDeps {
   db: Db;
@@ -51,6 +65,8 @@ export interface ApiDeps {
   now?: () => number;
   /** The HTTP client for GitHub calls (global `fetch` in production). */
   fetch?: FetchLike;
+  /** Seeds for a run started by a player's first request of a week (a random uint32 in production). */
+  newSeed?: () => number;
   /** A fresh unguessable token for the OAuth `state`. */
   nonce?: () => string;
 }
@@ -137,9 +153,25 @@ export function createApiHandler(
     return result.ok ? result.userId : null;
   }
 
+  /** The player with this week's run, started on the spot if the rollover has not reached them. */
+  function runContext(): RunContext {
+    return { db, now: now(), newSeed: deps.newSeed ?? randomSeed };
+  }
+
   async function me(userId: number): Promise<FunctionUrlResult> {
-    const profile = await db.getProfile(userId, true);
-    return profile ? json(200, toMeResponse(profile)) : json(404, { error: 'no_profile' });
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current
+      ? json(200, toMeResponse(current, context.now))
+      : json(404, { error: 'no_profile' });
+  }
+
+  async function week(userId: number): Promise<FunctionUrlResult> {
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current
+      ? json(200, toWeekSummary(current, context.now))
+      : json(404, { error: 'no_profile' });
   }
 
   async function combatLog(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
@@ -201,8 +233,8 @@ export function createApiHandler(
         // Function URL CORS answers preflights itself; this is the fallback if one reaches the code.
         return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
       }
-      const route = ['/me', '/log', '/installations'].includes(path) ? path : null;
-      if (route === null) {
+      const route = Object.hasOwn(ROUTES, path) ? ROUTES[path] : undefined;
+      if (route === undefined) {
         return json(404, { error: 'not_found' });
       }
       if (method !== 'GET') {
@@ -212,12 +244,14 @@ export function createApiHandler(
       if (userId === null) {
         return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
       }
-      switch (route) {
-        case '/me':
+      switch (route.handler) {
+        case 'me':
           return await me(userId);
-        case '/log':
+        case 'week':
+          return await week(userId);
+        case 'log':
           return await combatLog(userId, event);
-        default:
+        case 'installations':
           return await installations(userId);
       }
     } catch (error) {
@@ -232,9 +266,15 @@ let defaultHandler: ((event: FunctionUrlEvent) => Promise<FunctionUrlResult>) | 
 /** Lambda entry point (`api.handler` in the SAM template): HTTP requests and the weekly schedule. */
 export const handler = (
   event: FunctionUrlEvent | RolloverEvent,
-): Promise<FunctionUrlResult | { statusCode: 200 }> => {
+): Promise<FunctionUrlResult | RolloverResult> => {
   if (isRolloverEvent(event)) {
-    return rollover();
+    const runtime = getRuntime();
+    return runRollover({
+      db: runtime.db,
+      log: runtime.log,
+      now: Date.now,
+      newSeed: randomSeed,
+    });
   }
   if (!defaultHandler) {
     const runtime = getRuntime();
