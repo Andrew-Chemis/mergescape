@@ -4,12 +4,18 @@
   import LevelUpFlash from './lib/components/LevelUpFlash.svelte';
   import NavRail from './lib/components/NavRail.svelte';
   import type { Session } from './lib/session.svelte';
+  import Bestiary from './routes/Bestiary.svelte';
   import Character from './routes/Character.svelte';
   import CombatLog from './routes/CombatLog.svelte';
   import Landing from './routes/Landing.svelte';
   import NotFound from './routes/NotFound.svelte';
+  import Privacy from './routes/Privacy.svelte';
+  import RunMap from './routes/RunMap.svelte';
+  import Settings from './routes/Settings.svelte';
+  import Shop from './routes/Shop.svelte';
+  import Terms from './routes/Terms.svelte';
   import Town from './routes/Town.svelte';
-  import { parseHash, ROUTE_TITLES } from './router';
+  import { parseHash, PUBLIC_ROUTES, ROUTE_TITLES } from './router';
   import type { Route } from './router';
 
   interface Props {
@@ -26,7 +32,11 @@
   let main: HTMLElement | undefined = $state();
   let firstRoute = true;
 
-  const showLanding = $derived(session.status === 'signed-out' || route.name === 'welcome');
+  // Privacy and Terms are plain text that Landing links to, so they open without a session.
+  const isPublic = $derived(PUBLIC_ROUTES.includes(route.name));
+  const signedOut = $derived(session.status === 'signed-out');
+  const showLanding = $derived(route.name === 'welcome' || (signedOut && !isPublic));
+  const standalone = $derived(signedOut && isPublic);
   const title = $derived(
     showLanding ? 'Welcome' : route.name === 'not-found' ? 'Not found' : ROUTE_TITLES[route.name],
   );
@@ -52,7 +62,11 @@
       firstRoute = false;
       return;
     }
-    void tick().then(() => main?.focus());
+    void tick().then(() => {
+      // The new screen starts at its top, as a page load would (Shop and the Map are long).
+      main?.focus({ preventScroll: true });
+      main?.scrollIntoView?.({ block: 'start' });
+    });
   });
 
   function skipToContent(event: MouseEvent) {
@@ -73,12 +87,26 @@
       notice={session.expired ? 'Your session ended. Sign in again to carry on.' : undefined}
     />
   </main>
+{:else if standalone}
+  <main id="main" tabindex="-1" bind:this={main}>
+    <div class="stage">
+      {#if route.name === 'privacy'}
+        <Privacy from="landing" />
+      {:else}
+        <Terms from="landing" />
+      {/if}
+    </div>
+  </main>
 {:else}
   <div class="shell">
     <NavRail current={route.name} />
     <main id="main" tabindex="-1" bind:this={main}>
       <div class="stage">
-        {#if session.status === 'loading'}
+        {#if route.name === 'privacy'}
+          <Privacy from="settings" />
+        {:else if route.name === 'terms'}
+          <Terms from="settings" />
+        {:else if session.status === 'loading'}
           <Frame {title}>
             <p class="panel" role="status">Waking the dungeon&hellip;</p>
           </Frame>
@@ -99,6 +127,14 @@
           <CombatLog {session} />
         {:else if route.name === 'character'}
           <Character {session} {onSignOut} />
+        {:else if route.name === 'shop'}
+          <Shop {session} />
+        {:else if route.name === 'map'}
+          <RunMap {session} />
+        {:else if route.name === 'bestiary'}
+          <Bestiary {session} />
+        {:else if route.name === 'settings'}
+          <Settings {session} {onSignOut} />
         {:else if route.name === 'not-found'}
           <NotFound path={route.path} />
         {/if}

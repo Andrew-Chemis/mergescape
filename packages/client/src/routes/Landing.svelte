@@ -3,6 +3,7 @@
   import Sprite from '../lib/components/Sprite.svelte';
   import { fixtureLogEntries } from '../lib/fixtures/state';
   import { formatGain, monsterLabel, summarize } from '../lib/format';
+  import { PROMISES } from '../lib/promises';
 
   interface Props {
     /** The api's `/auth/login` URL, or null when this build has no backend. */
@@ -29,16 +30,6 @@
       title: 'Merge something',
       text: 'Your character sleeps until real work wakes it. Open the tab whenever you like; nothing needs you.',
     },
-  ];
-
-  // Requirement 13.3, in plain words.
-  const promises = [
-    'We never read your code. No file contents, diffs, titles or comment text, ever.',
-    'We store counts and timestamps only.',
-    'You can export or delete everything in one click.',
-    "The App can't write to GitHub.",
-    "Activity from people who haven't signed in is discarded.",
-    'Mergescape is a game, not a performance-review tool. There is no manager view.',
   ];
 </script>
 
@@ -87,10 +78,13 @@
   <section class="panel promise" aria-labelledby="promise-heading">
     <h2 id="promise-heading">Our promise</h2>
     <ul>
-      {#each promises as promise (promise)}
+      {#each PROMISES as promise (promise)}
         <li>{promise}</li>
       {/each}
     </ul>
+    <p class="legal">
+      Read the full <a href="#/privacy">Privacy</a> page and the <a href="#/terms">Terms</a>.
+    </p>
   </section>
 
   {#if sample}
@@ -191,6 +185,11 @@
     padding-left: 20px;
     display: grid;
     gap: 6px;
+  }
+
+  .legal {
+    margin-top: 10px;
+    font-size: 13px;
   }
 
   .sample .summary {

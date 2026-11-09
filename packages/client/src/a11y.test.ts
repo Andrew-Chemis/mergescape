@@ -8,7 +8,11 @@ import axe from 'axe-core';
 import type { Result } from 'axe-core';
 import { fireEvent, screen } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
+import { ApiError } from './lib/api';
+import { createFixtureApi } from './lib/fixtures/api';
+import { fixtureCharm } from './lib/fixtures/state';
 import type { FixtureVariant } from './lib/fixtures/state';
+import type { WeekSummary } from './lib/types';
 import { renderApp } from './test/helpers';
 
 function describeViolations(violations: Result[]): string {
@@ -29,7 +33,13 @@ async function expectAccessible(): Promise<void> {
   expect(describeViolations(results.violations)).toBe('');
 }
 
-const screens: { name: string; hash: string; variant?: FixtureVariant; api?: null }[] = [
+const screens: {
+  name: string;
+  hash: string;
+  variant?: FixtureVariant;
+  api?: null;
+  week?: Partial<WeekSummary>;
+}[] = [
   { name: 'Landing', hash: '#/', api: null },
   { name: 'Landing (welcome route)', hash: '#/welcome' },
   { name: 'Town', hash: '#/' },
@@ -39,15 +49,35 @@ const screens: { name: string; hash: string; variant?: FixtureVariant; api?: nul
   { name: 'Combat Log, empty', hash: '#/log', variant: 'noevents' },
   { name: 'Character', hash: '#/character' },
   { name: 'Character, new character', hash: '#/character', variant: 'noevents' },
+  { name: 'Shop', hash: '#/shop' },
+  { name: 'Shop, closed', hash: '#/shop', variant: 'monday' },
+  { name: 'Shop, no run', hash: '#/shop', variant: 'noevents' },
+  {
+    name: 'Shop with a free pack and a Legendary offer',
+    hash: '#/shop',
+    week: { freePack: 'pledge', legendaryOffer: fixtureCharm('oracle') },
+  },
+  { name: 'Run Map', hash: '#/map' },
+  { name: 'Run Map, Monday with Pledges to play', hash: '#/map', variant: 'monday' },
+  { name: 'Run Map, no run', hash: '#/map', variant: 'noevents' },
+  { name: 'Bestiary', hash: '#/bestiary' },
+  { name: 'Bestiary, new character', hash: '#/bestiary', variant: 'noevents' },
+  { name: 'Settings', hash: '#/settings' },
+  { name: 'Settings, no installations', hash: '#/settings', variant: 'noinstall' },
+  { name: 'Privacy', hash: '#/privacy' },
+  { name: 'Terms', hash: '#/terms' },
+  { name: 'Privacy, signed out', hash: '#/privacy', api: null },
+  { name: 'Terms, signed out', hash: '#/terms', api: null },
   { name: 'Not found', hash: '#/nope' },
 ];
 
 describe('axe-core finds no violations', () => {
-  for (const { name, hash, variant, api } of screens) {
+  for (const { name, hash, variant, api, week } of screens) {
     it(name, async () => {
       await renderApp({
         hash,
         ...(variant ? { variant } : {}),
+        ...(week ? { week } : {}),
         ...(api === null ? { api: null, signInHref: 'https://api.example/auth/login' } : {}),
       });
       await expectAccessible();
@@ -71,6 +101,44 @@ describe('axe-core finds no violations', () => {
     await renderApp();
     await fireEvent.click(screen.getByRole('button', { name: 'Replay the roll' }));
     expect(screen.getByRole('button', { name: 'Skip' })).toBeTruthy();
+    await expectAccessible();
+  });
+});
+
+describe('axe-core finds no violations in the interactive states of the new screens', () => {
+  it('Shop with the shrine open and a purchase made', async () => {
+    await renderApp({ hash: '#/shop' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Buy · 40 g' }));
+    await screen.findByText('Lantern is yours.');
+    await fireEvent.click(screen.getByRole('button', { name: /^Shrine/ }));
+    await expectAccessible();
+  });
+
+  it('Shop showing a 409 beside its control', async () => {
+    const base = createFixtureApi({ now: Date.UTC(2026, 10, 11, 14, 5, 0) });
+    await renderApp({
+      hash: '#/shop',
+      api: {
+        ...base,
+        async shopBuy() {
+          throw new ApiError(409, 'no', 'insufficient_gold');
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Buy · 120 g' }));
+    await screen.findByRole('alert');
+    await expectAccessible();
+  });
+
+  it('Run Map while the Mogul reveal plays', async () => {
+    await renderApp({ hash: '#/map' });
+    expect(document.querySelector('.reveal')?.getAttribute('data-motion')).toBe('rise');
+    await expectAccessible();
+  });
+
+  it('Settings with the delete confirmation open, and after an export', async () => {
+    await renderApp({ hash: '#/settings' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete everything…' }));
     await expectAccessible();
   });
 });

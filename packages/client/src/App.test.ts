@@ -430,6 +430,19 @@ describe('navigation and layout', () => {
       'T Town',
       'L Log',
       'C Character',
+      '$ Shop',
+      'M Map',
+      'B Bestiary',
+      'S Settings',
+    ]);
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '#/',
+      '#/log',
+      '#/character',
+      '#/shop',
+      '#/map',
+      '#/bestiary',
+      '#/settings',
     ]);
     expect(within(nav).getByRole('link', { name: /Log/ }).getAttribute('aria-current')).toBe(
       'page',
@@ -463,7 +476,18 @@ describe('navigation and layout', () => {
   });
 
   it('has exactly one main landmark and one h1 on every screen', async () => {
-    for (const hash of ['#/', '#/log', '#/character', '#/welcome']) {
+    for (const hash of [
+      '#/',
+      '#/log',
+      '#/character',
+      '#/shop',
+      '#/map',
+      '#/bestiary',
+      '#/settings',
+      '#/privacy',
+      '#/terms',
+      '#/welcome',
+    ]) {
       document.body.innerHTML = '';
       await renderApp({ hash });
       expect(screen.getAllByRole('main')).toHaveLength(1);
@@ -565,13 +589,27 @@ describe('level-up flash', () => {
 
 describe('fixture mode touches no network', () => {
   it('renders every screen without calling fetch', async () => {
-    for (const hash of ['#/', '#/log', '#/character', '#/welcome', '#/nope']) {
+    for (const hash of [
+      '#/',
+      '#/log',
+      '#/character',
+      '#/shop',
+      '#/map',
+      '#/bestiary',
+      '#/settings',
+      '#/privacy',
+      '#/terms',
+      '#/welcome',
+      '#/nope',
+    ]) {
       document.body.innerHTML = '';
       await renderApp({ hash });
     }
-    for (const variant of ['noevents', 'noinstall'] as const) {
-      document.body.innerHTML = '';
-      await renderApp({ variant });
+    for (const variant of ['noevents', 'noinstall', 'monday'] as const) {
+      for (const hash of ['#/', '#/shop', '#/map', '#/bestiary', '#/settings']) {
+        document.body.innerHTML = '';
+        await renderApp({ variant, hash });
+      }
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });

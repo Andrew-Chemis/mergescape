@@ -1,0 +1,313 @@
+/**
+ * Settings from fixtures: the installations list with its GitHub links, the timezone line, Export JSON
+ * offered as a downloadable Blob, and Delete everything behind a two-step in-page confirmation that
+ * needs the login typed. Export and delete may answer 404 until task 18 ships; both say so inline.
+ */
+import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../lib/api';
+import type { Api } from '../lib/api';
+import { createFixtureApi } from '../lib/fixtures/api';
+import { exportFileName, formatOffset, timezoneInfo } from '../lib/settings';
+import { forbidNetwork, NOW, renderApp, textOf } from '../test/helpers';
+
+forbidNetwork();
+
+const settings = (options: Parameters<typeof renderApp>[0] = {}) =>
+  renderApp({ hash: '#/settings', ...options });
+
+/** jsdom has no object URLs; a stand-in that keeps the Blobs it was given. */
+let blobs: Blob[] = [];
+let clicked: { href: string; download: string }[] = [];
+let revoked: string[] = [];
+const realCreate = URL.createObjectURL;
+const realRevoke = URL.revokeObjectURL;
+
+beforeEach(() => {
+  blobs = [];
+  clicked = [];
+  revoked = [];
+  let next = 0;
+  URL.createObjectURL = vi.fn((blob: Blob) => {
+    blobs.push(blob);
+    next += 1;
+    return `blob:fixture-${next}`;
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = vi.fn((url: string) => {
+    revoked.push(url);
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked.push({ href: this.href, download: this.download });
+  });
+});
+
+afterEach(() => {
+  URL.createObjectURL = realCreate;
+  URL.revokeObjectURL = realRevoke;
+});
+
+describe('Settings', () => {
+  it('shows the account, the timezone line and links to the small print', async () => {
+    await settings();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Settings');
+    const account = screen.getByRole('region', { name: 'Account' });
+    expect(textOf(account)).toContain('Signed in as octo-dev');
+    expect(textOf(account)).toContain('The game runs on UTC');
+    expect(textOf(account)).toContain('weeks start on Monday at 00:00 UTC');
+    expect(textOf(account)).toContain(timezoneInfo().name);
+    const legal = screen.getByRole('region', { name: 'The small print' });
+    expect(within(legal).getByRole('link', { name: 'Privacy' }).getAttribute('href')).toBe(
+      '#/privacy',
+    );
+    expect(within(legal).getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe('#/terms');
+  });
+
+  it('lists the installations with the GitHub install and manage links', async () => {
+    await settings();
+    const installs = screen.getByRole('region', { name: 'Installations' });
+    const rows = within(installs).getAllByRole('listitem');
+    expect(rows).toHaveLength(1);
+    expect(textOf(rows[0])).toBe('Installation 5001 on account 4242 4 repositories');
+    const add = within(installs).getByRole('link', { name: 'Install on more repositories' });
+    expect(add.getAttribute('href')).toBe('https://github.com/apps/mergescape/installations/new');
+    expect(add.getAttribute('rel')).toContain('noopener');
+    expect(
+      within(installs).getByRole('link', { name: 'Manage on GitHub' }).getAttribute('href'),
+    ).toBe('https://github.com/settings/installations');
+  });
+
+  it('says so when the App is installed nowhere, and flags a suspended installation', async () => {
+    await settings({ variant: 'noinstall' });
+    expect(textOf(screen.getByRole('region', { name: 'Installations' }))).toContain(
+      'The App is not installed anywhere yet',
+    );
+
+    document.body.innerHTML = '';
+    const base = createFixtureApi({ now: NOW });
+    const api: Api = {
+      ...base,
+      async installations() {
+        return {
+          installations: [{ installationId: 7, accountId: 1, repoCount: 1, suspended: true }],
+        };
+      },
+    };
+    await settings({ api });
+    const row = within(screen.getByRole('region', { name: 'Installations' })).getAllByRole(
+      'listitem',
+    )[0];
+    expect(textOf(row)).toBe('Installation 7 on account 1 1 repository Suspended');
+  });
+
+  it('offers Sign out only when there is a real session', async () => {
+    await settings();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    document.body.innerHTML = '';
+    const onSignOut = vi.fn();
+    await settings({ onSignOut });
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Export JSON', () => {
+  it('offers the export as a downloadable Blob and a visible link', async () => {
+    await settings();
+    await fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    const link = await screen.findByRole('link', {
+      name: 'Download mergescape-octo-dev-2026-11-11.json',
+    });
+    expect(link.getAttribute('href')).toBe('blob:fixture-1');
+    expect(link.getAttribute('download')).toBe('mergescape-octo-dev-2026-11-11.json');
+    expect(textOf(link.closest('p'))).toContain('Your export is ready.');
+
+    // The file was also offered straight away.
+    expect(clicked).toEqual([
+      { href: 'blob:fixture-1', download: 'mergescape-octo-dev-2026-11-11.json' },
+    ]);
+
+    // The Blob is JSON with the contract's keys.
+    expect(blobs).toHaveLength(1);
+    expect(blobs[0]?.type).toBe('application/json');
+    const body = JSON.parse(await (blobs[0] as Blob).text()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual([
+      'events',
+      'expeditions',
+      'exportedAt',
+      'feats',
+      'jobs',
+      'profile',
+      'weeks',
+    ]);
+    expect((body['profile'] as { login: string }).login).toBe('octo-dev');
+  });
+
+  it('releases the previous file when exporting again, and when leaving the screen', async () => {
+    const { unmount } = await settings();
+    await fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await screen.findByRole('link', { name: /^Download / });
+    await fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await waitFor(() => expect(blobs).toHaveLength(2));
+    expect(revoked).toEqual(['blob:fixture-1']);
+    unmount();
+    expect(revoked).toEqual(['blob:fixture-1', 'blob:fixture-2']);
+  });
+
+  it('says so inline when the server has no /export yet (404)', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const api: Api = {
+      ...base,
+      async exportData() {
+        throw new ApiError(404, 'The server answered 404.');
+      },
+    };
+    await settings({ api });
+    await fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'This server does not offer that yet.',
+    );
+    expect(screen.queryByRole('link', { name: /^Download / })).toBeNull();
+    expect(blobs).toHaveLength(0);
+  });
+
+  it('says so when the browser cannot make a file', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    await settings();
+    await fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'This browser cannot save files from the page.',
+    );
+  });
+});
+
+describe('Delete everything', () => {
+  const open = async () => {
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete everything…' }));
+    return screen.getByRole('textbox', { name: /Type your GitHub login/ }) as HTMLInputElement;
+  };
+  const confirm = () =>
+    screen.getByRole('button', { name: 'Delete everything' }) as HTMLButtonElement;
+
+  it('is two steps: a button first, then typing the login', async () => {
+    await settings();
+    // Step one: only the opening button is there. Nothing can be deleted yet.
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete everything' })).toBeNull();
+    const opener = screen.getByRole('button', { name: 'Delete everything…' });
+    expect(opener.getAttribute('aria-expanded')).toBe('false');
+
+    // Step two: the warning, the field, and a confirm button that is off until the login matches.
+    const field = await open();
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(textOf(document.getElementById('confirm-delete'))).toContain('cannot be undone');
+    expect(confirm().disabled).toBe(true);
+    await fireEvent.input(field, { target: { value: 'octo' } });
+    expect(confirm().disabled).toBe(true);
+    await fireEvent.input(field, { target: { value: 'OCTO-DEV ' } });
+    expect(confirm().disabled).toBe(false);
+  });
+
+  it('can be cancelled, and starts empty the next time', async () => {
+    await settings();
+    const field = await open();
+    await fireEvent.input(field, { target: { value: 'octo-dev' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    const again = await open();
+    expect(again.value).toBe('');
+    expect(confirm().disabled).toBe(true);
+  });
+
+  it('calls POST /delete with the typed login and reports success', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const deleteAccount = vi.fn(base.deleteAccount);
+    await settings({ api: { ...base, deleteAccount } });
+    const field = await open();
+    await fireEvent.input(field, { target: { value: 'Octo-Dev' } });
+    await fireEvent.click(confirm());
+    await waitFor(() => expect(screen.getByRole('status')).toBeTruthy());
+    expect(deleteAccount).toHaveBeenCalledTimes(1);
+    expect((deleteAccount.mock.calls[0] as unknown as [string])[0]).toBe('Octo-Dev');
+    expect(textOf(screen.getByRole('status'))).toContain('Everything was deleted.');
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('offers to sign out after a delete when there is a real session', async () => {
+    const onSignOut = vi.fn();
+    await settings({ onSignOut });
+    const field = await open();
+    await fireEvent.input(field, { target: { value: 'octo-dev' } });
+    await fireEvent.click(confirm());
+    await screen.findByRole('status');
+    const buttons = screen.getAllByRole('button', { name: 'Sign out' });
+    await fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so inline when the server has no /delete yet (404), and keeps the form', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const api: Api = {
+      ...base,
+      async deleteAccount() {
+        throw new ApiError(404, 'The server answered 404.');
+      },
+    };
+    await settings({ api });
+    const field = await open();
+    await fireEvent.input(field, { target: { value: 'octo-dev' } });
+    await fireEvent.click(confirm());
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'This server does not offer that yet.',
+    );
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('shows confirm_mismatch from the server in words', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const api: Api = {
+      ...base,
+      async deleteAccount() {
+        throw new ApiError(400, 'bad', 'confirm_mismatch');
+      },
+    };
+    await settings({ api });
+    const field = await open();
+    await fireEvent.input(field, { target: { value: 'octo-dev' } });
+    await fireEvent.click(confirm());
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'That is not your GitHub login. Nothing was deleted.',
+    );
+  });
+});
+
+describe('Settings helpers', () => {
+  it('names the export file after the login and the day', () => {
+    expect(exportFileName('octo-dev', new Date(Date.UTC(2026, 10, 11, 23, 0)))).toBe(
+      'mergescape-octo-dev-2026-11-11.json',
+    );
+    expect(exportFileName('we/ird name', new Date(Date.UTC(2026, 0, 2)))).toBe(
+      'mergescape-we_ird_name-2026-01-02.json',
+    );
+  });
+
+  it('formats UTC offsets from getTimezoneOffset', () => {
+    expect(formatOffset(0)).toBe('UTC+00:00');
+    expect(formatOffset(-60)).toBe('UTC+01:00');
+    expect(formatOffset(480)).toBe('UTC-08:00');
+    expect(formatOffset(-330)).toBe('UTC+05:30');
+  });
+
+  it('describes the timezone with a name, an offset and where Monday lands', () => {
+    const info = timezoneInfo(new Date(Date.UTC(2026, 10, 11)));
+    expect(info.name.length).toBeGreaterThan(0);
+    expect(info.offset).toMatch(/^UTC[+-]\d\d:\d\d$/);
+    expect(info.mondayLocal).toMatch(/^(Sun|Mon)/);
+  });
+});
