@@ -7,9 +7,11 @@ import {
   BIOMES,
   CAPS,
   CHARM_POWER_BY_RARITY,
+  CHARM_RULES,
   CHARM_PRICE_BY_RARITY,
   GEAR_TIER_LEVELS,
   INTEREST,
+  MAX_CHARM_COPIES,
   OVERCLOCK_ZONE_EXPONENT,
   POINTS,
   POWER_CAP,
@@ -90,5 +92,24 @@ describe('constants match the spec tables', () => {
   it('biomes and gear tiers', () => {
     expect(BIOMES).toHaveLength(6);
     expect(GEAR_TIER_LEVELS.map((entry) => entry.level)).toEqual([1, 10, 30, 50, 70, 90, 99]);
+  });
+
+  it('Charms (design.md 6.3 as audited)', () => {
+    expect(MAX_CHARM_COPIES).toBe(2);
+    expect(CHARM_RULES).toEqual({
+      rubberDuckExtraPower: 0.25,
+      rubberDuckInlineComments: 3,
+      lanternPower: 0.5,
+      smallHandsPower: 0.75,
+      smallHandsMaxLoc: 150,
+      secondPairExtraPartyPoints: 30,
+      hotPotatoPower: 1.5,
+      hotPotatoMaxLoc: 200,
+      hotPotatoWindowHours: 2,
+      greyBeardPower: 1,
+      greyBeardMerges: 50,
+      jestersRiposteMultiplier: 4,
+      loadedDicePower: 10,
+    });
   });
 });

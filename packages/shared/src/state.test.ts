@@ -17,7 +17,7 @@ import {
 } from './test-builders';
 
 describe('createPlayerState', () => {
-  it('is a level-1 character with Power hooks empty and the default Zone exponent', () => {
+  it('is a level-1 character with the default Zone exponent', () => {
     expect(createPlayerState(42)).toEqual({
       id: 42,
       xp: 0,
@@ -29,6 +29,8 @@ describe('createPlayerState', () => {
       pledges: { played: [], powerBonus: 0 },
       feats: { unlocked: [], powerBonus: 0 },
       moguls: { current: null, bag: [] },
+      week: { loadedDiceUsed: false },
+      repoMerges: {},
     });
   });
 });

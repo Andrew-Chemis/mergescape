@@ -44,12 +44,18 @@ export interface Mogul {
   name: string;
 }
 
-/** A held Charm. `power` is its active Power contribution (rarity table in constants.ts). */
+/**
+ * A held Charm. `power` is its unconditional Power contribution per copy (`basePower` in charms.ts, plus
+ * any bonus it has earned, such as the Founder's +0.25); event-conditional Power comes from the Charm's
+ * definition, looked up by `id`. A Charm whose id is not a known definition simply contributes `power`.
+ */
 export interface Charm {
   id: string;
   name: string;
   rarity: Rarity;
   power: number;
+  /** Copies stacked in this slot: 1 (the default when absent) or 2 (`MAX_CHARM_COPIES`). */
+  copies?: number;
 }
 
 export interface Pledge {
@@ -140,6 +146,12 @@ export interface MogulHook {
   bag: readonly MogulId[];
 }
 
+/** Week-scoped state of the Charms. Reset each Monday by `startRun`. */
+export interface WeekHook {
+  /** Loaded Dice has been spent this week. */
+  loadedDiceUsed: boolean;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Counters (plain data so the backend can persist them)
 // ---------------------------------------------------------------------------------------------
@@ -183,6 +195,9 @@ export interface PlayerState {
   pledges: PledgeLoadout;
   feats: FeatLoadout;
   moguls: MogulHook;
+  week: WeekHook;
+  /** Lifetime scored merges per repository, keyed by the repo id as a string (Grey Beard, Mentor). */
+  repoMerges: Readonly<Record<string, number>>;
 }
 
 /** The scorer's view of a PR. Metadata persisted per Requirement 3.1 is handled by the backend. */
@@ -291,6 +306,18 @@ export interface VerifiedKillEvent {
   pr: PullRequestFacts;
 }
 
+/**
+ * Built from a merge and the stored reviews (see `riposteCreditEvents`), one per human who requested
+ * changes on the PR. It scores only for a player holding Jester's Rebase: the Riposte is granted when the
+ * PR they challenged merges, never at review time (game-design.md 8.3).
+ */
+export interface RiposteCreditEvent {
+  kind: 'riposte_credit';
+  /** The reviewer who requested changes. */
+  actor: EventActor;
+  pr: PullRequestFacts;
+}
+
 /** Built by the weekly rollover for each player when a run closes. */
 export interface WeeklyStreakEvent {
   kind: 'weekly_streak';
@@ -326,7 +353,8 @@ export type PullRequestEvent =
   | PRSynchronizedEvent
   | ReviewSubmittedEvent
   | ReviewCommentCreatedEvent
-  | VerifiedKillEvent;
+  | VerifiedKillEvent
+  | RiposteCreditEvent;
 
 export type GameEvent =
   PullRequestEvent | WeeklyStreakEvent | InstallationEvent | InstallationRepositoriesEvent;
@@ -372,6 +400,10 @@ export interface CounterUpdates {
     /** Replace the actor's entry in `PRState.reviewerCounters`. */
     reviewerCounters?: { reviewerId: number; counters: ReviewerCounters };
   };
+  /** Loaded Dice fired on this event: set `PlayerState.week.loadedDiceUsed`. */
+  loadedDiceUsed?: true;
+  /** The new lifetime scored merge count of one repository (`PlayerState.repoMerges`). */
+  repoMerges?: { repoId: number; count: number };
 }
 
 export interface ScoreResult {
@@ -394,4 +426,25 @@ export interface ScoreResult {
   monster: MonsterId | null;
   breakdown: BreakdownLine[];
   counterUpdates: CounterUpdates;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Results of pure state transitions (shop, deck, Pledges, gold): a typed error instead of a throw
+// ---------------------------------------------------------------------------------------------
+
+/** Success carries the new state; failure carries a machine-readable reason and changes nothing. */
+export type Result<T extends object, E extends string> =
+  (T & { ok: true }) | { ok: false; error: E };
+
+// ---------------------------------------------------------------------------------------------
+// Event context for Power and point modifiers
+// ---------------------------------------------------------------------------------------------
+
+/** What a Power calculation needs to know about the event being scored. */
+export interface PowerContext {
+  event: GameEvent;
+  /** The PR's state before the event. */
+  pr: PRState;
+  /** Epoch milliseconds. */
+  now: number;
 }

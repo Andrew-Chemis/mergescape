@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { D2_XP } from './d2table';
-import { actWindow, score, sizePoints, sizeTier, streakPoints, utcDay, zoneFor } from './score';
+import { actWindow, utcDay } from './calendar';
+import { score, sizePoints, sizeTier, streakPoints, zoneFor } from './score';
 import { applyScoreResult, createPlayerState, createPRState } from './state';
 import {
   AUTHOR_ID,
@@ -833,7 +834,9 @@ describe('monster choice (design.md 7.1)', () => {
   });
 
   it("Act III's merge fights the week's Mogul when one is set", () => {
-    const withMogul = settledPlayer(AUTHOR_ID, { moguls: { current: 'founder', bag: [] } });
+    const withMogul = settledPlayer(AUTHOR_ID, {
+      moguls: { ...createPlayerState(AUTHOR_ID).moguls, current: 'founder' },
+    });
     expect(monsterOf(mergedFacts(), withReviews([approved]), withMogul, BOSS_NOW)).toBe('founder');
     expect(monsterOf(mergedFacts(), withReviews([approved]), withMogul, NOW)).toBe('merge-goblin');
     expect(monsterOf(mergedFacts(), withReviews([approved]), settledPlayer(), BOSS_NOW)).toBe(
@@ -841,7 +844,9 @@ describe('monster choice (design.md 7.1)', () => {
     );
     const review = run(
       reviewEvent('APPROVED'),
-      settledPlayer(REVIEWER_ID, { moguls: { current: 'founder', bag: [] } }),
+      settledPlayer(REVIEWER_ID, {
+        moguls: { ...createPlayerState(AUTHOR_ID).moguls, current: 'founder' },
+      }),
       undefined,
       BOSS_NOW,
     );

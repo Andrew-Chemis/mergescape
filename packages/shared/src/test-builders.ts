@@ -1,7 +1,9 @@
 /** Builders shared by the unit tests. Not part of the package API and not exported from index.ts. */
+import { charmDefinition, makeCharm } from './charms';
+import type { CharmId } from './charms';
 import { D2_XP } from './d2table';
 import { createPlayerState, createPRState } from './state';
-import { utcDay } from './score';
+import { utcDay } from './calendar';
 import type {
   Charm,
   EventActor,
@@ -14,6 +16,7 @@ import type {
   PullRequestFacts,
   ReviewCommentCreatedEvent,
   ReviewState,
+  RunState,
   ReviewSubmittedEvent,
   VerifiedKillEvent,
 } from './types';
@@ -135,10 +138,34 @@ export function playerAtLevel(
   return settledPlayer(id, { xp: D2_XP[level]!, ...overrides });
 }
 
+/** A held stat-only Charm (its id is not a real Charm, so no conditions apply to it). */
 export function charm(power: number, name: string = `Charm ${power}`): Charm {
-  return { id: name.toLowerCase().replace(/\s+/g, '-'), name, rarity: 'rare', power };
+  return { id: `test-${name.toLowerCase().replace(/\s+/g, '-')}`, name, rarity: 'rare', power };
 }
 
 export function prStateFor(pr: PullRequestFacts, overrides: Partial<PRState> = {}): PRState {
   return { ...createPRState(pr), ...overrides };
+}
+
+/** A held copy of a real Charm (`copies` 2 for a stack). */
+export function held(id: CharmId, copies?: number): Charm {
+  const base = makeCharm(charmDefinition(id)!);
+  return copies === undefined ? base : { ...base, copies };
+}
+
+/** A fresh weekly run for tests: Scout act, nothing cleared, shop closed. */
+export function makeRun(overrides: Partial<RunState> = {}): RunState {
+  return {
+    weekKey: '2026-46',
+    act: 'scout',
+    clearedActs: [],
+    weeklyXp: 0,
+    targets: { scout: 1200, raid: 2000, boss: 3000 },
+    mogul: 'turtleneck',
+    hand: [],
+    played: [],
+    shopSeed: 12345,
+    shop: null,
+    ...overrides,
+  };
 }

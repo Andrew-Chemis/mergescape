@@ -2,7 +2,9 @@ import { ZONE_EXPONENT } from './constants';
 import { emptySkillXp, SKILLS } from './skills';
 import type { PlayerState, PRState, PullRequestFacts, ScoreResult } from './types';
 
-/** A level-1 character with no Charms, gear, Pledges, Feats or Moguls. */
+/**
+ * A level-1 character: no Charms, gear, Feats or Moguls, and an empty week.
+ */
 export function createPlayerState(id: number): PlayerState {
   return {
     id,
@@ -15,6 +17,8 @@ export function createPlayerState(id: number): PlayerState {
     pledges: { played: [], powerBonus: 0 },
     feats: { unlocked: [], powerBonus: 0 },
     moguls: { current: null, bag: [] },
+    week: { loadedDiceUsed: false },
+    repoMerges: {},
   };
 }
 
@@ -34,8 +38,9 @@ export function createPRState(facts: PullRequestFacts): PRState {
 }
 
 /**
- * Apply a ScoreResult to the states it was computed from: XP, skill XP and every counter update.
- * Pure; the backend does the same with DynamoDB writes, tests and previews use this.
+ * Apply a ScoreResult to the states it was computed from: XP, skill XP and every
+ * counter update (including Loaded Dice and repository merge
+ * counts). Pure; the backend does the same with DynamoDB writes, tests and previews use this.
  */
 export function applyScoreResult(
   player: PlayerState,
@@ -47,11 +52,19 @@ export function applyScoreResult(
     skillXp[skill] += result.skillXp[skill];
   }
   const { player: playerUpdates, pr: prUpdates } = result.counterUpdates;
-  const nextPlayer: PlayerState = {
+  const earned: PlayerState = {
     ...player,
     xp: player.xp + result.xp,
     skillXp,
     counters: { ...player.counters, ...playerUpdates },
+  };
+  const { loadedDiceUsed, repoMerges } = result.counterUpdates;
+  const nextPlayer: PlayerState = {
+    ...earned,
+    week: loadedDiceUsed ? { ...earned.week, loadedDiceUsed: true } : earned.week,
+    repoMerges: repoMerges
+      ? { ...earned.repoMerges, [String(repoMerges.repoId)]: repoMerges.count }
+      : earned.repoMerges,
   };
 
   const reviewerCounters = { ...pr.reviewerCounters };

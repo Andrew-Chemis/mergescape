@@ -1,5 +1,4 @@
 import {
-  ACT_WINDOW_UTC_DAYS,
   CAPS,
   MONSTER_RULES,
   NON_DEFAULT_BRANCH_MULTIPLIER,
@@ -9,9 +8,12 @@ import {
   SOLO_KILL_MULTIPLIER,
   SUPPLY_DROPS,
 } from './constants';
-import type { ActId } from './constants';
+import { actWindow, DAY_MS, utcDay } from './calendar';
+import { hasCharm, partyBonusPoints, riposteMultiplier } from './charms';
 import { levelFor } from './d2table';
-import { computePower, powerBreakdown } from './power';
+import { mergeFacts } from './facts';
+import { computePower, powerBreakdown, powerContext, powerOf } from './power';
+import { stateUpdates } from './progress';
 import { emptySkillXp, SKILL_LABELS, SKILLS } from './skills';
 import type {
   BreakdownLine,
@@ -25,6 +27,7 @@ import type {
   ReviewCommentCreatedEvent,
   ReviewerCounters,
   ReviewSubmittedEvent,
+  RiposteCreditEvent,
   ScoreResult,
   Skill,
   SkipReason,
@@ -33,25 +36,10 @@ import type {
   WeeklyStreakEvent,
 } from './types';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 // ---------------------------------------------------------------------------------------------
-// Small pure helpers (exported: the client previews and the tests use them)
+// Small pure helpers (exported: the client previews and the tests use them; `utcDay` and `actWindow`
+// live in calendar.ts)
 // ---------------------------------------------------------------------------------------------
-
-/** UTC calendar day of an epoch-millisecond instant, `YYYY-MM-DD`. */
-export function utcDay(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
-/** Calendar window of the weekly run an instant falls in: Mon-Tue scout, Wed-Thu raid, Fri-Sun boss. */
-export function actWindow(now: number): ActId {
-  const weekday = new Date(now).getUTCDay();
-  if (ACT_WINDOW_UTC_DAYS.scout.includes(weekday)) {
-    return 'scout';
-  }
-  return ACT_WINDOW_UTC_DAYS.raid.includes(weekday) ? 'raid' : 'boss';
-}
 
 /** Size points on merge: `min(120, round(40 * log2(1 + lines / 50)))`. */
 export function sizePoints(linesChanged: number): number {
@@ -210,43 +198,50 @@ function scoreMerged(event: PRMergedEvent, player: PlayerState, pr: PRState, now
   if (!event.pr.merged) {
     return skipped('not_scoring');
   }
-  const otherReviews = pr.reviews.filter((review) => review.reviewerId !== event.actor.id);
-  const soloKill =
-    event.pr.mergedBy !== null &&
-    event.pr.mergedBy.id === event.pr.author.id &&
-    otherReviews.length === 0;
-  const party = otherReviews.some((review) => review.state === 'APPROVED');
-  const riposte = otherReviews.some((review) => review.state === 'CHANGES_REQUESTED');
-  const stats = event.pr.stats ?? pr;
-  const lines = stats.additions + stats.deletions;
-  const size = sizePoints(lines);
+  const facts = mergeFacts(event, pr);
+  const size = sizePoints(facts.lines);
 
   const terms: Term[] = [{ label: 'PR merged', points: POINTS.merged, solo: true }];
   if (size > 0) {
-    terms.push({ label: `Size (log-scaled, ${lines} lines)`, points: size, solo: true });
+    terms.push({ label: `Size (log-scaled, ${facts.lines} lines)`, points: size, solo: true });
   }
   const supplies: Partial<Supplies> = {
-    ore: SUPPLY_DROPS.mergeOreBase + sizeTier(lines),
+    ore: SUPPLY_DROPS.mergeOreBase + sizeTier(facts.lines),
     timber: SUPPLY_DROPS.mergeTimber,
   };
-  if (party) {
-    terms.push({ label: 'Reviewed by another human', points: POINTS.party, solo: true });
+  if (facts.party) {
+    const partyPoints = partyBonusPoints(player);
+    terms.push({
+      label:
+        partyPoints > POINTS.party
+          ? 'Reviewed by another human (Second Pair of Eyes)'
+          : 'Reviewed by another human',
+      points: partyPoints,
+      solo: true,
+    });
     supplies.provisions = SUPPLY_DROPS.partyProvisions;
   }
-  if (riposte) {
-    terms.push({ label: 'Riposte (feedback addressed)', points: POINTS.riposte });
+  if (facts.riposte) {
+    const multiplier = riposteMultiplier(player);
+    terms.push({
+      label:
+        multiplier > 1
+          ? `Riposte (feedback addressed, Jester's Rebase x${multiplier})`
+          : 'Riposte (feedback addressed)',
+      points: POINTS.riposte * multiplier,
+    });
     supplies.flux = SUPPLY_DROPS.riposteFlux;
   }
   return {
     skill: 'smithing',
     terms,
-    soloKill,
+    soloKill: facts.soloKill,
     supplies,
     counters: noUpdates(),
     monster: chooseMonster(
       monsterContext(pr, {
         merged: true,
-        linesChanged: lines,
+        linesChanged: facts.lines,
         openedAt: event.pr.openedAt,
         mergedAt: event.pr.mergedAt,
       }),
@@ -364,6 +359,41 @@ function scoreVerifiedKill(
   };
 }
 
+function scoreRiposteCredit(
+  event: RiposteCreditEvent,
+  player: PlayerState,
+  pr: PRState,
+  now: number,
+): Outcome {
+  if (!event.pr.merged || !hasCharm(player, 'jesters-rebase')) {
+    return skipped('not_scoring');
+  }
+  const stats = event.pr.stats ?? pr;
+  const multiplier = riposteMultiplier(player);
+  return {
+    skill: 'vigilance',
+    terms: [
+      {
+        label: `Riposte (changes you requested merged, Jester's Rebase x${multiplier})`,
+        points: POINTS.riposte * multiplier,
+      },
+    ],
+    soloKill: false,
+    supplies: {},
+    counters: noUpdates(),
+    monster: chooseMonster(
+      monsterContext(pr, {
+        merged: true,
+        linesChanged: stats.additions + stats.deletions,
+        openedAt: event.pr.openedAt,
+        mergedAt: event.pr.mergedAt,
+      }),
+      player,
+      now,
+    ),
+  };
+}
+
 function scoreStreak(event: WeeklyStreakEvent, player: PlayerState): Outcome {
   if (!event.qualified) {
     return skipped('not_scoring', { player: { streakWeeks: 0 }, pr: {} });
@@ -420,6 +450,10 @@ function classify(event: GameEvent, player: PlayerState, pr: PRState, now: numbe
       return event.actor.id === event.pr.author.id
         ? skipped('own_pr')
         : scoreVerifiedKill(event, player, pr, now);
+    case 'riposte_credit':
+      return event.actor.id === event.pr.author.id
+        ? skipped('own_pr')
+        : scoreRiposteCredit(event, player, pr, now);
   }
 }
 
@@ -452,13 +486,12 @@ export function score(
   const outcome = classify(event, player, pr, now);
   const level = levelFor(player.xp);
   const zone = zoneFor(level, player.zoneExponent);
-  const power = computePower(player);
 
   if ('skip' in outcome) {
     return {
       skip: outcome.skip,
       points: 0,
-      power,
+      power: computePower(player),
       zone,
       level,
       xp: 0,
@@ -471,8 +504,14 @@ export function score(
     };
   }
 
+  // Power for this event: Charms and their conditions, gear, Pledges and Feats.
+  const ctx = powerContext(event, pr, now);
+  const powerLines = powerBreakdown(player, ctx);
+  const power = powerOf(powerLines);
+
   // Multipliers: every point of a PR is halved off the default branch; merge, size and party points
-  // are also halved on a solo kill. Each term is floored so the breakdown lines add up to `points`.
+  // are also halved on a solo kill.
+  // Each term is floored so the breakdown lines add up to `points`.
   const offDefaultBranch = 'pr' in event && !event.pr.baseRefIsDefault;
   const breakdown: BreakdownLine[] = [];
   let points = 0;
@@ -495,7 +534,7 @@ export function score(
   // Daily first event: the first scored event of each UTC day earns +20 for Endurance. The weekly
   // streak is rollover bookkeeping, not play, so it neither claims nor needs the bonus.
   const today = utcDay(now);
-  const counterUpdates = outcome.counters;
+  const counterUpdates = Object.assign(outcome.counters, stateUpdates({ player, event, ctx }));
   const supplies = { ...zeroSupplies(), ...outcome.supplies };
   let dailyPoints = 0;
   if (event.kind !== 'weekly_streak' && player.counters.dailyFirstDay !== today) {
@@ -512,7 +551,7 @@ export function score(
   skillXp[outcome.skill] = xp - dailyXp;
   skillXp.endurance += dailyXp;
 
-  breakdown.push(...powerBreakdown(player));
+  breakdown.push(...powerLines);
   breakdown.push({ label: `Zone (level ${level})`, value: zone, kind: 'zone' });
   breakdown.push({ label: 'XP', value: xp, kind: 'xp' });
   for (const skill of SKILLS) {

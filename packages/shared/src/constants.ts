@@ -152,6 +152,37 @@ export const RARITY_WEIGHTS: Readonly<Record<Rarity, number>> = {
 export const CHARM_SLOTS = 5;
 export const CHARM_SLOTS_WITH_BELT = 6;
 
+/** A duplicate Charm stacks once (two copies); a third copy is auto-sold. */
+export const MAX_CHARM_COPIES = 2;
+
+/**
+ * Charm numbers (design.md 6.3 as audited in game-design.md 8.3). A Charm's unconditional Power is its
+ * `basePower` in charms.ts; the conditional amounts and thresholds live here. "Under" is strict.
+ */
+export const CHARM_RULES = {
+  /** Rubber Duck: extra Power on a review once the reviewer has left this many inline comments. */
+  rubberDuckExtraPower: 0.25,
+  rubberDuckInlineComments: 3,
+  /** Lantern: Power on the first scored event of each (UTC) day. */
+  lanternPower: 0.5,
+  /** Small Hands: Power on merges under this many lines. */
+  smallHandsPower: 0.75,
+  smallHandsMaxLoc: 150,
+  /** Second Pair of Eyes: extra party-bonus points per copy (30 becomes 60). */
+  secondPairExtraPartyPoints: 30,
+  /** Hot Potato: Power on an approval of a PR under this many lines within this many hours of its open. */
+  hotPotatoPower: 1.5,
+  hotPotatoMaxLoc: 200,
+  hotPotatoWindowHours: 2,
+  /** Grey Beard: Power on any event in a repository where the player has this many merges. */
+  greyBeardPower: 1.0,
+  greyBeardMerges: 50,
+  /** Jester's Rebase: Riposte points are multiplied by this. */
+  jestersRiposteMultiplier: 4,
+  /** Loaded Dice: once a week one event's Power is replaced by this (it may exceed the Power cap). */
+  loadedDicePower: 10,
+} as const;
+
 export const DECK_CAP = 20;
 export const PLEDGE_HAND_SIZE = 5;
 export const PLEDGE_PLAY_LIMIT = 3;
