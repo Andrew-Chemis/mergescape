@@ -18,7 +18,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   bad_option: 'That card is not in the pack.',
   not_held: 'You no longer hold that Charm.',
   not_in_deck: 'That Pledge is not in your deck.',
-  already_owned: 'You already own that Voucher.',
+  already_owned: 'You already own that.',
   no_free_pack: 'There is no free pack waiting for you.',
   no_legendary_offer: 'There is no Legendary Charm on offer.',
   conflict: 'Something changed while you were choosing. Look again and try once more.',
@@ -28,6 +28,33 @@ const MESSAGES: Readonly<Record<string, string>> = {
   already_played: 'That Pledge is already in play.',
   play_limit: 'You can play up to 3 Pledges a week.',
   confirm_mismatch: 'That is not your GitHub login. Nothing was deleted.',
+  // Expeditions and loot packs
+  in_progress: 'Your character is still away. Collect when the timer runs out.',
+  uncollected: 'The last expedition is waiting for you. Collect it first.',
+  region_locked: 'That region is not open yet. It needs more Renown.',
+  insufficient_provisions: 'Not enough Provisions. The 4 h Forage is always free.',
+  not_returned: 'Your character is not back yet.',
+  no_expedition: 'There is no expedition to collect.',
+  no_such_pack: 'That Charm pack is no longer in your satchel.',
+  // The Forge
+  unknown_recipe: 'The station does not know that recipe.',
+  station_busy: 'That station is busy. Collect its order or wait for it to finish.',
+  tier_locked: 'You have not unlocked that tier yet.',
+  insufficient_supplies: 'Not enough supplies for that.',
+  piece_required: 'Choose a piece from your inventory first.',
+  piece_not_found: 'That piece is no longer in your inventory.',
+  no_job: 'That station has nothing to collect.',
+  not_ready: 'That order is not finished yet.',
+  dyes_required: 'Colouring a cape needs the Dyes upgrade from the Loom.',
+  // Gear
+  not_owned: 'You do not own that.',
+  already_equipped: 'That is already equipped.',
+  nothing_equipped: 'Nothing is equipped in that slot.',
+  pet_slot: 'Pets go in the pet slot: choose the pet itself.',
+  // Feats
+  not_unlocked: 'That Feat is not unlocked yet.',
+  already_pinned: 'That Feat is already pinned.',
+  too_many_pinned: 'You can pin up to three Feats. Unpin one first.',
 };
 
 /** The sentence to show beside a control whose request failed. */

@@ -8,26 +8,68 @@
  * here; nothing is re-fetched. A read that was already in flight when a write started is discarded when
  * it lands, so an older answer can never overwrite a newer one.
  *
+ * The depth layer (expeditions, the Forge, gear, Feats) follows the same rule. Its writes answer with the
+ * new profile, which replaces `me`; the `expedition` and `forge` slices (the views of `GET /expedition`
+ * and `GET /forge`) are rebuilt from that profile, so a screen never shows a stale cost or a timer that
+ * has not started. The `feats` slice is re-read after a collect that unlocked something.
+ *
  * Polling: while the tab is visible the first log page and the profile are re-read every `pollMs`, and
  * once more whenever the tab becomes visible again. That is how a real merge shows up within seconds
  * without a websocket; the interval is the one knob to turn if request volume ever matters.
  */
 import { levelFor } from '@mergescape/shared';
-import type { Skill } from '@mergescape/shared';
+import type {
+  CapeColor,
+  Charm,
+  ExpeditionState,
+  GearPiece,
+  GearSlot,
+  LootItem,
+  Skill,
+} from '@mergescape/shared';
 import { ApiError } from './api';
+import { expeditionViewFrom, forgeViewFrom } from './depth';
 import { describeError } from './errors';
 import type { ActionResult } from './errors';
 import { unseenEntries } from './log';
-import type { Api, MutationOptions, ShopBuyInput, ShopPickInput } from './api';
+import type {
+  Api,
+  ExpeditionSendInput,
+  ForgeStartInput,
+  MutationOptions,
+  PackOpenInput,
+  ShopBuyInput,
+  ShopPickInput,
+} from './api';
 import { gearTierFor } from './sprites';
 import type { GearTierName } from './sprites';
 import type {
+  EquipInput,
+  ExpeditionView,
+  FeatView,
+  ForgeView,
   InstallationSummary,
   LogEntry,
   MeResponse,
-  MutationResponse,
+  Station,
+  UpgradeInput,
   WeekSummary,
 } from './types';
+
+/** What a write answered with: the new profile, and the run when the endpoint sends it (the shop does). */
+interface Answer {
+  me: MeResponse;
+  week?: WeekSummary;
+}
+
+/** What `POST /expedition/collect` answered, for the loot reveal. */
+export interface CollectOutcome {
+  expedition: ExpeditionState;
+  loot: LootItem[];
+  /** False on a replay: the loot was granted the first time and nothing was granted again. */
+  applied: boolean;
+  featsUnlocked: string[];
+}
 
 export type SessionStatus = 'loading' | 'ready' | 'signed-out' | 'error';
 
@@ -75,6 +117,14 @@ export class Session {
   levelUp = $state.raw<LevelUp | null>(null);
   /** Clock for relative times; moves forward on every refresh. */
   now = $state(Date.now());
+  /** `GET /expedition`: regions with their gates, the five ways to go out, the latest trip. Null until loaded. */
+  expedition = $state.raw<ExpeditionView | null>(null);
+  /** `GET /forge`: the three stations, their recipes and upgrades. Null until loaded. */
+  forge = $state.raw<ForgeView | null>(null);
+  /** `GET /feats`: every Feat the player can see. Null until loaded. */
+  feats = $state.raw<FeatView[] | null>(null);
+  /** Feats unlocked since the player last dismissed the banner on Town; persists until dismissed. */
+  pendingFeats = $state.raw<string[]>([]);
 
   readonly #api: Api | null;
   readonly #options: SessionOptions;
@@ -85,6 +135,13 @@ export class Session {
   #writes = 0;
   /** Request ids of writes that ended in a network failure, by scope, to replay on the next try. */
   #pending: Record<string, string> = {};
+  /**
+   * Feat ids the player has seen unlock; the banner shows what is unlocked and not in here. Kept in memory
+   * only: the Cookies page promises three storage keys, and the contract has no "seen" flag to read back.
+   */
+  #seenFeats: string[] | null = null;
+  /** Feats a collect just reported unlocked, shown even before the list has been read again. */
+  #justUnlocked: string[] = [];
 
   /** `api` null means there is no token: the session starts (and stays) signed out. */
   constructor(api: Api | null, options: SessionOptions = {}) {
@@ -113,6 +170,7 @@ export class Session {
       ]);
       this.me = me;
       this.week = me.week ?? null;
+      this.#sync();
       this.entries = log.entries;
       this.nextCursor = log.nextCursor;
       this.installations = installations.installations;
@@ -146,6 +204,7 @@ export class Session {
       if (!stale) {
         this.me = me;
         this.week = me.week ?? null;
+        this.#sync();
       }
       if (installations) {
         this.installations = installations.installations;
@@ -153,6 +212,10 @@ export class Session {
       if (arrived.length > 0) {
         this.entries = [...arrived, ...this.entries];
         this.fresh = arrived[0] ?? null;
+        // A scored event is when a Feat can unlock: read the list again if anyone is looking at it.
+        if (this.feats !== null) {
+          void this.loadFeats();
+        }
       }
       const after = stale ? before : levelFor(me.xp);
       if (after > before) {
@@ -271,6 +334,193 @@ export class Session {
     return this.#write(scope, (api, options) => api.pledgePlay(pledgeId, options));
   }
 
+  // -------------------------------------------------------------------------------------------
+  // The depth layer: reads
+  // -------------------------------------------------------------------------------------------
+
+  /** `GET /expedition`: the Expedition screen calls it when it opens. */
+  async loadExpedition(): Promise<void> {
+    const api = this.#api;
+    if (!api || this.status !== 'ready') {
+      return;
+    }
+    const epoch = this.#epoch;
+    try {
+      const view = await api.expedition();
+      if (epoch === this.#epoch && this.#writes === 0) {
+        this.expedition = view;
+      }
+    } catch (error) {
+      this.#quiet(error);
+    }
+  }
+
+  /** `GET /forge`: the Forge screen calls it when it opens. */
+  async loadForge(): Promise<void> {
+    const api = this.#api;
+    if (!api || this.status !== 'ready') {
+      return;
+    }
+    const epoch = this.#epoch;
+    try {
+      const view = await api.forge();
+      if (epoch === this.#epoch && this.#writes === 0) {
+        this.forge = view;
+      }
+    } catch (error) {
+      this.#quiet(error);
+    }
+  }
+
+  /** `GET /feats`: the Feats screen and Town call it. What it finds new becomes the Town banner. */
+  async loadFeats(): Promise<void> {
+    const api = this.#api;
+    if (!api || this.status !== 'ready') {
+      return;
+    }
+    const epoch = this.#epoch;
+    try {
+      const { feats } = await api.feats();
+      if (epoch !== this.#epoch || this.#writes > 0) {
+        return;
+      }
+      this.feats = feats;
+      this.#sync();
+      this.#watchFeats(feats);
+    } catch (error) {
+      this.#quiet(error);
+    }
+  }
+
+  /** A failed background read keeps what is on screen; only a rejected token ends the session. */
+  #quiet(error: unknown): void {
+    if (error instanceof ApiError && error.status === 401) {
+      this.#fail(error);
+    }
+  }
+
+  /**
+   * Decide which unlocked Feats are news. The first list this page load reads sets the baseline: what is
+   * already unlocked counts as seen, so a reload brings no banner for old Feats. After that, a Feat that
+   * unlocks (a scored event while the tab is open, or a collect) is pending until the player dismisses
+   * the banner; it survives navigation and polling, not a reload.
+   */
+  #watchFeats(feats: readonly FeatView[]): void {
+    const unlocked = feats.filter((feat) => feat.unlocked).map((feat) => feat.id);
+    this.#seenFeats ??= unlocked;
+    const seen = this.#seenFeats;
+    this.pendingFeats = unlocked.filter(
+      (id) => !seen.includes(id) || this.#justUnlocked.includes(id),
+    );
+  }
+
+  /** Dismiss the Feat unlock banner: what it announced is seen. */
+  dismissFeatBanner(): void {
+    this.#seenFeats = [...(this.#seenFeats ?? []), ...this.pendingFeats];
+    this.#justUnlocked = [];
+    this.pendingFeats = [];
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The depth layer: writes
+  // -------------------------------------------------------------------------------------------
+
+  /** `POST /expedition/send`. `scope` names the control, e.g. `send`, for its inline error. */
+  expeditionSend(scope: string, input: ExpeditionSendInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.expeditionSend(input, options));
+  }
+
+  /** `POST /expedition/collect`. On success `collect` is the loot, for the reveal. */
+  async expeditionCollect(scope = 'collect'): Promise<ActionResult & { collect?: CollectOutcome }> {
+    const { result, answer } = await this.#mutate(scope, (api, options) =>
+      api.expeditionCollect(options),
+    );
+    if (!result.ok || !answer) {
+      return result;
+    }
+    const collect: CollectOutcome = {
+      expedition: answer.expedition,
+      loot: answer.loot,
+      applied: answer.applied,
+      featsUnlocked: answer.featsUnlocked,
+    };
+    if (answer.featsUnlocked.length > 0) {
+      // The banner does not wait for the list to be read again.
+      for (const id of answer.featsUnlocked) {
+        if (!this.#justUnlocked.includes(id)) {
+          this.#justUnlocked.push(id);
+        }
+      }
+      this.pendingFeats = [
+        ...this.pendingFeats,
+        ...answer.featsUnlocked.filter((id) => !this.pendingFeats.includes(id)),
+      ];
+      void this.loadFeats();
+    }
+    return { ...result, collect };
+  }
+
+  /** `GET /packs/:seed`: the three Charms in an unopened loot pack. */
+  async packOptions(seed: number): Promise<ActionResult & { options?: Charm[] }> {
+    const api = this.#api;
+    if (!api) {
+      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+    }
+    try {
+      return { ok: true, options: (await api.packOptions(seed)).options };
+    } catch (error) {
+      return this.#failure(error);
+    }
+  }
+
+  /** `POST /packs/open`: keep one of the pack's three Charms. */
+  packOpen(scope: string, input: PackOpenInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.packOpen(input, options));
+  }
+
+  /** `POST /forge/start` */
+  forgeStart(scope: string, input: ForgeStartInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.forgeStart(input, options));
+  }
+
+  /** `POST /forge/collect`. On success `piece` is what the order made, and `applied` is false on a replay. */
+  async forgeCollect(
+    scope: string,
+    station: Station,
+  ): Promise<ActionResult & { piece?: GearPiece | null; applied?: boolean }> {
+    const { result, answer } = await this.#mutate(scope, (api, options) =>
+      api.forgeCollect(station, options),
+    );
+    return result.ok && answer
+      ? { ...result, piece: answer.piece, applied: answer.applied }
+      : result;
+  }
+
+  /** `POST /forge/upgrade`: buy Bellows, Dyes or Index, or choose a cape colour. */
+  forgeUpgrade(scope: string, input: UpgradeInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.forgeUpgrade(input, options));
+  }
+
+  /** `POST /gear/equip`: wear a piece, take a slot off, or choose the pet that follows you. */
+  gearEquip(scope: string, input: EquipInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.gearEquip(input, options));
+  }
+
+  /** The cape colour, by name; a convenience over `forgeUpgrade`. */
+  setCapeColor(scope: string, color: CapeColor | null): Promise<ActionResult> {
+    return this.forgeUpgrade(scope, { capeColor: color });
+  }
+
+  /** Empty a gear slot; a convenience over `gearEquip`. */
+  unequip(scope: string, slot: GearSlot): Promise<ActionResult> {
+    return this.gearEquip(scope, { unequip: slot });
+  }
+
+  /** `POST /feats/pin`: pin an unlocked Feat to the Character screen and the badge (up to three), or unpin it. */
+  featPin(scope: string, featId: string, pinned: boolean): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.featPin(featId, pinned, options));
+  }
+
   /** `GET /export`: the player's data as parsed JSON. */
   async exportData(): Promise<ActionResult & { data?: Record<string, unknown> }> {
     const api = this.#api;
@@ -307,24 +557,44 @@ export class Session {
   /** Run one write: one at a time, replay a failed attempt's request id, adopt the answer. */
   async #write(
     scope: string,
-    call: (api: Api, options: MutationOptions) => Promise<MutationResponse>,
+    call: (api: Api, options: MutationOptions) => Promise<Answer>,
   ): Promise<ActionResult> {
+    return (await this.#mutate(scope, call)).result;
+  }
+
+  /**
+   * The write itself, and what the api answered (null when it refused). The answer's profile replaces
+   * `me`; its run replaces `week` when it has one (the shop's does, the depth layer's rides in `me.week`).
+   */
+  async #mutate<T extends Answer>(
+    scope: string,
+    call: (api: Api, options: MutationOptions) => Promise<T>,
+  ): Promise<{ result: ActionResult; answer: T | null }> {
     const api = this.#api;
     if (!api) {
-      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+      return {
+        result: { ok: false, status: 0, code: null, message: 'You are signed out.' },
+        answer: null,
+      };
     }
     if (this.busy !== null) {
-      return { ok: false, status: 0, code: 'busy', message: 'One moment, still working.' };
+      return {
+        result: { ok: false, status: 0, code: 'busy', message: 'One moment, still working.' },
+        answer: null,
+      };
     }
     this.busy = scope;
     this.#writes += 1;
     this.#epoch += 1;
     let result: ActionResult;
+    let answer: T | null = null;
     try {
-      const answer = await call(api, this.#replay(scope));
+      answer = await call(api, this.#replay(scope));
       this.#pending = {};
-      this.me = { ...answer.me, week: answer.week };
-      this.week = answer.week;
+      const week = answer.week ?? answer.me.week ?? this.week;
+      this.me = { ...answer.me, week: week ?? null };
+      this.week = week ?? null;
+      this.#sync();
       this.now = Date.now();
       result = { ok: true };
     } catch (error) {
@@ -336,10 +606,31 @@ export class Session {
       this.busy = null;
     }
     if (!result.ok && result.status === 409) {
-      // The shop or the hand changed under the player: bring the screen up to date, keep the message.
+      // The shop, the hand or the satchel changed under the player: bring the screen up to date, keep the message.
       void this.#resync();
     }
-    return result;
+    return { result, answer };
+  }
+
+  /** Rebuild the expedition and Forge views from the profile, so a screen shows what the profile says. */
+  #sync(): void {
+    const me = this.me;
+    if (!me) {
+      return;
+    }
+    const now = Date.now();
+    if (this.expedition) {
+      this.expedition = expeditionViewFrom(me, now);
+    }
+    if (this.forge) {
+      this.forge = forgeViewFrom(me, now);
+    }
+    if (this.feats) {
+      this.feats = this.feats.map((feat) => {
+        const pinned = me.pinnedFeats.includes(feat.id);
+        return feat.pinned === pinned ? feat : { ...feat, pinned };
+      });
+    }
   }
 
   /** The request id of an earlier attempt at this same action that died on the network, if any. */
@@ -382,6 +673,7 @@ export class Session {
       }
       this.me = me;
       this.week = me.week ?? null;
+      this.#sync();
       this.now = Date.now();
     } catch {
       // The message already on screen stands; the next poll catches up.

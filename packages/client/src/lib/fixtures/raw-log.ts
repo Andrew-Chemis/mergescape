@@ -456,3 +456,38 @@ export const FINAL_SKILL_XP = {
   oratory: 1505438,
   endurance: 1071938,
 };
+
+/**
+ * The first kill of a brand-new level-1 character (game-design.md section 10, "first event"): a merged
+ * 120-line PR another human approved, on the character's first event of the day. Produced by `score()`
+ * like the rows above: 90 + 71 + 30 + 20 = 211 Points, Power 1 (the free Common Charm arrives after it),
+ * Zone 2^1.6, XP 639. `ScoreResult.supplies` is what lands in the satchel.
+ */
+export const DAY0_ROW: RawRow = {
+  kind: 'pr_merged',
+  prNumber: 7,
+  repoId: 11,
+  repoName: 'octo/api',
+  additions: 100,
+  deletions: 20,
+  monster: 'merge-goblin',
+  skill: 'smithing',
+  points: 211,
+  power: 1,
+  zone: 3.0314331330207964,
+  level: 1,
+  xp: 639,
+  skillXp: { smithing: 579, vigilance: 0, oratory: 0, endurance: 60 },
+  supplies: { ore: 2, timber: 1, lore: 0, ink: 0, provisions: 3, flux: 0 },
+  breakdown: [
+    { label: 'PR merged', value: 90, kind: 'points' },
+    { label: 'Size (log-scaled, 120 lines)', value: 71, kind: 'points' },
+    { label: 'Reviewed by another human', value: 30, kind: 'points' },
+    { label: 'First event of the day', value: 20, kind: 'points' },
+    { label: 'Base Power', value: 1, kind: 'power' },
+    { label: 'Zone (level 1)', value: 3.0314331330207964, kind: 'zone' },
+    { label: 'XP', value: 639, kind: 'xp' },
+    { label: 'Smithing XP', value: 579, kind: 'xp' },
+    { label: 'Endurance XP', value: 60, kind: 'xp' },
+  ],
+};

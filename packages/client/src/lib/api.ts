@@ -6,11 +6,23 @@
  * the sign-in hand-off is the api redirecting back with `#token=<jwt>`, which is stored and removed from
  * the address bar on load.
  */
+import type { ExpeditionChoice, RegionId } from '@mergescape/shared';
 import type {
+  DepthMutationResponse,
+  EquipInput,
+  ExpeditionCollectResponse,
+  ExpeditionSendResponse,
+  ExpeditionView,
+  FeatsResponse,
+  ForgeCollectResponse,
+  ForgeView,
   InstallationsResponse,
   LogResponse,
   MeResponse,
   MutationResponse,
+  PackOptionsResponse,
+  Station,
+  UpgradeInput,
   WeekSummary,
 } from './types';
 
@@ -24,6 +36,24 @@ export interface ShopBuyInput {
 export interface ShopPickInput {
   index: number;
   option: number;
+}
+
+/** What `POST /expedition/send` takes besides the request id. */
+export interface ExpeditionSendInput {
+  region: RegionId;
+  choice: ExpeditionChoice;
+}
+
+/** What `POST /packs/open` takes besides the request id: the pack's seed and the Charm kept from it. */
+export interface PackOpenInput {
+  seed: number;
+  charmId: string;
+}
+
+/** What `POST /forge/start` takes besides the request id. `pieceId` is for an affix order. */
+export interface ForgeStartInput {
+  recipeId: string;
+  pieceId?: string;
 }
 
 /**
@@ -55,6 +85,37 @@ export interface Api {
   shrineRemove(pledgeId: string, options?: MutationOptions): Promise<MutationResponse>;
   /** `POST /pledges/play` */
   pledgePlay(pledgeId: string, options?: MutationOptions): Promise<MutationResponse>;
+  /** `GET /expedition` */
+  expedition(): Promise<ExpeditionView>;
+  /** `POST /expedition/send` */
+  expeditionSend(
+    input: ExpeditionSendInput,
+    options?: MutationOptions,
+  ): Promise<ExpeditionSendResponse>;
+  /** `POST /expedition/collect` (idempotent: a repeat answers the same loot with `applied` false) */
+  expeditionCollect(options?: MutationOptions): Promise<ExpeditionCollectResponse>;
+  /** `GET /packs/:seed` */
+  packOptions(seed: number): Promise<PackOptionsResponse>;
+  /** `POST /packs/open` */
+  packOpen(input: PackOpenInput, options?: MutationOptions): Promise<DepthMutationResponse>;
+  /** `GET /forge` */
+  forge(): Promise<ForgeView>;
+  /** `POST /forge/start` */
+  forgeStart(input: ForgeStartInput, options?: MutationOptions): Promise<DepthMutationResponse>;
+  /** `POST /forge/collect` */
+  forgeCollect(station: Station, options?: MutationOptions): Promise<ForgeCollectResponse>;
+  /** `POST /forge/upgrade` */
+  forgeUpgrade(input: UpgradeInput, options?: MutationOptions): Promise<DepthMutationResponse>;
+  /** `POST /gear/equip` */
+  gearEquip(input: EquipInput, options?: MutationOptions): Promise<DepthMutationResponse>;
+  /** `GET /feats` */
+  feats(): Promise<FeatsResponse>;
+  /** `POST /feats/pin` */
+  featPin(
+    featId: string,
+    pinned: boolean,
+    options?: MutationOptions,
+  ): Promise<DepthMutationResponse>;
   /** `GET /export`: everything stored under the player's partition, as parsed JSON. */
   exportData(): Promise<Record<string, unknown>>;
   /** `POST /delete`: resolves on 204; 400 `confirm_mismatch` when the login does not match. */
@@ -247,6 +308,17 @@ function asMutationResponse(body: Record<string, unknown>): MutationResponse {
   return { me: me as unknown as MeResponse, week: week as unknown as WeekSummary };
 }
 
+function asProfile(value: unknown): MeResponse {
+  if (!isRecord(value) || typeof value['login'] !== 'string' || typeof value['xp'] !== 'number') {
+    throw new ApiError(0, 'The server sent an unexpected profile.');
+  }
+  return value as unknown as MeResponse;
+}
+
+function asDepthMutation(body: Record<string, unknown>): DepthMutationResponse {
+  return { me: asProfile(body['me']) };
+}
+
 export function createHttpApi(options: HttpApiOptions): Api {
   const { origin, getToken = readToken } = options;
   const retryDelays = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
@@ -396,6 +468,94 @@ export function createHttpApi(options: HttpApiOptions): Api {
     },
     pledgePlay(pledgeId, mutation) {
       return mutate('/pledges/play', { pledgeId }, mutation);
+    },
+    async expedition() {
+      const body = await get('/expedition');
+      if (
+        typeof body['status'] !== 'string' ||
+        !Array.isArray(body['regions']) ||
+        !Array.isArray(body['choices'])
+      ) {
+        throw new ApiError(0, 'The server sent an unexpected expedition.');
+      }
+      return { expedition: null, returnsAt: null, ...body } as unknown as ExpeditionView;
+    },
+    async expeditionSend(input, mutation) {
+      const body = await post(
+        '/expedition/send',
+        { region: input.region, choice: input.choice },
+        mutation,
+      );
+      if (!isRecord(body['expedition'])) {
+        throw new ApiError(0, 'The server sent an unexpected expedition.');
+      }
+      return {
+        me: asProfile(body['me']),
+        expedition: body['expedition'],
+      } as unknown as ExpeditionSendResponse;
+    },
+    async expeditionCollect(mutation) {
+      const body = await post('/expedition/collect', {}, mutation);
+      if (!isRecord(body['expedition']) || !Array.isArray(body['loot'])) {
+        throw new ApiError(0, 'The server sent an unexpected haul.');
+      }
+      return {
+        me: asProfile(body['me']),
+        expedition: body['expedition'],
+        loot: body['loot'],
+        applied: body['applied'] !== false,
+        featsUnlocked: Array.isArray(body['featsUnlocked']) ? body['featsUnlocked'] : [],
+      } as unknown as ExpeditionCollectResponse;
+    },
+    async packOptions(seed) {
+      const body = await get(`/packs/${encodeURIComponent(String(seed))}`);
+      if (!Array.isArray(body['options'])) {
+        throw new ApiError(0, 'The server sent an unexpected pack.');
+      }
+      return body as unknown as PackOptionsResponse;
+    },
+    async packOpen(input, mutation) {
+      return asDepthMutation(
+        await post('/packs/open', { seed: input.seed, charmId: input.charmId }, mutation),
+      );
+    },
+    async forge() {
+      const body = await get('/forge');
+      if (!isRecord(body['stations']) || !Array.isArray(body['recipes'])) {
+        throw new ApiError(0, 'The server sent an unexpected Forge.');
+      }
+      return { upgrades: [], ...body } as unknown as ForgeView;
+    },
+    async forgeStart(input, mutation) {
+      const fields: Record<string, unknown> = { recipeId: input.recipeId };
+      if (input.pieceId !== undefined) {
+        fields['pieceId'] = input.pieceId;
+      }
+      return asDepthMutation(await post('/forge/start', fields, mutation));
+    },
+    async forgeCollect(station, mutation) {
+      const body = await post('/forge/collect', { station }, mutation);
+      return {
+        me: asProfile(body['me']),
+        piece: isRecord(body['piece']) ? body['piece'] : null,
+        applied: body['applied'] !== false,
+      } as unknown as ForgeCollectResponse;
+    },
+    async forgeUpgrade(input, mutation) {
+      return asDepthMutation(await post('/forge/upgrade', { ...input }, mutation));
+    },
+    async gearEquip(input, mutation) {
+      return asDepthMutation(await post('/gear/equip', { ...input }, mutation));
+    },
+    async feats() {
+      const body = await get('/feats');
+      if (!Array.isArray(body['feats'])) {
+        throw new ApiError(0, 'The server sent unexpected Feats.');
+      }
+      return body as unknown as FeatsResponse;
+    },
+    async featPin(featId, pinned, mutation) {
+      return asDepthMutation(await post('/feats/pin', { featId, pinned }, mutation));
     },
     exportData() {
       return get('/export');

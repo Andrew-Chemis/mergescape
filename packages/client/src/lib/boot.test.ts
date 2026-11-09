@@ -42,6 +42,14 @@ describe('resolveBoot', () => {
     const bare = resolveBoot('?fixture=noinstall', null, null);
     expect((await bare.api?.installations())?.installations).toEqual([]);
 
+    // ?fixture=day0: the moment after a brand-new character's first kill, with the Forage already sent.
+    const day0 = resolveBoot('?fixture=day0', null, null);
+    expect(day0.mode).toBe('fixture');
+    expect((await day0.api?.log())?.entries).toHaveLength(1);
+    const first = await day0.api?.me();
+    expect(first?.expedition).toMatchObject({ region: 'koko-woods', forage: true, hours: 4 });
+    expect(first?.expedition?.collected).toBe(false);
+
     const fallback = resolveBoot('?fixture=whatever', null, null);
     expect((await fallback.api?.log())?.entries.length).toBeGreaterThan(0);
 

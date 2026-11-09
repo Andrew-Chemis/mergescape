@@ -8,6 +8,10 @@
  * - `monday`     the same player on a fresh Monday: Pledge window open, nothing played, no shop, next Mogul known
  * - `noevents`   a brand-new character with the App installed: Town shows the sleeping hero
  * - `noinstall`  a brand-new character with no installations: Town shows the install call to action
+ * - `day0`        a brand-new character right after the first kill (game-design.md section 10): one Combat
+ *                 Log row, a free Common Charm, the Koko Woods Forage already away, Feats at zero
+ *
+ * Every variant also carries the depth layer (satchel, gear, Forge, expedition); see ./depth.ts.
  */
 import {
   biomeFor,
@@ -32,15 +36,17 @@ import type {
   ShopView,
   WeekSummary,
 } from '../types';
-import { FINAL_SKILL_XP, FINAL_XP, RAW_LOG } from './raw-log';
+import { DAY0_SENT_MINUTES_AGO, fixtureDepth } from './depth';
+import { DAY0_ROW, FINAL_SKILL_XP, FINAL_XP, RAW_LOG } from './raw-log';
 
-export type FixtureVariant = 'active' | 'monday' | 'noevents' | 'noinstall';
+export type FixtureVariant = 'active' | 'monday' | 'noevents' | 'noinstall' | 'day0';
 
 export const FIXTURE_VARIANTS: readonly FixtureVariant[] = [
   'active',
   'monday',
   'noevents',
   'noinstall',
+  'day0',
 ];
 
 /** Rows per page in the fixture log, small enough that the fixture spans two pages. */
@@ -109,13 +115,17 @@ export function isoWeekKey(now: number): string {
   return `${thursday.getUTCFullYear()}-${String(week).padStart(2, '0')}`;
 }
 
-/** True for the two variants of a brand-new character. */
+/** True for the two variants of a brand-new character with no kills at all. */
 function isFresh(variant: FixtureVariant): boolean {
   return variant === 'noevents' || variant === 'noinstall';
 }
 
 /** The Combat Log rows, newest first, stamped relative to `now`. */
 export function fixtureLogEntries(now: number, variant: FixtureVariant = 'active'): LogEntry[] {
+  if (variant === 'day0') {
+    const at = new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE).toISOString();
+    return [{ ...DAY0_ROW, id: `${at}#fixture-0001`, at }];
+  }
   if (isFresh(variant)) {
     return [];
   }
@@ -124,6 +134,12 @@ export function fixtureLogEntries(now: number, variant: FixtureVariant = 'active
     return { ...row, id: `${at}#fixture-${String(index + 1).padStart(4, '0')}`, at };
   });
 }
+
+/** When the day-0 first kill happened, in minutes before the fixture's "now" (the Forage went out with it). */
+export const DAY0_KILL_MINUTES_AGO = DAY0_SENT_MINUTES_AGO;
+
+/** The Scout target a brand-new player gets: a flat 2,000 XP (game-design.md section 10). */
+const DAY0_TARGETS = { scout: 2_000, raid: 3_300, boss: 5_000 } as const;
 
 /** XP earned so far in the fixture run: the sum of the log rows from the weekly streak up. */
 export const FIXTURE_WEEKLY_XP = 1_606_611;
@@ -249,15 +265,16 @@ function buildWeek(
   variant: FixtureVariant,
   overrides: Partial<WeekSummary>,
 ): WeekSummary {
-  if (variant === 'monday') {
+  if (variant === 'monday' || variant === 'day0') {
+    const first = variant === 'day0';
     return {
       weekKey: isoWeekKey(now),
       act: 'scout',
       clearedActs: [],
-      weeklyXp: 0,
-      targets: { ...TARGETS },
+      weeklyXp: first ? DAY0_ROW.xp : 0,
+      targets: first ? { ...DAY0_TARGETS } : { ...TARGETS },
       mogul: 'hoodie',
-      nextMogul: 'founder',
+      nextMogul: first ? null : 'founder',
       hand: HAND.map((p) => ({ ...p })),
       played: [],
       pledgeWindowOpen: true,
@@ -295,7 +312,41 @@ export function fixtureMe(
   now: number,
   variant: FixtureVariant = 'active',
   weekOverrides: Partial<WeekSummary> = {},
+  overrides: Partial<MeResponse> = {},
 ): MeResponse {
+  return { ...baseMe(now, variant, weekOverrides), ...overrides };
+}
+
+function baseMe(
+  now: number,
+  variant: FixtureVariant,
+  weekOverrides: Partial<WeekSummary>,
+): MeResponse {
+  const depth = fixtureDepth(now, variant);
+  if (variant === 'day0') {
+    // The first kill: 639 XP, 21 gold, the free Common Charm and one Merge Goblin on the board.
+    return {
+      githubId: FIXTURE_GITHUB_ID,
+      login: FIXTURE_LOGIN,
+      createdAt: new Date(now - 90 * MINUTE).toISOString(),
+      xp: DAY0_ROW.xp,
+      skillXp: { ...DAY0_ROW.skillXp },
+      gold: 21,
+      renown: 0,
+      vocation: 'Journeyman',
+      charms: [fixtureCharm('rubber-duck')],
+      charmSlots: 5,
+      vouchers: [],
+      deck: starterDeck(),
+      biome: biomeFor(0),
+      kills: { 'merge-goblin': 1 },
+      firstSeen: {
+        'merge-goblin': new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE).toISOString(),
+      },
+      week: fixtureWeek(now, variant, weekOverrides),
+      ...depth,
+    };
+  }
   if (isFresh(variant)) {
     return {
       githubId: FIXTURE_GITHUB_ID,
@@ -314,6 +365,7 @@ export function fixtureMe(
       kills: {},
       firstSeen: {},
       week: null,
+      ...depth,
     };
   }
   const firstSeen: MeResponse['firstSeen'] = {};
@@ -337,6 +389,7 @@ export function fixtureMe(
     kills: { ...KILLS },
     firstSeen,
     week: fixtureWeek(now, variant, weekOverrides),
+    ...depth,
   };
 }
 

@@ -9,13 +9,25 @@
  */
 import type {
   ActId,
+  CapeColor,
   Charm,
+  ExpeditionChoice,
+  ExpeditionState,
+  FeatStatus,
+  ForgeJob,
+  GearPiece,
+  GearSlot,
+  LootItem,
   MogulId,
   MonsterId,
   Pledge,
+  RegionId,
   ReviewState,
+  Satchel,
   ScoreResult,
   SkillXp,
+  StationId,
+  UpgradeId,
   VoucherId,
 } from '@mergescape/shared';
 
@@ -123,6 +135,33 @@ export interface MeResponse {
   firstSeen: Partial<Record<MonsterId, string>>;
   /** The current run; null before the first rollover. */
   week: WeekSummary | null;
+
+  // The depth layer (docs/api-contract.md, "Depth layer"): every field is always present.
+  /** The six supplies and four crafting materials, whole numbers with no cap. */
+  satchel: Satchel;
+  /** Gear owned and not worn. */
+  inventory: GearPiece[];
+  /** What is worn per slot (the pet slot holds a piece whose `ref` is the pet id), the set bonus and the Dyes colour. */
+  gear: {
+    equipped: Partial<Record<GearSlot, GearPiece>>;
+    setBonus: number;
+    capeColor: CapeColor | null;
+  };
+  /** Pet ids owned (the six core pets and the Feat pets). */
+  pets: string[];
+  /** Seeds of unopened Charm packs from loot. */
+  charmPacks: number[];
+  forge: {
+    upgrades: UpgradeId[];
+    stations: Partial<Record<StationId, ForgeJob>>;
+  };
+  /** Titles earned from Feats. */
+  titles: string[];
+  /** Up to three unlocked Feat ids shown on the Character screen and the badge. */
+  pinnedFeats: string[];
+  /** The latest expedition, collected or not; null before the first. */
+  expedition: ExpeditionState | null;
+  tzOffsetMinutes: number | null;
 }
 
 /** Every mutation answers with the whole new profile and run, so the client never re-fetches. */
@@ -193,3 +232,131 @@ export interface InstallationSummary {
 export interface InstallationsResponse {
   installations: InstallationSummary[];
 }
+
+// ---------------------------------------------------------------------------------------------
+// The depth layer (tasks 22 and 23): expeditions, the Forge, gear and Feats. docs/api-contract.md,
+// "Depth layer", is binding; the shared package owns the records themselves.
+// ---------------------------------------------------------------------------------------------
+
+/** The three Town stations. The contract calls the type `Station`; the shared package calls it `StationId`. */
+export type Station = StationId;
+
+/** `<station>:<slot>:<tier>` (`forge:weapon:iron`) or `scriptorium:affix`. */
+export type RecipeId = string;
+
+/** Where the latest expedition stands: `none` before the first, `collected` once its loot is taken. */
+export type ExpeditionStatus = 'none' | 'away' | 'returned' | 'collected';
+
+export interface RegionView {
+  id: RegionId;
+  name: string;
+  unlocked: boolean;
+  renownRequired: number;
+  /** What the region leans toward; null until the Scriptorium's Index is bought. */
+  lean: string | null;
+}
+
+export interface ExpeditionChoiceView {
+  choice: ExpeditionChoice;
+  hours: number;
+  provisions: number;
+  affordable: boolean;
+  /**
+   * How long the trip takes this player in milliseconds, with Quick gear and the pet's passive applied
+   * (`hours` is the nominal one). An addition the api sends beyond docs/api-contract.md; absent means nominal.
+   */
+  durationMs?: number;
+}
+
+/** `GET /expedition`. */
+export interface ExpeditionView {
+  expedition: ExpeditionState | null;
+  status: ExpeditionStatus;
+  /** ISO timestamp the character is back; null when no expedition is away or waiting. */
+  returnsAt: string | null;
+  regions: RegionView[];
+  choices: ExpeditionChoiceView[];
+}
+
+/** `POST /expedition/send`. */
+export interface ExpeditionSendResponse {
+  me: MeResponse;
+  expedition: ExpeditionState;
+}
+
+/** `POST /expedition/collect`. `applied` is false on a replay: the loot was already granted once. */
+export interface ExpeditionCollectResponse {
+  me: MeResponse;
+  expedition: ExpeditionState;
+  loot: LootItem[];
+  applied: boolean;
+  featsUnlocked: string[];
+}
+
+/** `GET /packs/:seed`: the three Charms of an unopened loot pack. */
+export interface PackOptionsResponse {
+  options: Charm[];
+}
+
+export type StationStatus = 'idle' | 'working' | 'ready' | 'collected';
+
+export interface StationView {
+  job: ForgeJob | null;
+  status: StationStatus;
+  /** ISO timestamp the order finishes; null with no order. */
+  readyAt: string | null;
+}
+
+export interface RecipeView {
+  id: RecipeId;
+  station: Station;
+  name: string;
+  inputs: Partial<Satchel>;
+  hours: number;
+  unlocked: boolean;
+  affordable: boolean;
+}
+
+export interface UpgradeView {
+  id: UpgradeId;
+  owned: boolean;
+  cost: Partial<Satchel>;
+}
+
+/** `GET /forge`. */
+export interface ForgeView {
+  stations: Record<Station, StationView>;
+  recipes: RecipeView[];
+  upgrades: UpgradeView[];
+}
+
+/** `POST /forge/collect`. */
+export interface ForgeCollectResponse {
+  me: MeResponse;
+  piece: GearPiece | null;
+  applied: boolean;
+}
+
+/**
+ * One row of `GET /feats` (the shared `FeatStatus`). The contract does not carry the unlock date, so
+ * `unlockedAt` is read when the api sends it and the screen says only "Unlocked" when it does not.
+ */
+export interface FeatView extends FeatStatus {
+  unlockedAt?: string | null;
+}
+
+/** `GET /feats`. */
+export interface FeatsResponse {
+  feats: FeatView[];
+}
+
+/** What the depth writes answer with: the whole new profile (the run rides in `me.week` when present). */
+export interface DepthMutationResponse {
+  me: MeResponse;
+}
+
+/** What `POST /gear/equip` takes: a piece to wear, a slot to empty, or a pet to follow. */
+export type EquipInput = { pieceId: string } | { unequip: GearSlot } | { petId: string };
+
+/** What `POST /forge/upgrade` takes: an upgrade to buy, or a cape colour to wear (needs the Dyes). */
+export type UpgradeInput = { upgrade: UpgradeId } | { capeColor: CapeColor | null };
