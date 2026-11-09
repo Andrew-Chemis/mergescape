@@ -1,0 +1,66 @@
+name: Scoring rule proposal
+description: Argue for a change to how Mergescape scores an event.
+title: '[scoring] '
+labels: ['scoring']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Scoring rules are debated here, in the open, before any code changes. The formula is `Points x Power x Zone`; read [design.md section 4](../blob/main/.kiro/specs/mergescape/design.md) and [`constants.ts`](../blob/main/packages/shared/src/constants.ts) first, then tell us what you would change and why.
+
+        Good proposals are about **habits**: what does the current rule reward or punish that it should not? Worked examples beat adjectives. Mergescape is a game, not a performance-review tool, so proposals that make it easier to rank or judge people will be declined.
+  - type: input
+    id: rule
+    attributes:
+      label: Which rule or number
+      description: For example "merged PR is worth 90 points" or "Zone exponent 1.6".
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What the current rule gets wrong
+      description: Describe the real-world habit it rewards or punishes unfairly. Use pull request numbers or invented examples, not titles or private repository names.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description: The new rule or numbers, as exactly as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: A worked example
+      description: Pick a concrete pull request (size, reviews, who merged it) and show the points and XP before and after. The Combat Log breakdown lines are a good format.
+    validations:
+      required: true
+  - type: textarea
+    id: gaming
+    attributes:
+      label: How could this be gamed or backfire
+      description: Tiny pull requests, rubber-stamp approvals, review rings, anything else. Be your own harshest critic.
+    validations:
+      required: true
+  - type: dropdown
+    id: pacing
+    attributes:
+      label: Effect on pacing
+      options:
+        - Neutral
+        - Levels come faster
+        - Levels come slower
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I have read design.md section 4 and the current constants.
+          required: true
+        - label: The proposal needs no new stored data. If it does, I have said exactly which field and why, knowing that only the fields in Requirement 3 are stored.
+          required: true
