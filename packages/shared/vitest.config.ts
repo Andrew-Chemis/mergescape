@@ -7,7 +7,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
+      exclude: ['src/**/*.test.ts', 'src/test-builders.ts'],
       reporter: ['text'],
       // Requirement 4.10: at least 95% line coverage for the package and 100% branch coverage on the scorer.
       thresholds: {
