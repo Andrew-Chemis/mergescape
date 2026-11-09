@@ -111,7 +111,7 @@ export function createIngestHandler(
 
 let defaultHandler: ((event: FunctionUrlEvent) => Promise<FunctionUrlResult>) | undefined;
 
-/** Lambda entry point (`ingest.handler` in the SAM template). */
+/** Lambda entry point (the `ingest` function of the CDK stack). */
 export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> => {
   if (!defaultHandler) {
     const runtime = getRuntime();

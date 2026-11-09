@@ -868,7 +868,7 @@ export function createApiHandler(
 
 let defaultHandler: ((event: FunctionUrlEvent) => Promise<FunctionUrlResult>) | undefined;
 
-/** Lambda entry point (`api.handler` in the SAM template): HTTP requests and the weekly schedule. */
+/** Lambda entry point (the `api` function of the CDK stack): HTTP requests and the weekly schedule. */
 export const handler = (
   event: FunctionUrlEvent | RolloverEvent,
 ): Promise<FunctionUrlResult | RolloverResult> => {

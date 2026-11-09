@@ -2,7 +2,7 @@ import type { Db } from './db';
 import type { Logger } from './log';
 import { ensureRun } from './runs';
 
-/** The EventBridge input of the weekly schedule (`Input: '{"action":"rollover"}'` in the SAM template). */
+/** The EventBridge input of the weekly schedule (`{"action":"rollover"}`, set on the rule in the CDK stack). */
 export interface RolloverEvent {
   action: 'rollover';
 }

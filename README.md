@@ -8,10 +8,10 @@ The requirements, design, research and task list live in [`.kiro/specs/mergescap
 
 The GitHub App asks for exactly **two permissions** and receives exactly **five events**. The registration values are in [`docs/github-app-manifest.json`](docs/github-app-manifest.json).
 
-| Permission    | Level | Why                                                           |
-| ------------- | ----- | ------------------------------------------------------------- |
-| Pull requests | Read  | The three pull request webhooks below (counts and timestamps) |
-| Metadata      | Read  | Mandatory for every GitHub App                                |
+| Permission    | Level | Why                                                                   |
+| ------------- | ----- | --------------------------------------------------------------------- |
+| Pull requests | Read  | The three pull request webhooks below (we keep counts and timestamps) |
+| Metadata      | Read  | Mandatory for every GitHub App                                        |
 
 | Event                         | Why                                                             |
 | ----------------------------- | --------------------------------------------------------------- |
@@ -21,7 +21,9 @@ The GitHub App asks for exactly **two permissions** and receives exactly **five 
 | `installation`                | the App was installed, removed, suspended or its access changed |
 | `installation_repositories`   | repositories were added to or removed from an installation      |
 
-You subscribe to the first three; GitHub delivers the two `installation` events to every App automatically. The App has no write permission of any kind: it cannot comment, merge, push or change a setting. It does not ask for Contents, Issues, Discussions or Members, so it cannot read code, titles, descriptions or comment text.
+You subscribe to the first three; GitHub delivers the two `installation` events to every App automatically. The App has no write permission of any kind: it cannot comment, merge, push or change a setting. It does not ask for Contents, Issues, Discussions or Members, so it cannot read repository files, branches or commits.
+
+**What `Pull requests: Read` can see, honestly.** That permission is wide enough to show a pull request's title, description and comments: GitHub's deliveries for the three pull request events carry them, and the permission would let the App fetch them through GitHub's API. Mergescape never uses them. The code discards them at the normaliser boundary, [`packages/shared/src/normalize.ts`](packages/shared/src/normalize.ts), which copies a short allow-list of numbers, ids and timestamps out of each delivery into a fixed shape and drops everything else before anything is scored or stored. A schema guard, [`packages/backend/src/schema.ts`](packages/backend/src/schema.ts), lists the only attributes each kind of item may hold and refuses every other write, and tests fail if either rule is broken. Payloads are never logged. That is a promise about this code, which is why the code is public; [SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md) say the same.
 
 ## How scoring works
 
@@ -30,13 +32,15 @@ Every XP grant follows a published formula. The scorer is a pure function in [`p
 ## Privacy, Terms and your data
 
 - [Privacy](packages/client/src/routes/Privacy.svelte) is the client's `#/privacy` page: no code is read, counts and timestamps only, export and delete are available, activity from people who have not signed in is discarded, and the game is not a performance-review tool.
-- [Terms](packages/client/src/routes/Terms.svelte) is the client's `#/terms` page.
+- [Terms](packages/client/src/routes/Terms.svelte) is the client's `#/terms` page. The same texts, in step with the client, are [PRIVACY.md](PRIVACY.md), [TERMS.md](TERMS.md) and [COOKIES.md](COOKIES.md) (what is kept in your browser, including the opt-in sound choice).
 - **Settings** in the client has **Export JSON** (`GET /export`, everything stored under your player) and **Delete everything** (`POST /delete`, which also removes pull request records that only you appear in). The next sign-in starts a fresh level-1 character.
 - Logs record error names only, never a webhook payload, and refer to people by numeric id.
 
 ## The README badge
 
-`![Mergescape](https://<badge-domain>/badge/<your-login>.svg)` renders `Lv 41 Warden · Renown 17`: level, Vocation and Renown, nothing else. `<badge-domain>` is the `BadgeDomain` stack output (a CloudFront domain); an unknown login gets a neutral "unranked" badge. Badges are cached for six hours.
+`![Mergescape](https://<badge-domain>/badge/<your-login>.svg)` renders `Lv 41 Warden · Renown 17`: level, Vocation and Renown, plus the small icons of up to three Feats you pinned and the Old Coin if you found it, and nothing else. `<badge-domain>` is the `BadgeDomain` stack output (a CloudFront domain); an unknown login gets a neutral "unranked" badge. Badges are cached for six hours.
+
+A player can turn their badge off with **Show my badge publicly** in Settings (`POST /settings`); it then shows the same neutral "unranked" badge an unknown login gets, so it does not reveal that the account exists.
 
 ## Self-hosting
 
@@ -68,6 +72,12 @@ You need an AWS account, a GitHub account, the AWS CLI and `openssl`. Everything
 ### Budget alarms
 
 The stack creates two AWS Budgets, **1 USD** and **10 USD** per month, which e-mail `ALERT_EMAIL` when actual spend passes 100 % of the limit. Confirm them in the Billing console after the first deploy. Budgets cover the whole AWS account, not just this stack. A flood of requests is also capped by reserved concurrency (10 for `ingest`, 5 for `api`), so the worst case is dropped requests rather than a bill.
+
+## Project documents
+
+- [PRIVACY.md](PRIVACY.md), [TERMS.md](TERMS.md) and [COOKIES.md](COOKIES.md): what is stored, the terms of use, and what the browser keeps.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md): how to take part, how to contribute, and how to report a security problem.
+- [`docs/credits.md`](docs/credits.md): what is not ours (the sounds are synthesised in the browser, the art is drawn in this repository), and [`docs/content-inventory.md`](docs/content-inventory.md): what the game contains against its content budget.
 
 ## Development
 

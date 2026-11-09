@@ -188,7 +188,7 @@ describe('loadConfig', () => {
     STAGE: 'prod',
   };
 
-  it('reads the SAM environment', () => {
+  it('reads the stack environment', () => {
     expect(loadConfig(env)).toEqual({
       tableName: 'mergescape',
       ssmPrefix: '/mergescape',

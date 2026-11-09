@@ -1,7 +1,7 @@
 node_modules
 dist
 coverage
-.aws-sam
+cdk.out
 pnpm-lock.yaml
 
 # Spec material and mocks are authored outside the code toolchain.

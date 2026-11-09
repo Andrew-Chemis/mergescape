@@ -232,16 +232,19 @@ A one-line disclaimer sits in the Bestiary: *"The Moguls are fictional caricatur
 
 ### 6.3 Charms (Balatro Jokers)
 
-Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price. Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
+Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Twelve Charms, three of each rarity (Whetstone, Familiar Path and Long Lens were added by the content pass of task 24 under the same audit). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price. Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
 
 | Charm | Rarity | Effect |
 |---|---|---|
 | Rubber Duck | Common | +0.25 Power; +0.25 more on reviews with ≥3 inline comments |
 | Lantern | Common | +0.5 Power on the first scored event of each day |
+| Whetstone | Common | +0.5 Power on an approval, backed by ≥1 inline comment from you, of a PR whose author has fewer merges than you |
 | Small Hands | Uncommon | Merges under 150 LoC gain +0.75 Power |
 | Second Pair of Eyes | Uncommon | Party bonus points 30 → 60 |
+| Familiar Path | Uncommon | +0.5 Power on any PR to a repo you've merged ≥10 times in |
 | Hot Potato | Rare | Approving a PR under 200 lines within 2 hours of its open: +1.5 Power |
 | Grey Beard | Rare | +1.0 Power on any PR to a repo you've merged ≥50 times in |
+| Long Lens | Rare | +1.0 Power on an approval or a request for changes on a PR of ≥500 lines, after ≥3 inline comments from you |
 | Jester's Rebase | Legendary | Riposte points ×4; CHANGES_REQUESTED reviews you give also grant Riposte |
 | Loaded Dice | Legendary | Once per week, one event's Power is replaced by 10 |
 | Oracle | Legendary | The Boss modifier is revealed a week early and you may ban one |
@@ -258,8 +261,12 @@ Your deck starts with 5 basic Pledges. Each Monday you draw 5 and may **play up 
 | Mentor | Approve 2 PRs from authors with fewer merges than you | +0.5 Power until Sunday |
 | Tidy | Merge 3 PRs each under 150 lines | +200 points on the 3rd |
 | Pair Up (Strike+) | Merge 3 PRs each with party bonus | +600 points |
+| Fine Comb | Submit 3 scoring reviews, each after ≥3 inline comments from you on that PR | +0.5 Power on all reviews for the rest of the week |
+| Well Reviewed | Merge 2 PRs that each drew ≥3 inline comments from a reviewer | +250 points on the 2nd |
 
 Cards upgrade (Strike → Strike+) when chosen as a Boss reward. Deck cap 20; remove cards at the Town shrine for gold.
+
+Fine Comb and Well Reviewed (task 24) reward reviews that were read and PRs that were read, never volume or speed; like every Pledge and Charm they follow the incentive audit of game-design.md §8.3.
 
 ### 6.5 Gold and the Shop (Balatro's shop, Mergescape's Grizzled Reviewer)
 
@@ -391,7 +398,7 @@ Browser (GitHub Pages SPA) ──HTTPS──▶ Lambda `api` (Function URL) ─�
 | Database | DynamoDB, **provisioned 5 RCU / 5 WCU** (not on-demand, which bills from request one) | 25 RCU/WCU + 25 GB always free |
 | Secrets | SSM Parameter Store SecureString (App private key, webhook secret, OAuth client secret, JWT key) | Standard params free |
 | Logs | CloudWatch, 14-day retention | 5 GB free |
-| IaC | One AWS SAM / CDK stack, deployed from GitHub Actions via OIDC (no long-lived AWS keys) | Free |
+| IaC | One AWS CDK v2 stack (TypeScript), deployed from GitHub Actions via OIDC and the landing zone's CDK bootstrap roles (no long-lived AWS keys) | Free |
 | Domain | `*.github.io` + `*.lambda-url.*.on.aws` | $0 (a custom domain adds ~$0.50/month for Route 53; optional) |
 
 Expected monthly cost for one user, and even a few hundred: **$0.00**. Set a $1 AWS budget alarm anyway.

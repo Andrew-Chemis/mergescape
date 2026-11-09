@@ -8,7 +8,7 @@ export default defineConfig(
     '**/node_modules/**',
     '**/dist/**',
     '**/coverage/**',
-    '**/.aws-sam/**',
+    '**/cdk.out/**',
     // Spec material and mocks are authored outside the code toolchain.
     '.kiro/**',
     'SPEC.md',

@@ -43,18 +43,18 @@ Conventions for the implementer:
   - _Requirements: 1.1, 2.7, 3.1, 3.2, 3.3_
   - Verify: recorded fixture payloads for each event type under `packages/shared/fixtures/webhooks/` (sanitised: fake ids, no real repo names) produce the expected `GameEvent[]`; a test asserts the normalised object has no property outside the allowed set.
 
-- [x] 5. **[v0]** Infra: SAM stack
-  - `packages/infra/template.yaml`: table `mergescape` (PK/SK strings, provisioned 5/5, TTL attribute `ttl`, GSI1 on `GSI1PK`), `ingest` and `api` functions (Node 22, 256 MB, esbuild bundling, reserved concurrency 10 and 5), Function URLs (ingest auth NONE; api auth NONE with CORS restricted to the Pages origin parameter), SSM parameter names as env vars, log groups with 14-day retention, EventBridge rule `cron(5 0 ? * MON *)` → api with `{"action":"rollover"}`, CloudFront distribution for `/badge/*` to the api URL with 6 h default TTL, two AWS Budgets (1 and 10 USD).
+- [x] 5. **[v0]** Infra: the AWS stack (written for SAM in v0, a CDK stack since task 25)
+  - `packages/infra/lib/mergescape-stack.ts` (the CDK stack, started by `bin/mergescape.ts`): table `mergescape` (PK/SK strings, provisioned 5/5, TTL attribute `ttl`, GSI1 on `GSI1PK`), `ingest` and `api` functions (Node 22, 256 MB, esbuild bundling, reserved concurrency 10 and 5), Function URLs (ingest auth NONE; api auth NONE with CORS restricted to the Pages origin parameter), SSM parameter names as env vars, log groups with 14-day retention, EventBridge rule `cron(5 0 ? * MON *)` → api with `{"action":"rollover"}`, CloudFront distribution for `/badge/*` to the api URL with 6 h default TTL, two AWS Budgets (1 and 10 USD).
   - IAM per Requirement 12.2, no wildcards on resources. (Done; task 15 adds Scan on the GSI1 index ARN for the api role and narrows the GSI projection to INCLUDE badge fields.)
   - `README` section: the four `aws ssm put-parameter --type SecureString` commands the operator runs once.
   - GitHub Actions `deploy.yml` using OIDC role assumption; no AWS keys in repo.
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.7_
-  - Verify: `sam validate --lint` passes; `sam build` succeeds; a deploy to a sandbox account creates all resources; `cfn-nag` or `checkov` shows no high findings.
+  - Verify: `cdk synth` succeeds and the assertion tests pass (`pnpm --filter @mergescape/infra validate`); `cfn-lint` and `checkov` show no high findings on the synthesized template; a deploy to a sandbox account creates all resources.
 
 - [x] 6. **[v0]** Backend: DynamoDB repository layer
   - `db.ts` with typed accessors for every item type in design.md §9.1: profile get/update (atomic add on XP, skill XP, gold), event put, PR meta upsert (conditional on not regressing `merged`), installation upsert/delete, delivery dedupe put (`attribute_not_exists(PK)` + TTL 7 d), OAuth state put/consume, week get/update.
   - Schema guard: a runtime allow-list of attribute names per item type, enforced before every write; throws on violation.
-  - Integration tests against DynamoDB Local (docker) using the same table definition as the SAM template.
+  - Integration tests against DynamoDB Local (docker) using the same table definition as the CDK stack.
   - _Requirements: 1.5, 1.6, 1.7, 3.5_
   - Verify: dedupe second put fails with ConditionalCheckFailed; schema guard test fails on an extra attribute; all accessors covered.
 
@@ -186,7 +186,7 @@ Conventions for the implementer:
   - Verify: owner walkthrough of day 0 to week 2 on fixture data; axe clean; reduced-motion run shows no animation.
 
 - [ ] 25. **[v1.5]** Infra: convert to CDK for the landing zone
-  - Rewrite `packages/infra` as a CDK v2 app (TypeScript) producing the same resources as the SAM template (table, two NodejsFunctions with Function URLs, CloudFront badge distribution, SSM-read IAM, EventBridge rollover, log retention, budgets), targeting the landing zone's bootstrap (`cdk-hnb659fds-*` roles) in `us-west-2`.
+  - Rewrite `packages/infra` as a CDK v2 app (TypeScript) producing the same resources as the SAM template (table, two NodejsFunctions with Function URLs, CloudFront badge distribution, SSM-read IAM, EventBridge rollover, log retention, budgets), targeting the landing zone's bootstrap (`cdk-hnb659fds-*` roles) in `us-east-1`, the one region the landing zone declares for the account.
   - Replace `scripts/validate.mjs` with `aws-cdk-lib/assertions` tests asserting the same IAM and resource set; keep cfn-lint/checkov on the synthesized template in CI.
   - `deploy.yml`: assume `lz-mergescape-deploy` in the Infrastructure account via OIDC, then `cdk deploy --require-approval never`; Pages job unchanged.
   - Update infra README, root README self-hosting guide and `docs/decisions.md` (CDK chosen because the landing zone grants deploys only through CDK bootstrap roles).

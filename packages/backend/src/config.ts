@@ -1,4 +1,4 @@
-/** Environment configuration shared by both Lambdas (names come from packages/infra/template.yaml). */
+/** Environment configuration shared by both Lambdas (the CDK stack, packages/infra/lib/mergescape-stack.ts, sets the names). */
 
 export interface Config {
   tableName: string;

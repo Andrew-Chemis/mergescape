@@ -29,9 +29,17 @@ Choices inside the CDK app:
 - **Function URLs** get both permissions AWS now requires for auth NONE (`lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` with `InvokedViaFunctionUrl`); SAM's version of this was implicit.
 - **Output** goes to `packages/infra/dist/cdk.out`, a directory that git, ESLint and Prettier already ignore.
 - **Lint.** `checkov` now sees the Function URLs as `AWS::Lambda::Url` and flags auth NONE (`CKV_AWS_258`), which the design requires (HMAC on ingest, JWT and an Origin check on api); it joins the skip list of nine, each entry explained in `.checkov.yaml`. `cfn-lint` ignores `W3005`, the redundant `DependsOn` that CDK writes on every function.
-- **The spec text** still says "SAM template" in Requirement 12.1 and tasks 5 and 6; it describes the v0 plan. Read it as "one deployable stack".
+- **The spec text** said "SAM template" in Requirement 12.1 and tasks 5 and 6, describing the v0 plan. Task 24 rewrote those to say "one CDK stack"; the history stays here and in tasks 5 and 25.
 
 Revisit if the stack grows (guild raids in v2 add queues and more functions): CDK is already the right tool for that.
+
+## Feel and content (task 24)
+
+- **Sound is synthesised, not sampled.** The tasks asked for nine samples "generated or CC0". Generating them in the browser with the Web Audio API (`client/src/lib/sound.ts`) means no audio files to ship, license or attribute, no extra request, and sounds that are plain data a test can measure (each under a second and a half, quiet, oscillators only). The cost is a plainer timbre than recorded samples. Sound is off by default; the preference is `sound` in the existing consent store (`mergescape.consent`), never inferred from the browser, so reduced motion does not turn it on. No `AudioContext` exists while it is off, and nothing plays before a gesture.
+- **One cue per moment, plus four.** The ticker (a tick per term, climbing), level-up, loot flip, loot glint (rare cards), Feat unlock, Mogul reveal, shop purchase, act clear and expedition return are the nine. Under reduced motion the ticker and the loot reveal give one cue instead of a sequence, since their animation is one fade.
+- **The three new Charms and two new Pledges** (Whetstone, Familiar Path, Long Lens; Fine Comb, Well Reviewed) were chosen to reach the v1 budget of 12 and 8 while passing the section 8.3 audit; docs/content-inventory.md says what each rewards and why none can be farmed. A Charm for reviews of week-old PRs was dropped because it would reward sitting on a review.
+- **A player can hide the public badge.** `badge_public` lives on the profile (absent means public), is projected on GSI1 so the badge reads it in the same single query, and a hidden badge is the very SVG an unknown login gets, so the badge cannot be used to tell whether an account exists. It is set with `POST /settings` through the existing depth-mutation path, so it has the same week lock and replay protection as the other writes. DynamoDB cannot change a deployed index's projection in place, so an account that already has the table needs the index dropped and re-created in two deploys; the new CDK stack is meant for a fresh account.
+- **Onboarding was measured, not changed.** Fixture weeks run through the real rules show a modest first week clears the Scout and the Raid and reaches the Boss act (and clears it in 5 of 6 Mogul draws), and the Boss falls by week 2 for every draw. No constant moved. Game-design.md sections 2 and 10 disagree about whether the first Renown is in week 1 or week 2; the numbers and the options are in docs/content-inventory.md for the owner to settle.
 
 ## Other choices made in task 1
 

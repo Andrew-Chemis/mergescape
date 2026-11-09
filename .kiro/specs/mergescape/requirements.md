@@ -170,7 +170,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 #### Acceptance Criteria
 
-1. THE infrastructure SHALL be one SAM template containing: `ingest` Lambda with Function URL, `api` Lambda with Function URL, CloudFront distribution for the badge path, one DynamoDB table in provisioned mode at 5 RCU / 5 WCU with TTL and one GSI on login, SSM SecureString parameters for the App private key, webhook secret, OAuth client secret and JWT key, an EventBridge rule at Monday 00:05 UTC invoking rollover, log groups with 14-day retention, and AWS Budget alarms at $1 and $10.
+1. THE infrastructure SHALL be one CDK stack (TypeScript, synthesised to one CloudFormation template) containing: `ingest` Lambda with Function URL, `api` Lambda with Function URL, CloudFront distribution for the badge path, one DynamoDB table in provisioned mode at 5 RCU / 5 WCU with TTL and one GSI on login, SSM SecureString parameters for the App private key, webhook secret, OAuth client secret and JWT key, an EventBridge rule at Monday 00:05 UTC invoking rollover, log groups with 14-day retention, and AWS Budget alarms at $1 and $10.
 2. THE `ingest` role SHALL be limited to PutItem, GetItem, UpdateItem and Query on the table plus SSM GetParameter and CloudWatch Logs; THE `api` role SHALL additionally have DeleteItem, BatchWriteItem, and Scan restricted to the GSI1 index ARN (for the weekly rollover).
 3. THE Function URL for `api` SHALL allow CORS only from the GitHub Pages origin and the handler SHALL re-check `Origin`.
 4. THE Lambdas SHALL have reserved concurrency of 10 (`ingest`) and 5 (`api`).

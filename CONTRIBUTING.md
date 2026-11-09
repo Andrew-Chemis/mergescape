@@ -54,7 +54,7 @@ Running your own backend (a GitHub App, the AWS stack and GitHub Pages) is descr
 | `packages/shared`  | Game tables, constants, types and the pure scorer |
 | `packages/backend` | Lambda handlers: webhook ingest and the API       |
 | `packages/client`  | Svelte 5 + Vite static client                     |
-| `packages/infra`   | AWS SAM template                                  |
+| `packages/infra`   | AWS CDK app (TypeScript)                          |
 
 ## Running the checks
 
