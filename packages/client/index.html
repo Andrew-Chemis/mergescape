@@ -3,10 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0e0b0a" />
+    <meta
+      name="description"
+      content="An idle RPG where pull requests are monsters. Your real reviews and merges are the only way to gain experience."
+    />
+    <!-- Content-Security-Policy is injected at build time (tools/csp.ts, Requirement 12.6). -->
     <title>Mergescape</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
   </head>
   <body>
     <div id="app"></div>
+    <noscript>Mergescape needs JavaScript to draw your character.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

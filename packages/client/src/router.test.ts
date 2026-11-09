@@ -22,6 +22,14 @@ describe('parseHash', () => {
     expect(parseHash('#/')).toEqual({ name: 'home' });
   });
 
+  it.each([
+    ['#/log', 'log'],
+    ['#/character', 'character'],
+    ['#/welcome', 'welcome'],
+  ])('routes %s to %s', (hash, name) => {
+    expect(parseHash(hash)).toEqual({ name });
+  });
+
   it('routes unknown paths to not-found with the normalised path', () => {
     expect(parseHash('#/nope/')).toEqual({ name: 'not-found', path: '/nope' });
   });

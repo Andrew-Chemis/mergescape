@@ -1,0 +1,123 @@
+/** Formatting helpers. Locale is fixed to en-US so numbers read the same everywhere (and in tests). */
+import { SKILL_LABELS, SKILLS } from '@mergescape/shared';
+import type { Supplies } from '@mergescape/shared';
+import type { LogEntry } from './types';
+import { MONSTER_NAMES } from './names';
+
+const INT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const DECIMAL = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+
+/** `1,234,567`. */
+export function formatInt(value: number): string {
+  return INT.format(value);
+}
+
+/** Up to two decimals, trailing zeros dropped: `3.75`, `395.6`, `4`. */
+export function formatDecimal(value: number): string {
+  return DECIMAL.format(value);
+}
+
+/** `+344,172`. */
+export function formatGain(value: number): string {
+  return `+${formatInt(value)}`;
+}
+
+/** `1 minute ago`-style, coarse on purpose. */
+export function relativeTime(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) {
+    return '';
+  }
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 45) {
+    return 'just now';
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours} h ago`;
+  }
+  const days = Math.round(hours / 24);
+  if (days === 1) {
+    return 'yesterday';
+  }
+  if (days < 7) {
+    return `${days} days ago`;
+  }
+  return new Date(then).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/** Where an event happened: `octo/api #412`, `PR #412`, or `PR #412 in a private repo`. */
+export function targetLabel(entry: LogEntry): string {
+  if (entry.prNumber === undefined) {
+    return '';
+  }
+  if (entry.repoName) {
+    return `${entry.repoName} #${entry.prNumber}`;
+  }
+  return entry.repoPrivate ? `PR #${entry.prNumber} in a private repo` : `PR #${entry.prNumber}`;
+}
+
+/** The one-line summary of a Combat Log row. Built from counts and ids only; no PR title exists. */
+export function summarize(entry: LogEntry): string {
+  const target = targetLabel(entry);
+  switch (entry.kind) {
+    case 'pr_opened':
+      return `Opened ${target}`;
+    case 'pr_merged': {
+      const lines =
+        entry.additions !== undefined && entry.deletions !== undefined
+          ? ` (+${formatInt(entry.additions)} / −${formatInt(entry.deletions)})`
+          : '';
+      return `Merged ${target}${lines}`;
+    }
+    case 'review_submitted': {
+      const verb = {
+        APPROVED: 'Approved',
+        CHANGES_REQUESTED: 'Requested changes on',
+        COMMENTED: 'Reviewed',
+      }[entry.reviewState ?? 'COMMENTED'];
+      const inline =
+        entry.inlineComments && entry.inlineComments > 0 ? ` · ${entry.inlineComments} inline` : '';
+      return `${verb} ${target}${inline}`;
+    }
+    case 'review_comment_created':
+      return `Inline comment on ${target}`;
+    case 'verified_kill':
+      return `Verified kill: ${target} merged`;
+    case 'weekly_streak':
+      return 'Weekly streak';
+  }
+}
+
+/** Monster name for a row, or the fallback for rows without one. */
+export function monsterLabel(entry: LogEntry): string {
+  return entry.monster ? MONSTER_NAMES[entry.monster] : 'Adventurer';
+}
+
+/** Skills that received XP from this row, in display order. */
+export function creditedSkills(entry: LogEntry): { label: string; xp: number }[] {
+  return SKILLS.filter((skill) => entry.skillXp[skill] > 0).map((skill) => ({
+    label: SKILL_LABELS[skill],
+    xp: entry.skillXp[skill],
+  }));
+}
+
+const SUPPLY_LABELS: readonly [keyof Supplies, string][] = [
+  ['ore', 'Ore'],
+  ['timber', 'Timber'],
+  ['lore', 'Lore'],
+  ['ink', 'Ink'],
+  ['provisions', 'Provisions'],
+  ['flux', 'Flux'],
+];
+
+/** `+3 Ore, +1 Timber`: the supplies a row dropped (game-design.md section 6.1). Empty when none. */
+export function suppliesText(supplies: Supplies): string {
+  return SUPPLY_LABELS.filter(([key]) => supplies[key] > 0)
+    .map(([key, label]) => `+${supplies[key]} ${label}`)
+    .join(', ');
+}

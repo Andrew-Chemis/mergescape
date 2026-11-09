@@ -1,5 +1,12 @@
-/** Routes the client knows about. Real screens replace the placeholder in task 9. */
-export type Route = { name: 'home' } | { name: 'not-found'; path: string };
+/** Routes the client knows about. Later tasks add Shop, Run Map, Bestiary and the rest. */
+export type Route =
+  | { name: 'home' }
+  | { name: 'log' }
+  | { name: 'character' }
+  | { name: 'welcome' }
+  | { name: 'not-found'; path: string };
+
+export type RouteName = Route['name'];
 
 /** Normalises a location hash such as `#/log/?page=2` to a path such as `/log`. */
 export function normalizePath(hash: string): string {
@@ -16,7 +23,21 @@ export function parseHash(hash: string): Route {
   switch (path) {
     case '/':
       return { name: 'home' };
+    case '/log':
+      return { name: 'log' };
+    case '/character':
+      return { name: 'character' };
+    case '/welcome':
+      return { name: 'welcome' };
     default:
       return { name: 'not-found', path };
   }
 }
+
+/** The screen title, for the page title and the frame bar. */
+export const ROUTE_TITLES: Readonly<Record<Exclude<RouteName, 'not-found'>, string>> = {
+  home: 'Town',
+  log: 'Combat Log',
+  character: 'Character',
+  welcome: 'Welcome',
+};

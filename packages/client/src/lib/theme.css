@@ -1,0 +1,472 @@
+/*
+ * Mergescape theme: one committed dark theme (a dungeon-dark page, OSRS-style wood frames), ported from
+ * .kiro/specs/mergescape/mocks.html. Tokens first, then base styles, then the shared primitives
+ * (frame, panel, meter, score lines, buttons). Screen-specific styles live in the components.
+ *
+ * Contrast: every text-on-background pair used here is checked against WCAG AA (4.5:1) by
+ * src/lib/contrast.test.ts, which reads the tokens below. Change a token, run the tests.
+ * CSP: no inline style attributes anywhere (Requirement 12.6, style-src 'self'), so dynamic widths
+ * go through the CSSOM (Svelte style: directives).
+ */
+
+:root {
+  /* surfaces */
+  --bg: #0e0b0a;
+  --bg2: #17120f;
+  --stone: #2a2420;
+  --stone2: #36302a;
+  --panel: #201a16;
+  --row: #141010;
+  --row-open: #1b1512;
+  --rail: #1a1411;
+  --slot: #0f0c0b;
+  --act-done: #1d3a28;
+  --act-now: #3a2a10;
+  --pledge: #10202b;
+  --track: #0a0807;
+  --wood: #5a3b1e;
+  --wood2: #7a5330;
+  --parch: #e9d8b0;
+  --parch2: #d7c197;
+
+  /* text */
+  --fg: #efe6d3;
+  --fg-dim: #b7a98d;
+  --ink: #2b1d10;
+  --ink-dim: #5f4f36;
+
+  /* accents (on dark surfaces) */
+  --gold: #f2c14e;
+  --xp: #49c178;
+  --chips: #5ec8ff;
+  --mult: #ff5c5c;
+  --purple: #a371f7;
+  --red: #e5484d;
+
+  /* the same accents darkened for text on parchment */
+  --gold-ink: #6b3f12;
+  --xp-ink: #17603a;
+  --chips-ink: #0b5b86;
+  --mult-ink: #a31d1d;
+  --purple-ink: #5b2fb0;
+
+  /* meter fills (decorative; the numbers beside them carry the information) */
+  --meter-xp: #49c178;
+  --meter-gold: #f2c14e;
+
+  /* skill colours (level-up flash, skill panels) */
+  --skill-smithing: #ff9c2b;
+  --skill-vigilance: #5ec8ff;
+  --skill-oratory: #a371f7;
+  --skill-endurance: #49c178;
+
+  /* score line colours: dark surfaces by default, overridden on parchment below */
+  --t-points: var(--chips);
+  --t-power: var(--mult);
+  --t-zone: var(--purple);
+  --t-xp: var(--xp);
+  --t-dim: var(--fg-dim);
+
+  --focus: #ffffff;
+
+  --display: 'Pixelify Sans', 'Trebuchet MS', 'Segoe UI', sans-serif;
+  --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --gutter: 16px;
+  color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Base
+   --------------------------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image: radial-gradient(ellipse at 50% 0%, #1d1612 0, var(--bg) 60%);
+  background-attachment: fixed;
+  color: var(--fg);
+  font: 15px/1.5 var(--body);
+  min-height: 100vh;
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--display);
+  text-wrap: balance;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+  max-width: 68ch;
+}
+
+a {
+  color: var(--gold);
+}
+
+a:hover {
+  color: #ffd98a;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #000;
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--ink);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -80px;
+  z-index: 100;
+  padding: 8px 12px;
+  background: var(--gold);
+  color: var(--ink);
+  font: 600 14px var(--body);
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dim {
+  color: var(--fg-dim);
+}
+
+.eyebrow {
+  font: 600 11px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Sprites
+   --------------------------------------------------------------------------------------------- */
+
+.spr {
+  display: inline-block;
+  line-height: 0;
+  image-rendering: pixelated;
+  flex: none;
+}
+
+.spr svg {
+  display: block;
+  shape-rendering: crispEdges;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   OSRS wood frame and panels
+   --------------------------------------------------------------------------------------------- */
+
+.frame {
+  background: var(--stone);
+  border: 4px solid var(--wood);
+  outline: 2px solid #000;
+  box-shadow:
+    inset 0 0 0 2px var(--wood2),
+    0 12px 30px rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.frame > .bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  background: linear-gradient(var(--wood2), var(--wood));
+  padding: 7px 12px;
+  border-bottom: 2px solid #000;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 16px;
+  color: var(--parch);
+}
+
+.body {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid #000;
+  box-shadow: inset 0 0 0 2px var(--wood);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.panel.parch {
+  background: var(--parch);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--parch2);
+  --t-points: var(--chips-ink);
+  --t-power: var(--mult-ink);
+  --t-zone: var(--purple-ink);
+  --t-xp: var(--xp-ink);
+  --t-dim: var(--ink-dim);
+}
+
+.panel > h2,
+.panel > header > h2 {
+  margin: 0 0 6px;
+  font: 600 14px var(--display);
+  color: var(--gold);
+  letter-spacing: 0.02em;
+}
+
+.panel.parch > h2,
+.panel.parch > header > h2 {
+  color: var(--gold-ink);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.grow {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.note {
+  font-size: 13px;
+  color: var(--fg-dim);
+  border-left: 3px solid var(--wood2);
+  padding-left: 10px;
+}
+
+.pill {
+  display: inline-block;
+  font: 600 11px/1 var(--mono);
+  padding: 5px 8px;
+  border-radius: 3px;
+  background: var(--stone2);
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Meters (XP bars): a bar with its figures printed underneath, so no text ever sits on the fill
+   --------------------------------------------------------------------------------------------- */
+
+.meter-wrap {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.meter {
+  height: 14px;
+  background: var(--track);
+  border: 2px solid #000;
+  position: relative;
+  overflow: hidden;
+}
+
+.meter > .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--w, 0%);
+  background: var(--meter-xp);
+}
+
+.meter.gold > .fill {
+  background: var(--meter-gold);
+}
+
+.meter-wrap > .label {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--fg-dim);
+  text-align: right;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Score lines (the Combat Log breakdown and the ticker)
+   --------------------------------------------------------------------------------------------- */
+
+.score {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  display: grid;
+  gap: 3px;
+}
+
+.score .l {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.score .l > span:first-child {
+  min-width: 0;
+}
+
+.score .l > .v {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.score .points {
+  color: var(--t-points);
+}
+
+.score .power {
+  color: var(--t-power);
+}
+
+.score .zone {
+  color: var(--t-zone);
+}
+
+.score .xp {
+  color: var(--t-xp);
+}
+
+.score .sub {
+  border-top: 1px solid var(--t-dim);
+  padding-top: 2px;
+  font-weight: 600;
+}
+
+.score .total {
+  border-top: 2px solid var(--wood);
+  padding-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t-xp);
+}
+
+.panel.parch .score .total {
+  border-color: var(--parch2);
+}
+
+.score .detail {
+  color: var(--t-dim);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Buttons and link-buttons
+   --------------------------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 2px solid #000;
+  box-shadow:
+    inset 0 0 0 2px var(--wood2),
+    3px 3px 0 #000;
+  background: var(--wood);
+  color: var(--parch);
+  font: 600 15px var(--display);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--wood2);
+  color: var(--parch);
+}
+
+.btn.primary {
+  background: var(--gold);
+  color: var(--ink);
+  box-shadow:
+    inset 0 0 0 2px #ffd98a,
+    3px 3px 0 #000;
+}
+
+.btn.primary:hover {
+  background: #ffd98a;
+  color: var(--ink);
+}
+
+.btn[aria-disabled='true'],
+.btn:disabled {
+  opacity: 1;
+  background: var(--stone2);
+  color: var(--fg-dim);
+  box-shadow: inset 0 0 0 2px var(--wood);
+  cursor: not-allowed;
+}
+
+.btn.small {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Motion
+   --------------------------------------------------------------------------------------------- */
+
+/*
+ * Reduced motion (Requirement 10.5): nothing here moves by default. Components that animate (the score
+ * ticker, the level-up flash, the pulsing current act) declare their movement inside
+ * `@media (prefers-reduced-motion: no-preference)` and keep, at most, an opacity fade otherwise.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
