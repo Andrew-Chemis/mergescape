@@ -9,13 +9,14 @@ export type Route =
   | { name: 'settings' }
   | { name: 'privacy' }
   | { name: 'terms' }
+  | { name: 'cookies' }
   | { name: 'welcome' }
   | { name: 'not-found'; path: string };
 
 export type RouteName = Route['name'];
 
 /** The routes that are plain text and open without signing in (Landing links to them). */
-export const PUBLIC_ROUTES: readonly RouteName[] = ['privacy', 'terms'];
+export const PUBLIC_ROUTES: readonly RouteName[] = ['privacy', 'terms', 'cookies'];
 
 /** Normalises a location hash such as `#/log/?page=2` to a path such as `/log`. */
 export function normalizePath(hash: string): string {
@@ -48,6 +49,8 @@ export function parseHash(hash: string): Route {
       return { name: 'privacy' };
     case '/terms':
       return { name: 'terms' };
+    case '/cookies':
+      return { name: 'cookies' };
     case '/welcome':
       return { name: 'welcome' };
     default:
@@ -66,5 +69,6 @@ export const ROUTE_TITLES: Readonly<Record<Exclude<RouteName, 'not-found'>, stri
   settings: 'Settings',
   privacy: 'Privacy',
   terms: 'Terms',
+  cookies: 'Cookies',
   welcome: 'Welcome',
 };

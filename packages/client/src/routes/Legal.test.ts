@@ -5,8 +5,11 @@
 import { screen, within } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import { MOGUL_DISCLAIMER } from '@mergescape/shared';
-import { PROMISES } from '../lib/promises';
+import { LEGAL_UPDATED, PROMISES } from '../lib/promises';
 import { forbidNetwork, renderApp, textOf } from '../test/helpers';
+import cookiesMd from '../../../../COOKIES.md?raw';
+import privacyMd from '../../../../PRIVACY.md?raw';
+import termsMd from '../../../../TERMS.md?raw';
 
 forbidNetwork();
 
@@ -120,7 +123,7 @@ describe('Terms', () => {
 });
 
 describe('links to the legal pages', () => {
-  it('Landing links to both', async () => {
+  it('Landing links to all three', async () => {
     await renderApp({ api: null, signInHref: 'https://api.example/auth/login' });
     const promise = screen.getByRole('region', { name: 'Our promise' });
     expect(within(promise).getByRole('link', { name: 'Privacy' }).getAttribute('href')).toBe(
@@ -128,6 +131,9 @@ describe('links to the legal pages', () => {
     );
     expect(within(promise).getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe(
       '#/terms',
+    );
+    expect(within(promise).getByRole('link', { name: 'Cookies' }).getAttribute('href')).toBe(
+      '#/cookies',
     );
   });
 
@@ -139,13 +145,145 @@ describe('links to the legal pages', () => {
     expect(landing).toEqual([...PROMISES]);
   });
 
-  it('Settings links to both', async () => {
+  it('Settings links to all three', async () => {
     await renderApp({ hash: '#/settings' });
     const legal = screen.getByRole('region', { name: 'The small print' });
     expect(
       within(legal)
         .getAllByRole('link')
         .map((a) => a.getAttribute('href')),
-    ).toEqual(['#/privacy', '#/terms']);
+    ).toEqual(['#/privacy', '#/terms', '#/cookies']);
+  });
+});
+
+describe('Privacy, Terms and Cookies say the same as PRIVACY.md, TERMS.md and COOKIES.md', () => {
+  const pageText = () => textOf(screen.getByRole('main'));
+
+  it('carry the same last-updated date', () => {
+    for (const [name, doc] of Object.entries({ privacyMd, termsMd, cookiesMd })) {
+      expect(doc, name).toContain(`_Last updated: ${LEGAL_UPDATED}_`);
+    }
+  });
+
+  it('PRIVACY.md repeats the plain-words promise word for word', () => {
+    for (const promise of PROMISES) {
+      expect(privacyMd).toContain(promise);
+    }
+  });
+
+  it('Privacy and PRIVACY.md give the same retention periods, region and badge facts', async () => {
+    await renderApp({ hash: '#/privacy' });
+    const page = pageText();
+    for (const fact of [
+      '90 days',
+      '7 days',
+      '10 minutes',
+      '14 days',
+      '6 hours',
+      'us-east-1',
+      'Google Fonts',
+      'noren',
+      'opt-in',
+      'documented here first',
+      'Cookies',
+      'unranked',
+    ]) {
+      expect(page, `page: ${fact}`).toContain(fact);
+      expect(privacyMd, `PRIVACY.md: ${fact}`).toContain(fact);
+    }
+  });
+
+  it('both date the Future analytics section', async () => {
+    await renderApp({ hash: '#/privacy' });
+    expect(pageText()).toContain('Stated on 9 November 2026');
+    expect(privacyMd).toContain('Stated on 9 November 2026');
+  });
+
+  it('both name every stored field of Requirement 3.1 and 3.2', async () => {
+    await renderApp({ hash: '#/privacy' });
+    // The page words them; the Markdown lists the exact names.
+    for (const field of [
+      'installation_id',
+      'repo_id',
+      'repo_private',
+      'pr_number',
+      'author_id',
+      'opened_at',
+      'merged_at',
+      'closed_at',
+      'merged_by_id',
+      'additions',
+      'deletions',
+      'changed_files',
+      'commits',
+      'review_round_count',
+      'sync_count',
+      'draft',
+      'base_ref_is_default',
+      'pr_key',
+      'reviewer_id',
+      'reviewer_is_bot',
+      'submitted_at',
+      'inline_comment_count',
+    ]) {
+      expect(privacyMd, field).toContain(field);
+    }
+  });
+
+  it('say that people who have not signed in are discarded, with the review-record exception', async () => {
+    await renderApp({ hash: '#/privacy' });
+    expect(pageText()).toContain('dropped before it is saved');
+    expect(pageText()).toContain('One narrow exception');
+    expect(privacyMd).toContain("Activity from people who haven't signed in is discarded");
+    expect(privacyMd).toContain('There is one narrow exception');
+  });
+
+  it('Terms and TERMS.md agree on the age, the as-is terms, the satire line and the placeholder', async () => {
+    await renderApp({ hash: '#/terms' });
+    const page = pageText();
+    for (const fact of [
+      MOGUL_DISCLAIMER,
+      '13',
+      '16',
+      'uptime',
+      'Export',
+      'not a performance',
+      'There is no manager view',
+    ]) {
+      const wanted = fact.toLowerCase();
+      expect(page.toLowerCase(), `page: ${fact}`).toContain(wanted);
+      expect(termsMd.toLowerCase(), `TERMS.md: ${fact}`).toContain(wanted);
+    }
+    // The governing law is left for the maintainer in both places: filled in together or not at all.
+    const placeholder = /\[governing law/i;
+    expect(placeholder.test(page)).toBe(placeholder.test(termsMd));
+  });
+
+  it('Cookies and COOKIES.md list the same keys and say that no cookies are set', async () => {
+    await renderApp({ hash: '#/cookies' });
+    const page = pageText();
+    for (const key of ['mergescape.token', 'mergescape.mogulSeen', 'mergescape.consent']) {
+      expect(page, key).toContain(key);
+      expect(cookiesMd, key).toContain(key);
+    }
+    expect(page).toContain('Mergescape sets no cookies.');
+    expect(cookiesMd).toContain('**Mergescape sets no cookies.**');
+    for (const fact of [
+      'Clear local data',
+      'Sign out',
+      'GitHub',
+      'Analytics are not yet enabled',
+      'opt-in',
+    ]) {
+      expect(page, `page: ${fact}`).toContain(fact);
+    }
+    expect(cookiesMd).toContain('**no analytics today**');
+  });
+
+  it('the three documents point at each other', () => {
+    expect(privacyMd).toContain('COOKIES.md');
+    expect(privacyMd).toContain('TERMS.md');
+    expect(termsMd).toContain('PRIVACY.md');
+    expect(cookiesMd).toContain('PRIVACY.md');
   });
 });

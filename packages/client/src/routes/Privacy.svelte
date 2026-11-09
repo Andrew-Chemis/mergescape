@@ -11,6 +11,7 @@
 </script>
 
 <Frame title="Privacy">
+  <!-- Keep this page in step with PRIVACY.md at the repository root; Legal.test.ts checks the dates. -->
   <section class="panel" aria-labelledby="promise-heading">
     <h2 id="promise-heading">In plain words</h2>
     <ul>
@@ -25,17 +26,28 @@
     <p>Only numbers, ids and times. That is the complete list.</p>
     <ul>
       <li>
-        <b>You:</b> your numeric GitHub id and your login, learned once when you sign in, plus the game
-        state they earn: experience, gold, Charms, Pledges, Vouchers and weekly runs.
+        <b>You:</b> your numeric GitHub id and your login, learned once when you sign in, the ids of the
+        App installations you can see, plus the game state they earn: experience, gold, Charms, Pledges,
+        Vouchers, kills, weekly runs, supplies and expeditions.
       </li>
       <li>
-        <b>Pull requests:</b> the repository's numeric id, the pull request number, the author's numeric
-        id, when it was opened, merged or closed, whether it is a draft, lines added and deleted, files
-        changed, commits, how many review rounds and pushes it saw.
+        <b>Pull requests:</b> the repository's numeric id and whether it is private, the pull request
+        number, the author's and the merger's numeric ids, when it was opened, merged or closed, whether
+        it is a draft, whether it targets the default branch, lines added and deleted, files changed,
+        commits, and how many review rounds and pushes it saw.
       </li>
       <li>
         <b>Reviews:</b> the reviewer's numeric id, whether they approved, asked for changes or commented,
         when, and how many inline comments they left.
+      </li>
+      <li>
+        <b>Combat Log rows:</b> when an event happened, its kind, the repository id and pull request number,
+        the points, Power, Zone, level, XP and supplies, the monster it was in the game, and the lines
+        of the score breakdown. They contain no text from GitHub.
+      </li>
+      <li>
+        <b>Plumbing:</b> the App installations and the repositories they cover, webhook delivery ids so
+        nothing is counted twice, a one-time sign-in code, and anonymous counters with no person attached.
       </li>
     </ul>
   </section>
@@ -52,8 +64,12 @@
         Your GitHub access token. Signing in uses it once to learn who you are and then throws it
         away, so there is nothing stored that could be used to reach your account.
       </li>
-      <li>Your email address.</li>
-      <li>The names of private repositories.</li>
+      <li>Your email address, your real name or your avatar.</li>
+      <li>
+        The names of private repositories. Your own are fetched from GitHub live when you look at
+        them.
+      </li>
+      <li>Payment details. There is nothing to buy.</li>
     </ul>
     <p class="dim">
       The App asks GitHub for read-only access to pull request metadata. It cannot comment, merge,
@@ -61,13 +77,51 @@
     </p>
   </section>
 
+  <section class="panel" aria-labelledby="why-heading">
+    <h2 id="why-heading">Why, and where</h2>
+    <ul>
+      <li>
+        <b>Why:</b> to credit the right person, work out the score and show the Combat Log, run your weekly
+        run and draw the README badge. We do not sell data or use it to profile anyone.
+      </li>
+      <li>
+        <b>Where:</b> on Amazon Web Services in the US East (N. Virginia, us-east-1) region by default,
+        so if you are outside the United States your data is processed there. The page itself is served
+        by GitHub Pages and holds no personal data.
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="keep-heading">
+    <h2 id="keep-heading">How long we keep it</h2>
+    <ul>
+      <li><b>Raw events (Combat Log rows):</b> 90 days, then deleted automatically.</li>
+      <li><b>Your profile and weekly run state:</b> until you delete them.</li>
+      <li>
+        <b>Pull request and review records:</b> until you delete everything, when the records only you
+        appear in go too.
+      </li>
+      <li><b>Webhook delivery ids:</b> 7 days. <b>Sign-in codes:</b> 10 minutes.</li>
+      <li><b>Sign-in sessions:</b> 7 days. <b>Server logs:</b> 14 days, errors only.</li>
+      <li><b>The public badge:</b> up to 6 hours in caches after a change.</li>
+    </ul>
+  </section>
+
   <section class="panel" aria-labelledby="others-heading">
     <h2 id="others-heading">People who haven't signed in</h2>
     <p>
       If the App is installed on a shared repository, GitHub tells us about everyone's pull
-      requests. We keep only what belongs to people who have signed in to Mergescape. Everything
-      about anyone else is dropped before it is saved; only an anonymous count that something was
-      dropped is kept, to watch for problems.
+      requests. We keep only what belongs to people who have signed in to Mergescape. Activity from
+      anyone else is dropped before it is saved: it earns nobody anything and creates no profile and
+      no Combat Log row. Only an anonymous count that something was dropped is kept, to watch for
+      problems.
+    </p>
+    <p class="dim">
+      One narrow exception: some rules (the party bonus, solo kills and the Riposte) need to know
+      that a review happened. When a player who has signed in wrote, merged or reviewed a pull
+      request, its shared record also notes each human review on it: the reviewer's numeric id, the
+      verdict, the time and the number of inline comments, even if that reviewer never signed in. It
+      is a number, not a name, and it goes when that pull request record does.
     </p>
   </section>
 
@@ -86,23 +140,62 @@
         <b>Uninstall:</b> removing the App on GitHub stops its events counting at once. Delete your data
         as well if you want the records gone.
       </li>
+      <li>
+        <b>This device:</b> Sign out, or Clear local data on the <a href="#/cookies">Cookies</a> page.
+      </li>
     </ul>
   </section>
 
   <section class="panel" aria-labelledby="third-heading">
     <h2 id="third-heading">Cookies and other parties</h2>
     <ul>
-      <li>No cookies, no ads, no analytics and no trackers.</li>
       <li>
-        Your sign-in token lives in your browser's local storage on this device and is sent only to
-        our own server.
+        No cookies, no ads, no analytics and no trackers today. Your sign-in token, the week the
+        Mogul reveal last played and your analytics choice live in your browser's local storage on
+        this device. See the <a href="#/cookies">Cookies</a> page.
       </li>
       <li>
         The page loads its three fonts from Google Fonts, so Google sees your IP address when your
         browser fetches them. Nothing else is loaded from anywhere else.
       </li>
-      <li>The game is served by GitHub Pages and runs on Amazon Web Services.</li>
+      <li>
+        GitHub is where you sign in and where the webhooks come from. Amazon Web Services runs the
+        game and keeps ordinary request records for operating its network.
+      </li>
     </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="future-heading">
+    <h2 id="future-heading">Future analytics</h2>
+    <p class="dim">Stated on 9 November 2026. Nothing in this section exists yet.</p>
+    <p>
+      The maintainer intends to add first-party, privacy-respecting analytics later, using a package
+      called noren. If that happens:
+    </p>
+    <ul>
+      <li>It will be opt-in: off by default, with nothing measured until you switch it on.</li>
+      <li>
+        It will be documented here first: this page will say what is measured, why, where it goes
+        and for how long, before any analytics code is released.
+      </li>
+      <li>
+        It will be controllable from the <a href="#/cookies">Cookies</a> page, where you can switch it
+        off again at any time.
+      </li>
+      <li>
+        It will be first-party only: no ad networks, no third-party analytics and no cross-site
+        tracking.
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="badge-heading">
+    <h2 id="badge-heading">The README badge</h2>
+    <p>
+      If you put the Mergescape badge in a README it is a public image: anyone who knows your GitHub
+      login can see your level, Vocation and Renown, and nothing else. After you delete your data it
+      shows a neutral "unranked" badge.
+    </p>
   </section>
 
   <section class="panel" aria-labelledby="perf-heading">
@@ -114,12 +207,21 @@
     </p>
   </section>
 
+  <section class="panel" aria-labelledby="contact-heading">
+    <h2 id="contact-heading">Contact</h2>
+    <p>
+      Open an issue in the project's repository on GitHub, or reach the maintainer through the
+      contact options on their GitHub profile. Please don't put personal data in a public issue.
+    </p>
+  </section>
+
   <p class="foot dim">
-    Last updated {LEGAL_UPDATED}. See also the <a href="#/terms">Terms</a>.
+    Last updated {LEGAL_UPDATED}. See also the <a href="#/terms">Terms</a> and the
+    <a href="#/cookies">Cookies</a> page.
     {#if from === 'settings'}
-      <a href="#/settings">Back to Settings</a>
+      <a class="back" href="#/settings">Back to Settings</a>
     {:else}
-      <a href="#/welcome">Back to the start</a>
+      <a class="back" href="#/welcome">Back to the start</a>
     {/if}
   </p>
 </Frame>
@@ -133,7 +235,8 @@
   }
 
   .panel p + ul,
-  .panel ul + p {
+  .panel ul + p,
+  .panel p + p {
     margin-top: 8px;
   }
 
@@ -142,7 +245,7 @@
     font-size: 13px;
   }
 
-  .foot a {
+  .foot .back {
     margin-left: 8px;
   }
 </style>

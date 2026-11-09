@@ -31,6 +31,7 @@ describe('parseHash', () => {
     ['#/settings', 'settings'],
     ['#/privacy', 'privacy'],
     ['#/terms', 'terms'],
+    ['#/cookies', 'cookies'],
     ['#/welcome', 'welcome'],
   ])('routes %s to %s', (hash, name) => {
     expect(parseHash(hash)).toEqual({ name });
@@ -50,10 +51,11 @@ describe('route titles and public routes', () => {
       settings: 'Settings',
       privacy: 'Privacy',
       terms: 'Terms',
+      cookies: 'Cookies',
     });
   });
 
-  it('opens only Privacy and Terms without signing in', () => {
-    expect(PUBLIC_ROUTES).toEqual(['privacy', 'terms']);
+  it('opens only Privacy, Terms and Cookies without signing in', () => {
+    expect(PUBLIC_ROUTES).toEqual(['privacy', 'terms', 'cookies']);
   });
 });

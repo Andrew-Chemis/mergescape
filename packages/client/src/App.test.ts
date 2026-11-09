@@ -486,6 +486,7 @@ describe('navigation and layout', () => {
       '#/settings',
       '#/privacy',
       '#/terms',
+      '#/cookies',
       '#/welcome',
     ]) {
       document.body.innerHTML = '';
@@ -599,6 +600,7 @@ describe('fixture mode touches no network', () => {
       '#/settings',
       '#/privacy',
       '#/terms',
+      '#/cookies',
       '#/welcome',
       '#/nope',
     ]) {

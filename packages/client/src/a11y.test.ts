@@ -7,8 +7,9 @@
 import axe from 'axe-core';
 import type { Result } from 'axe-core';
 import { fireEvent, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './lib/api';
+import { pageControls } from './lib/consent';
 import { createFixtureApi } from './lib/fixtures/api';
 import { fixtureCharm } from './lib/fixtures/state';
 import type { FixtureVariant } from './lib/fixtures/state';
@@ -68,6 +69,8 @@ const screens: {
   { name: 'Terms', hash: '#/terms' },
   { name: 'Privacy, signed out', hash: '#/privacy', api: null },
   { name: 'Terms, signed out', hash: '#/terms', api: null },
+  { name: 'Cookies', hash: '#/cookies' },
+  { name: 'Cookies, signed out', hash: '#/cookies', api: null },
   { name: 'Not found', hash: '#/nope' },
 ];
 
@@ -139,6 +142,31 @@ describe('axe-core finds no violations in the interactive states of the new scre
   it('Settings with the delete confirmation open, and after an export', async () => {
     await renderApp({ hash: '#/settings' });
     await fireEvent.click(screen.getByRole('button', { name: 'Delete everything…' }));
+    await expectAccessible();
+  });
+});
+
+describe('axe-core finds no violations on the Cookies page in its other states', () => {
+  it('with analytics switched on', async () => {
+    await renderApp({ hash: '#/cookies' });
+    await fireEvent.click(screen.getByRole('switch', { name: 'Allow first-party analytics' }));
+    await expectAccessible();
+  });
+
+  it('showing that the choice could not be saved', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    await renderApp({ hash: '#/cookies' });
+    await fireEvent.click(screen.getByRole('switch', { name: 'Allow first-party analytics' }));
+    expect(screen.getByText(/would not let Mergescape save your choice/)).toBeTruthy();
+    await expectAccessible();
+  });
+
+  it('after Clear local data', async () => {
+    vi.spyOn(pageControls, 'reload').mockImplementation(() => {});
+    await renderApp({ hash: '#/cookies' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear local data' }));
     await expectAccessible();
   });
 });

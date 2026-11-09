@@ -7,6 +7,7 @@
   import Bestiary from './routes/Bestiary.svelte';
   import Character from './routes/Character.svelte';
   import CombatLog from './routes/CombatLog.svelte';
+  import Cookies from './routes/Cookies.svelte';
   import Landing from './routes/Landing.svelte';
   import NotFound from './routes/NotFound.svelte';
   import Privacy from './routes/Privacy.svelte';
@@ -32,7 +33,7 @@
   let main: HTMLElement | undefined = $state();
   let firstRoute = true;
 
-  // Privacy and Terms are plain text that Landing links to, so they open without a session.
+  // Privacy, Terms and Cookies are plain text that Landing links to, so they open without a session.
   const isPublic = $derived(PUBLIC_ROUTES.includes(route.name));
   const signedOut = $derived(session.status === 'signed-out');
   const showLanding = $derived(route.name === 'welcome' || (signedOut && !isPublic));
@@ -92,6 +93,8 @@
     <div class="stage">
       {#if route.name === 'privacy'}
         <Privacy from="landing" />
+      {:else if route.name === 'cookies'}
+        <Cookies from="landing" />
       {:else}
         <Terms from="landing" />
       {/if}
@@ -106,6 +109,8 @@
           <Privacy from="settings" />
         {:else if route.name === 'terms'}
           <Terms from="settings" />
+        {:else if route.name === 'cookies'}
+          <Cookies from="settings" />
         {:else if session.status === 'loading'}
           <Frame {title}>
             <p class="panel" role="status">Waking the dungeon&hellip;</p>

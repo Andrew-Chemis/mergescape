@@ -17,8 +17,10 @@
     { name: 'settings', href: '#/settings', label: 'Settings', glyph: 'S' },
   ] as const;
 
-  // Privacy and Terms are reached from Settings, so Settings stays marked while they are open.
-  const active = $derived(current === 'privacy' || current === 'terms' ? 'settings' : current);
+  // Privacy, Terms and Cookies are reached from Settings, so Settings stays marked while they are open.
+  const active = $derived(
+    current === 'privacy' || current === 'terms' || current === 'cookies' ? 'settings' : current,
+  );
 </script>
 
 <!-- A left rail from 768px up, bottom tabs below (Requirement 10.1). -->

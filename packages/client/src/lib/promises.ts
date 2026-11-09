@@ -13,5 +13,5 @@ export const PROMISES: readonly string[] = [
   'Mergescape is a game, not a performance-review tool. There is no manager view.',
 ];
 
-/** When the Privacy and Terms text last changed. */
-export const LEGAL_UPDATED = '8 November 2026';
+/** When the Privacy, Terms and Cookies text last changed. */
+export const LEGAL_UPDATED = '9 November 2026';

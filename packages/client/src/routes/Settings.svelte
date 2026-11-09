@@ -271,6 +271,7 @@
       <p class="row links">
         <a href="#/privacy">Privacy</a>
         <a href="#/terms">Terms</a>
+        <a href="#/cookies">Cookies</a>
       </p>
     </section>
   {/if}

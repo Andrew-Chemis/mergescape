@@ -83,7 +83,8 @@
       {/each}
     </ul>
     <p class="legal">
-      Read the full <a href="#/privacy">Privacy</a> page and the <a href="#/terms">Terms</a>.
+      Read the full <a href="#/privacy">Privacy</a> page, the <a href="#/terms">Terms</a> and the
+      <a href="#/cookies">Cookies</a> page.
     </p>
   </section>
 
