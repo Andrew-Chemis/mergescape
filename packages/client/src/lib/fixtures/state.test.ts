@@ -17,7 +17,6 @@ import {
   fixtureMe,
   FIXTURE_PAGE_SIZE,
   FIXTURE_WEEKLY_XP,
-  isoWeekKey,
   pageOf,
 } from './state';
 import { FINAL_SKILL_XP, FINAL_XP } from './raw-log';
@@ -163,12 +162,6 @@ describe('fixture profile', () => {
     expect(fixtureInstallations('noinstall').installations).toEqual([]);
     expect(fixtureInstallations('noevents').installations).toHaveLength(1);
     expect(fixtureInstallations().installations).toHaveLength(1);
-  });
-
-  it('computes ISO week keys', () => {
-    expect(isoWeekKey(Date.UTC(2026, 10, 11))).toBe('2026-46');
-    expect(isoWeekKey(Date.UTC(2026, 0, 1))).toBe('2026-01');
-    expect(isoWeekKey(Date.UTC(2027, 0, 1))).toBe('2026-53');
   });
 });
 

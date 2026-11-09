@@ -1,9 +1,9 @@
 <script lang="ts">
   import Breakdown from '../lib/components/Breakdown.svelte';
   import Sprite from '../lib/components/Sprite.svelte';
-  import { fixtureLogEntries } from '../lib/fixtures/state';
   import { formatGain, monsterLabel, summarize } from '../lib/format';
   import { PROMISES } from '../lib/promises';
+  import { sampleKill } from '../lib/sample';
 
   interface Props {
     /** The api's `/auth/login` URL, or null when this build has no backend. */
@@ -15,7 +15,7 @@
   let { signInHref, notice }: Props = $props();
 
   // A real kill from the scorer, so the page shows what the game explains.
-  const sample = fixtureLogEntries(Date.now())[0];
+  const sample = sampleKill(Date.now());
 
   const steps = [
     {
@@ -88,16 +88,14 @@
     </p>
   </section>
 
-  {#if sample}
-    <section class="panel parch sample" aria-labelledby="sample-heading">
-      <h2 id="sample-heading">What a kill looks like</h2>
-      <p class="summary">
-        {summarize(sample)} &middot; {monsterLabel(sample)} &middot;
-        <span class="num">{formatGain(sample.xp)} XP</span>
-      </p>
-      <Breakdown entry={sample} label="Example score breakdown" />
-    </section>
-  {/if}
+  <section class="panel parch sample" aria-labelledby="sample-heading">
+    <h2 id="sample-heading">What a kill looks like</h2>
+    <p class="summary">
+      {summarize(sample)} &middot; {monsterLabel(sample)} &middot;
+      <span class="num">{formatGain(sample.xp)} XP</span>
+    </p>
+    <Breakdown entry={sample} label="Example score breakdown" />
+  </section>
 </div>
 
 <style>

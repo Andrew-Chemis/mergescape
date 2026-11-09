@@ -393,11 +393,11 @@ describe('the other depth writes', () => {
     );
     expect((await session.gearEquip('e', { pieceId: 'fx-silver-cape' })).ok).toBe(true);
     expect(session.me?.gear.equipped.cape?.id).toBe('fx-silver-cape');
-    expect((await session.unequip('u', 'weapon')).ok).toBe(true);
+    expect((await session.gearEquip('u', { unequip: 'weapon' })).ok).toBe(true);
     expect(session.me?.gear.equipped.weapon).toBeUndefined();
     expect((await session.gearEquip('p', { petId: 'linter-cat' })).ok).toBe(true);
     expect(session.me?.gear.equipped.pet?.ref).toBe('linter-cat');
-    expect((await session.setCapeColor('d', 'azure')).ok).toBe(true);
+    expect((await session.forgeUpgrade('d', { capeColor: 'azure' })).ok).toBe(true);
     expect(session.me?.gear.capeColor).toBe('azure');
     expect((await session.forgeUpgrade('b', { upgrade: 'bellows' })).ok).toBe(true);
     expect(session.me?.forge.upgrades).toContain('bellows');

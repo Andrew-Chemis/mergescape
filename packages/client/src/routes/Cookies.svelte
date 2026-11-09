@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { utcDay } from '@mergescape/shared';
   import { TOKEN_KEY } from '../lib/api';
   import Frame from '../lib/components/Frame.svelte';
+  import LegalSection from '../lib/components/LegalSection.svelte';
   import Switch from '../lib/components/Switch.svelte';
   import { clearLocalData, consent, CONSENT_KEY, pageControls } from '../lib/consent';
   import { LEGAL_UPDATED } from '../lib/promises';
@@ -45,8 +47,8 @@
 
   const changedOn = $derived.by(() => {
     const stamp = $consent.updatedAt;
-    const date = stamp === null ? null : new Date(stamp);
-    return date !== null && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+    const at = stamp === null ? Number.NaN : new Date(stamp).getTime();
+    return Number.isNaN(at) ? null : utcDay(at);
   });
 
   const choiceText = $derived(
@@ -71,8 +73,7 @@
 </script>
 
 <Frame title="Cookies">
-  <section class="panel" aria-labelledby="plain-heading">
-    <h2 id="plain-heading">In plain words</h2>
+  <LegalSection id="plain" title="In plain words">
     <ul>
       <li><b>Mergescape sets no cookies.</b></li>
       <li>
@@ -80,10 +81,9 @@
       </li>
       <li>There are no analytics today. Nothing about your visit is measured.</li>
     </ul>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="stored-heading">
-    <h2 id="stored-heading">What is stored on this device</h2>
+  <LegalSection id="stored" title="What is stored on this device">
     <p>
       Local storage is a small store that only this site can read. Unlike cookies, its contents are
       not sent along with every request. These are exactly the keys Mergescape uses.
@@ -102,10 +102,9 @@
       All three are needed for the game to work or record a choice you made, so there is no cookie
       banner. Nothing else is written to local storage, session storage, IndexedDB or cookies.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="clear-heading">
-    <h2 id="clear-heading">Clear local data</h2>
+  <LegalSection id="clear" title="Clear local data">
     <ul>
       <li>
         <b>Settings, then Sign out</b> removes the sign-in token and reloads the page. It leaves the other
@@ -129,20 +128,18 @@
         <p class="ok">{cleared}</p>
       {/if}
     </div>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="github-heading">
-    <h2 id="github-heading">GitHub's own cookies</h2>
+  <LegalSection id="github" title="GitHub's own cookies">
     <p>
       When you sign in, your browser goes to github.com, and GitHub sets its own cookies there under
       its own privacy statement. Mergescape cannot see, read or control them. You manage them in
       your browser's settings, and your GitHub account settings show which Apps you have authorised,
       including this one.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="analytics-heading">
-    <h2 id="analytics-heading">Analytics choice</h2>
+  <LegalSection id="analytics" title="Analytics choice">
     <p>
       <b>Analytics are not yet enabled.</b> Mergescape does not measure anything about your visit
       today, whatever this switch says. The maintainer intends to add first-party,
@@ -173,10 +170,9 @@
         {/if}
       </div>
     </div>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="sound-heading">
-    <h2 id="sound-heading">The sound choice</h2>
+  <LegalSection id="sound" title="The sound choice">
     <p>
       Mergescape can play a few short chimes for the big moments: a level-up, a Feat unlocking, a
       Mogul arriving, loot, a purchase, an act clear and the character coming home.
@@ -191,7 +187,7 @@
       pressed a key on the page, so nothing plays before that, and with sound off the page does not
       even create an audio object. Clear local data resets it to off.
     </p>
-  </section>
+  </LegalSection>
 
   <p class="foot dim">
     Last updated {LEGAL_UPDATED}. See also the <a href="#/privacy">Privacy</a> page.
@@ -204,23 +200,14 @@
 </Frame>
 
 <style>
-  .panel ul {
-    margin: 0;
-    padding-left: 20px;
-    display: grid;
-    gap: 6px;
-  }
-
-  .panel p + ul,
-  .panel ul + p,
-  .panel p + p,
-  .panel p + .row,
-  .panel p + .choice,
-  .panel .row + div {
+  :global(.panel) ul + p,
+  :global(.panel) p + .row,
+  :global(.panel) p + .choice,
+  :global(.panel) .row + div {
     margin-top: 8px;
   }
 
-  .panel ul.keys {
+  :global(.panel) ul.keys {
     list-style: none;
     padding-left: 0;
     margin-top: 8px;

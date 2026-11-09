@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { clamp01 } from '@mergescape/shared';
+
   interface Props {
     /** 0 to 1. */
     fraction: number;
@@ -11,7 +13,7 @@
 
   let { fraction, label, name, tone = 'xp' }: Props = $props();
 
-  const percent = $derived(Math.round(Math.min(1, Math.max(0, fraction)) * 1000) / 10);
+  const percent = $derived(Math.round(clamp01(fraction) * 1000) / 10);
 </script>
 
 <div class="meter-wrap">

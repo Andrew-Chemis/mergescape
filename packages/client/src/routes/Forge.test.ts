@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
 import { makePiece } from '@mergescape/shared';
 import { ApiError } from '../lib/api';
@@ -172,13 +172,51 @@ describe('Forge, starting and collecting orders', () => {
   });
 
   it('turns a finished order into "ready" when the clock passes it', async () => {
-    const { vi } = await import('vitest');
     await renderApp({ hash: '#/forge' });
     expect(textOf(section('Forge'))).toContain('Working: Silver Blade');
     vi.setSystemTime(NOW + 5 * 3_600_000);
     expect(
       await screen.findByRole('button', { name: 'Collect Silver Blade' }, { timeout: 3000 }),
     ).toBeTruthy();
+  });
+});
+
+describe('Forge, the clock', () => {
+  const oneSecondClocks = (spy: { mock: { calls: unknown[][] } }): number =>
+    spy.mock.calls.filter(([, delay]) => delay === 1000).length;
+  /** The timer the screen's one-second clock got (other code, such as `waitFor`, also uses intervals). */
+  const clockTimer = (spy: { mock: { calls: unknown[][]; results: { value: unknown }[] } }) =>
+    spy.mock.results[spy.mock.calls.findIndex(([, delay]) => delay === 1000)]?.value;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('ticks while an order is working and stops once it is ready', async () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    const stopped = vi.spyOn(globalThis, 'clearInterval');
+    await renderApp({ hash: '#/forge' });
+    expect(oneSecondClocks(started)).toBe(1);
+    const timer = clockTimer(started);
+    expect(timer).toBeDefined();
+    expect(stopped).not.toHaveBeenCalledWith(timer);
+    // Its own ticks do not restart it.
+    vi.setSystemTime(NOW + 5_000);
+    await waitFor(
+      () => expect(within(section('Forge')).getByRole('timer').textContent?.trim()).toBe('4:59:55'),
+      { timeout: 3000 },
+    );
+    expect(oneSecondClocks(started)).toBe(1);
+    expect(stopped).not.toHaveBeenCalledWith(timer);
+    vi.setSystemTime(NOW + 5 * 3_600_000);
+    await screen.findByRole('button', { name: 'Collect Silver Blade' }, { timeout: 3000 });
+    expect(stopped).toHaveBeenCalledWith(timer);
+  });
+
+  it('does not tick when no order is working', async () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    await renderApp({ hash: '#/forge', variant: 'noevents' });
+    expect(oneSecondClocks(started)).toBe(0);
   });
 });
 

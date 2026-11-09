@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
 import { lootPackOptions, makePiece, reclaimedPiece, rollLoot } from '@mergescape/shared';
 import type { LootItem } from '@mergescape/shared';
@@ -274,18 +274,54 @@ describe('Expedition, an expedition away', () => {
     const timer = screen.getByRole('timer');
     expect(timer.textContent?.trim()).toBe('3:54:00');
     // Date is faked by the harness: move it forward and let the real one-second interval notice.
-    const { vi } = await import('vitest');
     vi.setSystemTime(NOW + 5_000);
     await waitFor(() => expect(timer.textContent?.trim()).toBe('3:53:55'), { timeout: 3000 });
   });
 
   it('turns into "back" when the clock passes the return', async () => {
-    const { vi } = await import('vitest');
     await renderApp({ hash: '#/expedition', variant: 'day0' });
     expect(screen.queryByRole('button', { name: 'Collect' })).toBeNull();
     vi.setSystemTime(NOW + 4 * HOUR);
     expect(await screen.findByRole('button', { name: 'Collect' }, { timeout: 3000 })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Back from Koko Woods' })).toBeTruthy();
+  });
+});
+
+describe('Expedition, the clock', () => {
+  const oneSecondClocks = (spy: { mock: { calls: unknown[][] } }): number =>
+    spy.mock.calls.filter(([, delay]) => delay === 1000).length;
+  /** The timer the screen's one-second clock got (other code, such as `waitFor`, also uses intervals). */
+  const clockTimer = (spy: { mock: { calls: unknown[][]; results: { value: unknown }[] } }) =>
+    spy.mock.results[spy.mock.calls.findIndex(([, delay]) => delay === 1000)]?.value;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('ticks while the character is away and stops once the trip is back', async () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    const stopped = vi.spyOn(globalThis, 'clearInterval');
+    await renderApp({ hash: '#/expedition', variant: 'day0' });
+    expect(oneSecondClocks(started)).toBe(1);
+    const timer = clockTimer(started);
+    expect(timer).toBeDefined();
+    expect(stopped).not.toHaveBeenCalledWith(timer);
+    // Its own ticks do not restart it.
+    vi.setSystemTime(NOW + 5_000);
+    await waitFor(() => expect(screen.getByRole('timer').textContent?.trim()).toBe('3:53:55'), {
+      timeout: 3000,
+    });
+    expect(oneSecondClocks(started)).toBe(1);
+    expect(stopped).not.toHaveBeenCalledWith(timer);
+    vi.setSystemTime(NOW + 4 * HOUR);
+    await screen.findByRole('button', { name: 'Collect' }, { timeout: 3000 });
+    expect(stopped).toHaveBeenCalledWith(timer);
+  });
+
+  it('does not tick when the character is not away', async () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    await renderApp({ hash: '#/expedition' });
+    expect(oneSecondClocks(started)).toBe(0);
   });
 });
 

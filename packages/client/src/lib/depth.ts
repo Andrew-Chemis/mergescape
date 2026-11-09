@@ -1,5 +1,5 @@
 /**
- * The depth layer's pure helpers (tasks 22 and 23): labels, durations, the views a screen draws from a
+ * The depth layer's pure helpers (tasks 22 and 23): labels, the views a screen draws from a
  * profile, and what a loot item is called. Nothing here touches the network or the DOM.
  *
  * The api answers `GET /expedition` and `GET /forge` with views that are plain functions of the profile
@@ -38,7 +38,7 @@ import type {
   Satchel,
 } from '@mergescape/shared';
 import { levelFor } from '@mergescape/shared';
-import { formatDecimal } from './format';
+import { formatCoarse, formatDecimal, MATERIAL_LABELS } from './format';
 import { GEAR_TIER_PALETTES, heroPaletteFor } from './sprites';
 import type { HeroPalette } from './sprites';
 import type {
@@ -53,19 +53,6 @@ import type {
 // ---------------------------------------------------------------------------------------------
 // Words
 // ---------------------------------------------------------------------------------------------
-
-export const MATERIAL_LABELS: Readonly<Record<MaterialKind, string>> = {
-  ore: 'Ore',
-  timber: 'Timber',
-  lore: 'Lore',
-  ink: 'Ink',
-  provisions: 'Provisions',
-  flux: 'Flux',
-  silver: 'Silver',
-  mithril: 'Mithril',
-  rune: 'Rune',
-  dragon: 'Dragon scale',
-};
 
 /** The four crafting-tier materials only expeditions give; the satchel strip shows them once owned. */
 export const TIER_MATERIAL_KINDS: readonly MaterialKind[] = ['silver', 'mithril', 'rune', 'dragon'];
@@ -156,52 +143,6 @@ export function toMs(value: number | string | null | undefined): number | null {
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
-}
-
-/** `9 h`, `40 min`, `under a minute`: coarse on purpose, rounded up so "Returns in" never promises early. */
-export function formatCoarse(ms: number): string {
-  const minutes = Math.ceil(Math.max(0, ms) / 60_000);
-  if (minutes < 1) {
-    return 'under a minute';
-  }
-  if (minutes < 60) {
-    return `${minutes} min`;
-  }
-  return `${Math.ceil(minutes / 60)} h`;
-}
-
-/** `3 h 36 min`: a trip's length to the minute, for the picker when Quick gear shortens it. */
-export function formatLong(ms: number): string {
-  const minutes = Math.max(0, Math.round(ms / 60_000));
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours === 0) {
-    return `${rest} min`;
-  }
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
-}
-
-/** `3:12:05`: the live countdown on the Expedition and Forge screens. */
-export function formatCountdown(ms: number): string {
-  const total = Math.ceil(Math.max(0, ms) / 1000);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-/** `Mon 9 Nov`, for the day a Feat unlocked. */
-export function formatDay(iso: string): string {
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) {
-    return '';
-  }
-  return new Date(time).toLocaleDateString('en-US', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    timeZone: 'UTC',
-  });
 }
 
 // ---------------------------------------------------------------------------------------------

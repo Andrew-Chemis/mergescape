@@ -17,11 +17,7 @@ import {
   featName,
   featRewardText,
   forgeViewFrom,
-  formatCoarse,
   formatCost,
-  formatCountdown,
-  formatLong,
-  formatDay,
   heroLook,
   lootCaption,
   lootKindLabel,
@@ -49,37 +45,6 @@ describe('time', () => {
     expect(toMs(Number.NaN)).toBeNull();
     expect(toMs(null)).toBeNull();
     expect(toMs(undefined)).toBeNull();
-  });
-
-  it.each([
-    [0, 'under a minute'],
-    [-5, 'under a minute'],
-    [30_000, '1 min'],
-    [59 * 60_000, '59 min'],
-    [60 * 60_000, '1 h'],
-    [60 * 60_000 + 1, '2 h'],
-    [8.2 * HOUR, '9 h'],
-    [9 * HOUR, '9 h'],
-  ])('says %i ms as "%s", rounding up so a return is never promised early', (ms, text) => {
-    expect(formatCoarse(ms)).toBe(text);
-  });
-
-  it('counts down to the second', () => {
-    expect(formatCountdown(3 * HOUR + 12 * 60_000 + 5_000)).toBe('3:12:05');
-    expect(formatCountdown(59_001)).toBe('0:01:00');
-    expect(formatCountdown(-1)).toBe('0:00:00');
-  });
-
-  it('says a trip to the minute', () => {
-    expect(formatLong(3.6 * HOUR)).toBe('3 h 36 min');
-    expect(formatLong(4 * HOUR)).toBe('4 h');
-    expect(formatLong(40 * 60_000)).toBe('40 min');
-    expect(formatLong(-5)).toBe('0 min');
-  });
-
-  it('names a day in UTC and tolerates a bad date', () => {
-    expect(formatDay('2026-10-30T10:00:00.000Z')).toBe('Fri, Oct 30');
-    expect(formatDay('nope')).toBe('');
   });
 });
 

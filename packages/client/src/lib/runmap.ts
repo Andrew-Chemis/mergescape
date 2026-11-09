@@ -6,7 +6,7 @@
  * A kill belongs to the act whose calendar window it fell in (Scout Mon-Tue, Wed-Thu Raid, Boss Fri-Sun),
  * which is also the window the scorer uses to send the week's Mogul against a Boss-window merge.
  */
-import { actWindow, DAY_MS, isMogulId } from '@mergescape/shared';
+import { actWindow, DAY_MS, isMogulId, WEEK_MS, weekKeyStartMs } from '@mergescape/shared';
 import type { ActId, MogulId, MonsterId } from '@mergescape/shared';
 import type { LogEntry } from './types';
 
@@ -29,43 +29,19 @@ export const ACT_DAYS: Readonly<Record<ActId, string>> = {
   boss: 'Fri–Sun',
 };
 
-const WEEK_KEY = /^(\d{4})-W?(\d{1,2})$/;
-
-/** `[year, week]` of a key such as `2026-46` or `2026-W46`, or null if it is neither. */
-function parseWeekKey(weekKey: string): [number, number] | null {
-  const match = WEEK_KEY.exec(weekKey);
-  if (!match) {
-    return null;
-  }
-  const week = Number(match[2]);
-  return week >= 1 && week <= 53 ? [Number(match[1]), week] : null;
-}
-
 /** The ISO week number, for "Week 46". */
 export function weekNumber(weekKey: string): number | null {
-  return parseWeekKey(weekKey)?.[1] ?? null;
-}
-
-/** Monday 00:00 UTC of an ISO week, as epoch milliseconds; null for a key that is not one. */
-export function weekStartMs(weekKey: string): number | null {
-  const parsed = parseWeekKey(weekKey);
-  if (!parsed) {
-    return null;
-  }
-  const [year, week] = parsed;
-  // 4 January is always in week 1; step back to its Monday, then forward whole weeks.
-  const jan4 = Date.UTC(year, 0, 4);
-  const sinceMonday = (new Date(jan4).getUTCDay() + 6) % 7;
-  return jan4 - sinceMonday * DAY_MS + (week - 1) * 7 * DAY_MS;
+  // A key `weekKeyStartMs` accepts always ends in its two-digit week.
+  return weekKeyStartMs(weekKey) === null ? null : Number(weekKey.slice(-2));
 }
 
 /** Whole days left in the week, counting today: 7 on Monday morning, 1 on Sunday, 0 once it has ended. */
 export function daysLeft(weekKey: string, now: number): number | null {
-  const start = weekStartMs(weekKey);
+  const start = weekKeyStartMs(weekKey);
   if (start === null) {
     return null;
   }
-  const remaining = start + 7 * DAY_MS - now;
+  const remaining = start + WEEK_MS - now;
   return remaining <= 0 ? 0 : Math.min(7, Math.ceil(remaining / DAY_MS));
 }
 
@@ -97,13 +73,13 @@ export function weekKills(
   mogul: MogulId | null,
 ): WeekKills {
   const nodes: Record<ActId, MapNode[]> = { scout: [], raid: [], boss: [] };
-  const start = weekStartMs(weekKey);
+  const start = weekKeyStartMs(weekKey);
   let mogulKills = 0;
   let total = 0;
   if (start === null) {
     return { nodes, mogulKills, total };
   }
-  const end = start + 7 * DAY_MS;
+  const end = start + WEEK_MS;
   const inWeek = entries
     .filter((entry) => {
       const at = Date.parse(entry.at);

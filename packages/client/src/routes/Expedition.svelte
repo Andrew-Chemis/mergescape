@@ -1,22 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { regionDefinition } from '@mergescape/shared';
+  import { HOUR_MS, regionDefinition } from '@mergescape/shared';
   import type { Charm, ExpeditionChoice, RegionId } from '@mergescape/shared';
-  import {
-    expeditionStatusOf,
-    expeditionViewFrom,
-    formatCoarse,
-    formatCountdown,
-    formatLong,
-    heroLook,
-  } from '../lib/depth';
+  import { expeditionStatusOf, expeditionViewFrom, heroLook } from '../lib/depth';
   import Frame from '../lib/components/Frame.svelte';
   import LootReveal from '../lib/components/LootReveal.svelte';
   import PackOpen from '../lib/components/PackOpen.svelte';
   import Satchel from '../lib/components/Satchel.svelte';
   import Sprite from '../lib/components/Sprite.svelte';
-  import { formatInt } from '../lib/format';
+  import { formatCoarse, formatCountdown, formatInt, formatLong } from '../lib/format';
   import type { CollectOutcome, Session } from '../lib/session.svelte';
+  import { tickWhile } from '../lib/ticker.svelte';
   import type { ShopOption } from '../lib/types';
 
   interface Props {
@@ -26,7 +20,7 @@
   let { session }: Props = $props();
 
   const me = $derived(session.me);
-  /** Ticks every second so the timer counts down and a returning trip flips to "back" on its own. */
+  /** Ticks every second while the character is away, so the timer counts down and the trip flips to "back" on its own. */
   let now = $state(Date.now());
   const view = $derived(session.expedition ?? (me ? expeditionViewFrom(me, now) : null));
   const trip = $derived(me?.expedition ?? null);
@@ -53,12 +47,15 @@
   const remaining = $derived(trip ? Math.max(0, trip.returnsAt - now) : 0);
   const packs = $derived(me?.charmPacks ?? []);
 
+  tickWhile(
+    () => status === 'away',
+    () => {
+      now = Date.now();
+    },
+  );
+
   onMount(() => {
     void session.loadExpedition();
-    const timer = setInterval(() => {
-      now = Date.now();
-    }, 1000);
-    return () => clearInterval(timer);
   });
 
   function choiceLabel(value: ExpeditionChoice): string {
@@ -330,7 +327,7 @@
                 />
                 <span class="name">{choiceLabel(candidate.choice)}</span>
                 <span class="cost num">{costLabel(candidate.provisions)}</span>
-                {#if candidate.durationMs !== undefined && candidate.durationMs < candidate.hours * 3_600_000}
+                {#if candidate.durationMs !== undefined && candidate.durationMs < candidate.hours * HOUR_MS}
                   <span class="cost">Takes {formatLong(candidate.durationMs)} with your gear</span>
                 {/if}
                 {#if !candidate.affordable}

@@ -2,8 +2,8 @@
   import { MOGULS, MOGUL_DISCLAIMER } from '@mergescape/shared';
   import Frame from '../lib/components/Frame.svelte';
   import Sprite from '../lib/components/Sprite.svelte';
-  import { CREATURES, formatDay, isMet } from '../lib/bestiary';
-  import { formatInt } from '../lib/format';
+  import { CREATURES, isMet } from '../lib/bestiary';
+  import { formatDay, formatInt } from '../lib/format';
   import { MONSTER_NAMES } from '../lib/names';
   import type { Session } from '../lib/session.svelte';
   import { MONSTER_SPRITE } from '../lib/sprites';

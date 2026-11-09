@@ -18,15 +18,8 @@
  * without a websocket; the interval is the one knob to turn if request volume ever matters.
  */
 import { levelFor } from '@mergescape/shared';
-import type {
-  CapeColor,
-  Charm,
-  ExpeditionState,
-  GearPiece,
-  GearSlot,
-  LootItem,
-  Skill,
-} from '@mergescape/shared';
+import { SvelteSet } from 'svelte/reactivity';
+import type { Charm, ExpeditionState, GearPiece, LootItem, Skill } from '@mergescape/shared';
 import { ApiError } from './api';
 import { expeditionStatusOf, expeditionViewFrom, forgeViewFrom } from './depth';
 import { describeError } from './errors';
@@ -94,6 +87,17 @@ export interface SessionOptions {
 
 export const DEFAULT_POLL_MS = 30_000;
 
+/** A request the api turned down, or never saw: the `ActionResult` a control shows beside itself. */
+type Refused = ActionResult & { ok: false };
+
+/** What every read and write answers when there is no session to ask. */
+const SIGNED_OUT: Refused = Object.freeze({
+  ok: false,
+  status: 0,
+  code: null,
+  message: 'You are signed out.',
+});
+
 export class Session {
   status = $state<SessionStatus>('loading');
   /** Shown on the error panel; set with status `error`. */
@@ -142,7 +146,7 @@ export class Session {
    */
   #seenFeats: string[] | null = null;
   /** Feats a collect just reported unlocked, shown even before the list has been read again. */
-  #justUnlocked: string[] = [];
+  readonly #justUnlocked = new SvelteSet<string>();
 
   /** `api` null means there is no token: the session starts (and stays) signed out. */
   constructor(api: Api | null, options: SessionOptions = {}) {
@@ -169,14 +173,11 @@ export class Session {
         api.log(null),
         api.installations(),
       ]);
-      this.me = me;
-      this.week = me.week ?? null;
-      this.#sync();
+      this.#adoptMe(me);
       this.entries = log.entries;
       this.nextCursor = log.nextCursor;
       this.installations = installations.installations;
       this.fresh = null;
-      this.now = Date.now();
       this.status = 'ready';
     } catch (error) {
       this.#fail(error);
@@ -205,9 +206,7 @@ export class Session {
       if (!stale) {
         const earlier = this.week;
         const away = this.me ? expeditionStatusOf(this.me.expedition, this.now) === 'away' : false;
-        this.me = me;
-        this.week = me.week ?? null;
-        this.#sync();
+        this.#adoptMe(me);
         // Two moments that happen while the tab is open and have no screen of their own: an act clearing
         // (a further act cleared in the same week) and the character coming home. Cues are opt-in.
         const later = me.week;
@@ -245,12 +244,12 @@ export class Session {
             gearTierFor(after).tier !== gearTierFor(before).tier ? gearTierFor(after).tier : null,
         };
       }
-      this.now = Date.now();
-    } catch (error) {
-      // A failed background refresh keeps what is on screen; only a rejected token ends the session.
-      if (error instanceof ApiError && error.status === 401) {
-        this.#fail(error);
+      if (stale) {
+        // Adopting a profile moves the clock; a stale answer still counts as a refresh.
+        this.now = Date.now();
       }
+    } catch (error) {
+      this.#quiet(error);
     } finally {
       this.#refreshing = false;
     }
@@ -305,24 +304,11 @@ export class Session {
   // -------------------------------------------------------------------------------------------
 
   /** `GET /week`: the Shop and the Run Map call it when they open, so a shop that just opened shows. */
-  async refreshWeek(): Promise<void> {
-    const api = this.#api;
-    if (!api || this.status !== 'ready') {
-      return;
-    }
-    const epoch = this.#epoch;
-    try {
-      const week = await api.getWeek();
-      if (epoch !== this.#epoch || this.#writes > 0) {
-        return;
-      }
-      this.#adopt(week);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        this.#fail(error);
-      }
-      // Any other failure keeps the run already on screen.
-    }
+  refreshWeek(): Promise<void> {
+    return this.#loadSlice(
+      (api) => api.getWeek(),
+      (week) => this.#adopt(week),
+    );
   }
 
   /** `POST /shop/buy`. `scope` names the control, e.g. `charm:0`, for its inline error. */
@@ -361,54 +347,52 @@ export class Session {
   // -------------------------------------------------------------------------------------------
 
   /** `GET /expedition`: the Expedition screen calls it when it opens. */
-  async loadExpedition(): Promise<void> {
-    const api = this.#api;
-    if (!api || this.status !== 'ready') {
-      return;
-    }
-    const epoch = this.#epoch;
-    try {
-      const view = await api.expedition();
-      if (epoch === this.#epoch && this.#writes === 0) {
+  loadExpedition(): Promise<void> {
+    return this.#loadSlice(
+      (api) => api.expedition(),
+      (view) => {
         this.expedition = view;
-      }
-    } catch (error) {
-      this.#quiet(error);
-    }
+      },
+    );
   }
 
   /** `GET /forge`: the Forge screen calls it when it opens. */
-  async loadForge(): Promise<void> {
-    const api = this.#api;
-    if (!api || this.status !== 'ready') {
-      return;
-    }
-    const epoch = this.#epoch;
-    try {
-      const view = await api.forge();
-      if (epoch === this.#epoch && this.#writes === 0) {
+  loadForge(): Promise<void> {
+    return this.#loadSlice(
+      (api) => api.forge(),
+      (view) => {
         this.forge = view;
-      }
-    } catch (error) {
-      this.#quiet(error);
-    }
+      },
+    );
   }
 
   /** `GET /feats`: the Feats screen and Town call it. What it finds new becomes the Town banner. */
-  async loadFeats(): Promise<void> {
+  loadFeats(): Promise<void> {
+    return this.#loadSlice(
+      (api) => api.feats(),
+      ({ feats }) => {
+        this.feats = feats;
+        this.#sync();
+        this.#watchFeats();
+      },
+    );
+  }
+
+  /**
+   * One background read of a slice of the session: nothing unless the session is ready, and the answer is
+   * dropped when a write started or ended while it was in the air (see `#epoch`).
+   */
+  async #loadSlice<T>(read: (api: Api) => Promise<T>, apply: (value: T) => void): Promise<void> {
     const api = this.#api;
     if (!api || this.status !== 'ready') {
       return;
     }
     const epoch = this.#epoch;
     try {
-      const { feats } = await api.feats();
-      if (epoch !== this.#epoch || this.#writes > 0) {
-        return;
+      const value = await read(api);
+      if (epoch === this.#epoch && this.#writes === 0) {
+        apply(value);
       }
-      this.feats = feats;
-      this.#sync();
-      this.#watchFeats(feats);
     } catch (error) {
       this.#quiet(error);
     }
@@ -427,19 +411,27 @@ export class Session {
    * unlocks (a scored event while the tab is open, or a collect) is pending until the player dismisses
    * the banner; it survives navigation and polling, not a reload.
    */
-  #watchFeats(feats: readonly FeatView[]): void {
-    const unlocked = feats.filter((feat) => feat.unlocked).map((feat) => feat.id);
-    this.#seenFeats ??= unlocked;
-    const seen = this.#seenFeats;
-    this.pendingFeats = unlocked.filter(
-      (id) => !seen.includes(id) || this.#justUnlocked.includes(id),
-    );
+  #watchFeats(): void {
+    const listed = this.feats;
+    const unlocked = listed?.filter((feat) => feat.unlocked).map((feat) => feat.id) ?? [];
+    if (listed) {
+      this.#seenFeats ??= unlocked;
+    }
+    const seen = this.#seenFeats ?? [];
+    const news = unlocked.filter((id) => !seen.includes(id) || this.#justUnlocked.has(id));
+    // A collect's Feats are news before the list has been read again to say so.
+    for (const id of this.#justUnlocked) {
+      if (!news.includes(id)) {
+        news.push(id);
+      }
+    }
+    this.pendingFeats = news;
   }
 
   /** Dismiss the Feat unlock banner: what it announced is seen. */
   dismissFeatBanner(): void {
     this.#seenFeats = [...(this.#seenFeats ?? []), ...this.pendingFeats];
-    this.#justUnlocked = [];
+    this.#justUnlocked.clear();
     this.pendingFeats = [];
   }
 
@@ -469,30 +461,20 @@ export class Session {
     if (answer.featsUnlocked.length > 0) {
       // The banner does not wait for the list to be read again.
       for (const id of answer.featsUnlocked) {
-        if (!this.#justUnlocked.includes(id)) {
-          this.#justUnlocked.push(id);
-        }
+        this.#justUnlocked.add(id);
       }
-      this.pendingFeats = [
-        ...this.pendingFeats,
-        ...answer.featsUnlocked.filter((id) => !this.pendingFeats.includes(id)),
-      ];
+      this.#watchFeats();
       void this.loadFeats();
     }
     return { ...result, collect };
   }
 
   /** `GET /packs/:seed`: the three Charms in an unopened loot pack. */
-  async packOptions(seed: number): Promise<ActionResult & { options?: Charm[] }> {
-    const api = this.#api;
-    if (!api) {
-      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
-    }
-    try {
-      return { ok: true, options: (await api.packOptions(seed)).options };
-    } catch (error) {
-      return this.#failure(error);
-    }
+  packOptions(seed: number): Promise<ActionResult & { options?: Charm[] }> {
+    return this.#read(async (api) => ({
+      ok: true as const,
+      options: (await api.packOptions(seed)).options,
+    }));
   }
 
   /** `POST /packs/open`: keep one of the pack's three Charms. */
@@ -528,16 +510,6 @@ export class Session {
     return this.#write(scope, (api, options) => api.gearEquip(input, options));
   }
 
-  /** The cape colour, by name; a convenience over `forgeUpgrade`. */
-  setCapeColor(scope: string, color: CapeColor | null): Promise<ActionResult> {
-    return this.forgeUpgrade(scope, { capeColor: color });
-  }
-
-  /** Empty a gear slot; a convenience over `gearEquip`. */
-  unequip(scope: string, slot: GearSlot): Promise<ActionResult> {
-    return this.gearEquip(scope, { unequip: slot });
-  }
-
   /** `POST /feats/pin`: pin an unlocked Feat to the Character screen and the badge (up to three), or unpin it. */
   featPin(scope: string, featId: string, pinned: boolean): Promise<ActionResult> {
     return this.#write(scope, (api, options) => api.featPin(featId, pinned, options));
@@ -549,16 +521,8 @@ export class Session {
   }
 
   /** `GET /export`: the player's data as parsed JSON. */
-  async exportData(): Promise<ActionResult & { data?: Record<string, unknown> }> {
-    const api = this.#api;
-    if (!api) {
-      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
-    }
-    try {
-      return { ok: true, data: await api.exportData() };
-    } catch (error) {
-      return this.#failure(error);
-    }
+  exportData(): Promise<ActionResult & { data?: Record<string, unknown> }> {
+    return this.#read(async (api) => ({ ok: true as const, data: await api.exportData() }));
   }
 
   /** `POST /delete`. Resolves ok on 204; a wrong login comes back as `confirm_mismatch` (400). */
@@ -566,7 +530,7 @@ export class Session {
     const scope = 'delete';
     const api = this.#api;
     if (!api) {
-      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+      return SIGNED_OUT;
     }
     this.busy = scope;
     try {
@@ -578,6 +542,19 @@ export class Session {
       return this.#failure(error);
     } finally {
       this.busy = null;
+    }
+  }
+
+  /** A read that is not a slice of the session: what it answers with, or why it could not. */
+  async #read<R extends { ok: true }>(call: (api: Api) => Promise<R>): Promise<R | Refused> {
+    const api = this.#api;
+    if (!api) {
+      return SIGNED_OUT;
+    }
+    try {
+      return await call(api);
+    } catch (error) {
+      return this.#failure(error);
     }
   }
 
@@ -599,10 +576,7 @@ export class Session {
   ): Promise<{ result: ActionResult; answer: T | null }> {
     const api = this.#api;
     if (!api) {
-      return {
-        result: { ok: false, status: 0, code: null, message: 'You are signed out.' },
-        answer: null,
-      };
+      return { result: SIGNED_OUT, answer: null };
     }
     if (this.busy !== null) {
       return {
@@ -618,11 +592,7 @@ export class Session {
     try {
       answer = await call(api, this.#replay(scope));
       this.#pending = {};
-      const week = answer.week ?? answer.me.week ?? this.week;
-      this.me = { ...answer.me, week: week ?? null };
-      this.week = week ?? null;
-      this.#sync();
-      this.now = Date.now();
+      this.#adoptMe({ ...answer.me, week: answer.week ?? answer.me.week ?? this.week ?? null });
       result = { ok: true };
     } catch (error) {
       this.#remember(scope, error);
@@ -637,6 +607,14 @@ export class Session {
       void this.#resync();
     }
     return { result, answer };
+  }
+
+  /** Take a fresh profile: it replaces `me`, its run replaces `week`, the views follow, and the clock moves. */
+  #adoptMe(me: MeResponse): void {
+    this.me = me;
+    this.week = me.week ?? null;
+    this.#sync();
+    this.now = Date.now();
   }
 
   /** Rebuild the expedition and Forge views from the profile, so a screen shows what the profile says. */
@@ -674,7 +652,7 @@ export class Session {
     }
   }
 
-  #failure(error: unknown): ActionResult & { ok: false } {
+  #failure(error: unknown): Refused {
     if (error instanceof ApiError && error.status === 401) {
       this.#fail(error);
     }
@@ -698,10 +676,7 @@ export class Session {
       if (epoch !== this.#epoch || this.#writes > 0) {
         return;
       }
-      this.me = me;
-      this.week = me.week ?? null;
-      this.#sync();
-      this.now = Date.now();
+      this.#adoptMe(me);
     } catch {
       // The message already on screen stands; the next poll catches up.
     }

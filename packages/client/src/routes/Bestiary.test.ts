@@ -5,8 +5,9 @@
 import { screen, within } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import { MOGUL_DISCLAIMER, MOGULS } from '@mergescape/shared';
-import { CREATURES, formatDay, isMet } from '../lib/bestiary';
+import { CREATURES, isMet } from '../lib/bestiary';
 import { fixtureMe } from '../lib/fixtures/state';
+import { formatDay } from '../lib/format';
 import { forbidNetwork, NOW, renderApp, textOf } from '../test/helpers';
 
 forbidNetwork();
@@ -105,11 +106,6 @@ describe('Bestiary helpers', () => {
     expect(isMet('merge-goblin', {}, { 'merge-goblin': '2026-01-01T00:00:00Z' })).toBe(true);
     expect(isMet('merge-goblin', { 'merge-goblin': 0 }, {})).toBe(false);
     expect(isMet('merge-goblin', {}, {})).toBe(false);
-  });
-
-  it('formats a day in UTC and tolerates junk', () => {
-    expect(formatDay('2026-11-03T23:59:00Z')).toBe('Nov 3, 2026');
-    expect(formatDay('not a date')).toBe('');
   });
 
   it('describes the eight creatures of design.md 7.1, four of them elites', () => {

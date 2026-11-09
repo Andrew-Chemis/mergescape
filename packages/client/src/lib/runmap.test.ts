@@ -1,28 +1,29 @@
 import { describe, expect, it } from 'vitest';
+import { weekKeyStartMs } from '@mergescape/shared';
 import { fixtureLogEntries } from './fixtures/state';
-import { ACT_DAYS, daysLeft, isElite, weekKills, weekNumber, weekStartMs } from './runmap';
+import { ACT_DAYS, daysLeft, isElite, weekKills, weekNumber } from './runmap';
 import type { LogEntry } from './types';
 
 const DAY = 24 * 3_600_000;
 const NOW = Date.UTC(2026, 10, 11, 14, 5, 0);
 
-describe('weekStartMs and weekNumber', () => {
+describe('weekKeyStartMs and weekNumber', () => {
   it('finds Monday 00:00 UTC of an ISO week, for both spellings of the key', () => {
-    expect(weekStartMs('2026-46')).toBe(Date.UTC(2026, 10, 9));
-    expect(weekStartMs('2026-W46')).toBe(Date.UTC(2026, 10, 9));
+    expect(weekKeyStartMs('2026-46')).toBe(Date.UTC(2026, 10, 9));
+    expect(weekKeyStartMs('2026-W46')).toBe(Date.UTC(2026, 10, 9));
     // Year edges: week 1 of 2026 starts on Monday 29 December 2025; 2026 has 53 weeks.
-    expect(weekStartMs('2026-01')).toBe(Date.UTC(2025, 11, 29));
-    expect(weekStartMs('2026-53')).toBe(Date.UTC(2026, 11, 28));
-    expect(weekStartMs('2027-01')).toBe(Date.UTC(2027, 0, 4));
+    expect(weekKeyStartMs('2026-01')).toBe(Date.UTC(2025, 11, 29));
+    expect(weekKeyStartMs('2026-53')).toBe(Date.UTC(2026, 11, 28));
+    expect(weekKeyStartMs('2027-01')).toBe(Date.UTC(2027, 0, 4));
   });
 
   it('agrees with the week key the fixture derives from a date', () => {
-    expect(new Date(weekStartMs('2026-46') as number).getUTCDay()).toBe(1);
+    expect(new Date(weekKeyStartMs('2026-46') as number).getUTCDay()).toBe(1);
   });
 
   it('rejects keys that are not weeks', () => {
     for (const bad of ['', 'nope', '2026-00', '2026-54', '2026', '26-46']) {
-      expect(weekStartMs(bad)).toBeNull();
+      expect(weekKeyStartMs(bad)).toBeNull();
       expect(weekNumber(bad)).toBeNull();
     }
     expect(weekNumber('2026-W07')).toBe(7);

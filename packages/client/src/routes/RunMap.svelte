@@ -7,6 +7,7 @@
     FLAT_TARGET_XP,
     mogulDefinition,
     MOGUL_DISCLAIMER,
+    weekKeyStartMs,
   } from '@mergescape/shared';
   import type { ActId } from '@mergescape/shared';
   import Frame from '../lib/components/Frame.svelte';
@@ -17,7 +18,7 @@
   import { formatInt } from '../lib/format';
   import { ACT_LABELS, MONSTER_NAMES } from '../lib/names';
   import { isNewWeek, markWeekSeen } from '../lib/reveal';
-  import { ACT_DAYS, daysLeft, weekKills, weekNumber, weekStartMs } from '../lib/runmap';
+  import { ACT_DAYS, daysLeft, weekKills, weekNumber } from '../lib/runmap';
   import type { Session } from '../lib/session.svelte';
   import { MONSTER_SPRITE } from '../lib/sprites';
 
@@ -41,7 +42,7 @@
   });
 
   $effect(() => {
-    const start = week ? weekStartMs(week.weekKey) : null;
+    const start = week ? weekKeyStartMs(week.weekKey) : null;
     if (start !== null) {
       untrack(() => void session.loadSince(start));
     }

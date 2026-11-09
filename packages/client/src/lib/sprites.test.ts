@@ -85,6 +85,22 @@ describe('sprite set', () => {
     expect(translucent[0]?.opacity).toBe(0.78);
   });
 
+  it('builds each sprite once and hands the same paths back, for any palette and cape', () => {
+    expect(spritePaths('goblin')).toBe(spritePaths('goblin'));
+    expect(spritePaths('hero', 'iron', '#3a78d8')).toBe(spritePaths('hero', 'iron', '#3a78d8'));
+    expect(spritePaths('hero', 'iron', '#3a78d8')).not.toBe(spritePaths('hero', 'iron'));
+    expect(spritePaths('hero', 'iron')).not.toBe(spritePaths('hero', 'rune'));
+  });
+
+  it('stays correct when odd input fills its cache', () => {
+    const before = spritePaths('hero', 'iron', '#112233');
+    for (let i = 0; i < 600; i += 1) {
+      spritePaths('hero', 'iron', `#${i.toString(16).padStart(6, '0')}`);
+    }
+    const after = spritePaths('hero', 'iron', '#112233');
+    expect(after).toEqual(before);
+  });
+
   it('draws the sleeping hero with closed eyes (same size, different pixels)', () => {
     expect(renderSprite('hero-asleep')).not.toBe(renderSprite('hero'));
     expect(coveredPixels('hero-asleep')).toHaveLength(coveredPixels('hero').length);

@@ -1,9 +1,10 @@
 /** Formatting helpers. Locale is fixed to en-US so numbers read the same everywhere (and in tests). */
-import { SKILL_LABELS, SKILLS } from '@mergescape/shared';
-import type { Supplies } from '@mergescape/shared';
+import { MINUTE_MS, SKILL_LABELS, SKILLS, SUPPLY_KINDS } from '@mergescape/shared';
+import type { MaterialKind, Supplies } from '@mergescape/shared';
 import type { LogEntry } from './types';
 import { MONSTER_NAMES } from './names';
 
+const SECOND_MS = 1000;
 const INT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const DECIMAL = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
@@ -28,7 +29,7 @@ export function relativeTime(iso: string, now: number): string {
   if (Number.isNaN(then)) {
     return '';
   }
-  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  const seconds = Math.max(0, Math.round((now - then) / SECOND_MS));
   if (seconds < 45) {
     return 'just now';
   }
@@ -108,18 +109,84 @@ export function creditedSkills(entry: LogEntry): { label: string; xp: number }[]
   }));
 }
 
-const SUPPLY_LABELS: readonly [keyof Supplies, string][] = [
-  ['ore', 'Ore'],
-  ['timber', 'Timber'],
-  ['lore', 'Lore'],
-  ['ink', 'Ink'],
-  ['provisions', 'Provisions'],
-  ['flux', 'Flux'],
-];
+/** The name of every satchel material: the six supplies events drop, then the four tiers expeditions give. */
+export const MATERIAL_LABELS: Readonly<Record<MaterialKind, string>> = {
+  ore: 'Ore',
+  timber: 'Timber',
+  lore: 'Lore',
+  ink: 'Ink',
+  provisions: 'Provisions',
+  flux: 'Flux',
+  silver: 'Silver',
+  mithril: 'Mithril',
+  rune: 'Rune',
+  dragon: 'Dragon scale',
+};
 
 /** `+3 Ore, +1 Timber`: the supplies a row dropped (game-design.md section 6.1). Empty when none. */
 export function suppliesText(supplies: Supplies): string {
-  return SUPPLY_LABELS.filter(([key]) => supplies[key] > 0)
-    .map(([key, label]) => `+${supplies[key]} ${label}`)
+  return SUPPLY_KINDS.filter((kind) => supplies[kind] > 0)
+    .map((kind) => `+${supplies[kind]} ${MATERIAL_LABELS[kind]}`)
     .join(', ');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Days and durations
+// ---------------------------------------------------------------------------------------------
+
+/** The two ways a calendar day is written: `Nov 3, 2026`, and `Fri, Oct 30` for a day this year. */
+const DAY_STYLES = {
+  date: { year: 'numeric', month: 'short', day: 'numeric' },
+  weekday: { weekday: 'short', day: 'numeric', month: 'short' },
+} as const satisfies Record<string, Intl.DateTimeFormatOptions>;
+
+/** The UTC calendar day of an ISO timestamp, so it reads the same everywhere. Empty for a bad timestamp. */
+export function formatDay(iso: string, style: keyof typeof DAY_STYLES = 'date'): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) {
+    return '';
+  }
+  return new Date(at).toLocaleDateString('en-US', { ...DAY_STYLES[style], timeZone: 'UTC' });
+}
+
+/**
+ * `ms` (never below 0) rounded with `round` to a whole number of `unitMs`, then split into hours, minutes
+ * and seconds; the minutes and seconds are the remainders. Each formatter below picks its own unit and
+ * rounding.
+ */
+function splitMs(
+  ms: number,
+  unitMs: number,
+  round: (value: number) => number,
+): { hours: number; minutes: number; seconds: number } {
+  const total = round(Math.max(0, ms) / unitMs) * (unitMs / SECOND_MS);
+  return {
+    hours: Math.floor(total / 3600),
+    minutes: Math.floor((total % 3600) / 60),
+    seconds: total % 60,
+  };
+}
+
+/** `9 h`, `40 min`, `under a minute`: coarse on purpose, rounded up so "Returns in" never promises early. */
+export function formatCoarse(ms: number): string {
+  const { hours, minutes } = splitMs(ms, MINUTE_MS, Math.ceil);
+  if (hours === 0) {
+    return minutes === 0 ? 'under a minute' : `${minutes} min`;
+  }
+  return `${minutes === 0 ? hours : hours + 1} h`;
+}
+
+/** `3 h 36 min`: a trip's length to the minute, for the picker when Quick gear shortens it. */
+export function formatLong(ms: number): string {
+  const { hours, minutes } = splitMs(ms, MINUTE_MS, Math.round);
+  if (hours === 0) {
+    return `${minutes} min`;
+  }
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+}
+
+/** `3:12:05`: the live countdown on the Expedition and Forge screens. */
+export function formatCountdown(ms: number): string {
+  const { hours, minutes, seconds } = splitMs(ms, SECOND_MS, Math.ceil);
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }

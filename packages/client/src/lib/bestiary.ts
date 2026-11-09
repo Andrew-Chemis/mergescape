@@ -43,17 +43,3 @@ export function isMet(
 ): boolean {
   return (kills[id] ?? 0) > 0 || firstSeen[id] !== undefined;
 }
-
-/** `Nov 3, 2026`, in UTC so the date reads the same everywhere. */
-export function formatDay(iso: string): string {
-  const at = Date.parse(iso);
-  if (Number.isNaN(at)) {
-    return '';
-  }
-  return new Date(at).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}

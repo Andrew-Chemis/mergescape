@@ -7,6 +7,7 @@
     petDefinition,
     recipeDefinition,
     STATION_IDS,
+    wornPower,
   } from '@mergescape/shared';
   import type { CapeColor, GearPiece, GearSlot } from '@mergescape/shared';
   import {
@@ -15,7 +16,6 @@
     CAPE_COLOR_LABELS,
     canPay,
     formatCost,
-    formatCountdown,
     forgeViewFrom,
     pieceDetail,
     pieceName,
@@ -31,8 +31,9 @@
   import GearSprite from '../lib/components/GearSprite.svelte';
   import Satchel from '../lib/components/Satchel.svelte';
   import type { ActionResult } from '../lib/errors';
-  import { formatDecimal } from '../lib/format';
+  import { formatCountdown, formatDecimal } from '../lib/format';
   import type { Session } from '../lib/session.svelte';
+  import { tickWhile } from '../lib/ticker.svelte';
   import type { RecipeView, Station } from '../lib/types';
 
   interface Props {
@@ -42,7 +43,7 @@
   let { session }: Props = $props();
 
   const me = $derived(session.me);
-  /** Ticks every second so order timers count down and a finished order flips to "ready" on its own. */
+  /** Ticks every second while an order is working, so its timer counts down and a finished order flips to "ready" on its own. */
   let now = $state(Date.now());
   const view = $derived(session.forge ?? (me ? forgeViewFrom(me, now) : null));
   const working = $derived(session.busy !== null);
@@ -58,21 +59,22 @@
   /** What the last collected order made. */
   let made = $state<GearPiece | null>(null);
 
-  const gearPower = $derived(
-    Object.values(worn).reduce((sum, piece) => sum + piece.power, 0) + (me?.gear.setBonus ?? 0),
-  );
+  const gearPower = $derived(wornPower(Object.values(worn), me?.gear.setBonus ?? 0));
   const setTier = $derived.by(() => {
     const pieces = Object.values(worn);
     const tiers = new Set(pieces.map((piece) => piece.tier));
     return me && me.gear.setBonus > 0 && tiers.size === 1 ? (pieces[0]?.tier ?? null) : null;
   });
 
+  tickWhile(
+    () => STATION_IDS.some((id) => stationStatusOf(me?.forge.stations[id], now) === 'working'),
+    () => {
+      now = Date.now();
+    },
+  );
+
   onMount(() => {
     void session.loadForge();
-    const timer = setInterval(() => {
-      now = Date.now();
-    }, 1000);
-    return () => clearInterval(timer);
   });
 
   async function act(

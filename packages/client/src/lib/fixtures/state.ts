@@ -17,7 +17,10 @@ import {
   biomeFor,
   charmDefinition,
   charmSellPrice,
+  DAY_MS,
+  isoWeekKey,
   makeCharm,
+  MINUTE_MS,
   MOGUL_COSMETICS,
   pledgeCard,
   pledgeDefinition,
@@ -54,9 +57,6 @@ export const FIXTURE_PAGE_SIZE = 8;
 
 export const FIXTURE_LOGIN = 'octo-dev';
 export const FIXTURE_GITHUB_ID = 4242;
-
-const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
 
 export const FIXTURE_CHARMS: readonly Charm[] = [
   { id: 'rubber-duck', name: 'Rubber Duck', rarity: 'common', power: 0.25 },
@@ -104,17 +104,6 @@ const FIRST_SEEN_DAYS_AGO: Partial<Record<MonsterId, number>> = {
   'two-pizza-boss': 70,
 };
 
-/** ISO week key `yyyy-ww` (weeks start Monday, Thursday decides the year). */
-export function isoWeekKey(now: number): string {
-  const date = new Date(now);
-  const day = (date.getUTCDay() + 6) % 7; // Monday = 0
-  const thursday = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  thursday.setUTCDate(thursday.getUTCDate() - day + 3);
-  const yearStart = Date.UTC(thursday.getUTCFullYear(), 0, 1);
-  const week = Math.ceil(((thursday.getTime() - yearStart) / DAY + 1) / 7);
-  return `${thursday.getUTCFullYear()}-${String(week).padStart(2, '0')}`;
-}
-
 /** True for the two variants of a brand-new character with no kills at all. */
 function isFresh(variant: FixtureVariant): boolean {
   return variant === 'noevents' || variant === 'noinstall';
@@ -123,14 +112,14 @@ function isFresh(variant: FixtureVariant): boolean {
 /** The Combat Log rows, newest first, stamped relative to `now`. */
 export function fixtureLogEntries(now: number, variant: FixtureVariant = 'active'): LogEntry[] {
   if (variant === 'day0') {
-    const at = new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE).toISOString();
+    const at = new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE_MS).toISOString();
     return [{ ...DAY0_ROW, id: `${at}#fixture-0001`, at }];
   }
   if (isFresh(variant)) {
     return [];
   }
   return RAW_LOG.map(({ minutesAgo, row }, index) => {
-    const at = new Date(now - minutesAgo * MINUTE).toISOString();
+    const at = new Date(now - minutesAgo * MINUTE_MS).toISOString();
     return { ...row, id: `${at}#fixture-${String(index + 1).padStart(4, '0')}`, at };
   });
 }
@@ -328,7 +317,7 @@ function baseMe(
     return {
       githubId: FIXTURE_GITHUB_ID,
       login: FIXTURE_LOGIN,
-      createdAt: new Date(now - 90 * MINUTE).toISOString(),
+      createdAt: new Date(now - 90 * MINUTE_MS).toISOString(),
       xp: DAY0_ROW.xp,
       skillXp: { ...DAY0_ROW.skillXp },
       gold: 21,
@@ -341,7 +330,7 @@ function baseMe(
       biome: biomeFor(0),
       kills: { 'merge-goblin': 1 },
       firstSeen: {
-        'merge-goblin': new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE).toISOString(),
+        'merge-goblin': new Date(now - DAY0_KILL_MINUTES_AGO * MINUTE_MS).toISOString(),
       },
       week: fixtureWeek(now, variant, weekOverrides),
       ...depth,
@@ -351,7 +340,7 @@ function baseMe(
     return {
       githubId: FIXTURE_GITHUB_ID,
       login: FIXTURE_LOGIN,
-      createdAt: new Date(now - 20 * MINUTE).toISOString(),
+      createdAt: new Date(now - 20 * MINUTE_MS).toISOString(),
       xp: 0,
       skillXp: { smithing: 0, vigilance: 0, oratory: 0, endurance: 0 },
       gold: 0,
@@ -370,12 +359,12 @@ function baseMe(
   }
   const firstSeen: MeResponse['firstSeen'] = {};
   for (const [id, daysAgo] of Object.entries(FIRST_SEEN_DAYS_AGO)) {
-    firstSeen[id as MonsterId] = new Date(now - (daysAgo ?? 0) * DAY).toISOString();
+    firstSeen[id as MonsterId] = new Date(now - (daysAgo ?? 0) * DAY_MS).toISOString();
   }
   return {
     githubId: FIXTURE_GITHUB_ID,
     login: FIXTURE_LOGIN,
-    createdAt: new Date(now - 190 * DAY).toISOString(),
+    createdAt: new Date(now - 190 * DAY_MS).toISOString(),
     xp: FINAL_XP,
     skillXp: { ...FINAL_SKILL_XP },
     gold: 2340,

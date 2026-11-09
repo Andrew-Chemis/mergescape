@@ -7,7 +7,7 @@
  *
  * The hero is palette-swapped per gear tier (Requirement 5.4); every other sprite has one palette.
  */
-import { GEAR_TIER_LEVELS, GEAR_TIERS } from '@mergescape/shared';
+import { clamp01, GEAR_TIER_LEVELS, GEAR_TIERS } from '@mergescape/shared';
 import type { GearSlot, GearTier as GearTierId, MonsterId } from '@mergescape/shared';
 
 // ---------------------------------------------------------------------------------------------
@@ -509,7 +509,7 @@ export interface SpritePath {
 export function shade(hex: string, amount: number): string {
   const channel = (offset: number): string => {
     const value = Number.parseInt(hex.slice(offset, offset + 2), 16);
-    const dark = Math.round(value * (1 - Math.min(1, Math.max(0, amount))));
+    const dark = Math.round(value * (1 - clamp01(amount)));
     return dark.toString(16).padStart(2, '0');
   };
   return `#${channel(1)}${channel(3)}${channel(5)}`;
@@ -519,7 +519,7 @@ export function shade(hex: string, amount: number): string {
 export function lighten(hex: string, amount: number): string {
   const channel = (offset: number): string => {
     const value = Number.parseInt(hex.slice(offset, offset + 2), 16);
-    const light = Math.round(value + (255 - value) * Math.min(1, Math.max(0, amount)));
+    const light = Math.round(value + (255 - value) * clamp01(amount));
     return light.toString(16).padStart(2, '0');
   };
   return `#${channel(1)}${channel(3)}${channel(5)}`;
@@ -534,16 +534,30 @@ function paletteFor(name: SpriteName, hero: HeroPalette, cape?: string): Palette
   return { ...BASE_PALETTE, ...own, ...tier, ...clothing };
 }
 
+/** Paths already built, by `name|palette|cape`: a screen draws the same few sprites many times over. */
+const PATH_CACHE = new Map<string, readonly SpritePath[]>();
+/** Well above the game's real combinations of sprite, palette and cape; the cap only guards against odd input. */
+const PATH_CACHE_LIMIT = 512;
+
 /**
  * The colour paths of a sprite, in first-seen letter order. Unknown letters are skipped, so a bad
- * definition renders as holes instead of throwing.
+ * definition renders as holes instead of throwing. The result is shared between callers: do not change it.
  */
 export function spritePaths(
   name: SpriteName,
   hero: HeroPalette = 'rags',
   cape?: string,
-): SpritePath[] {
-  return pathsOf(ROWS[name], paletteFor(name, hero, cape), TRANSLUCENT[name]);
+): readonly SpritePath[] {
+  const key = `${name}|${hero}|${cape ?? ''}`;
+  let paths = PATH_CACHE.get(key);
+  if (paths === undefined) {
+    paths = pathsOf(ROWS[name], paletteFor(name, hero, cape), TRANSLUCENT[name]);
+    if (PATH_CACHE.size >= PATH_CACHE_LIMIT) {
+      PATH_CACHE.clear();
+    }
+    PATH_CACHE.set(key, paths);
+  }
+  return paths;
 }
 
 /** Merge a grid of letters into one path per colour, horizontal runs of one pixel height. */

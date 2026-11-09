@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { HOUR_MS } from '@mergescape/shared';
 import { breakdownRows } from './breakdown';
 import { fixtureLogEntries } from './fixtures/state';
 import {
   creditedSkills,
+  formatCoarse,
+  formatCountdown,
+  formatDay,
   formatDecimal,
   formatGain,
   formatInt,
+  formatLong,
+  MATERIAL_LABELS,
   relativeTime,
   summarize,
   suppliesText,
@@ -52,6 +58,43 @@ describe('relativeTime', () => {
   });
 });
 
+describe('durations', () => {
+  it.each([
+    [0, 'under a minute'],
+    [-5, 'under a minute'],
+    [30_000, '1 min'],
+    [59 * 60_000, '59 min'],
+    [60 * 60_000, '1 h'],
+    [60 * 60_000 + 1, '2 h'],
+    [8.2 * HOUR_MS, '9 h'],
+    [9 * HOUR_MS, '9 h'],
+  ])('says %i ms as "%s", rounding up so a return is never promised early', (ms, text) => {
+    expect(formatCoarse(ms)).toBe(text);
+  });
+
+  it('counts down to the second', () => {
+    expect(formatCountdown(3 * HOUR_MS + 12 * 60_000 + 5_000)).toBe('3:12:05');
+    expect(formatCountdown(59_001)).toBe('0:01:00');
+    expect(formatCountdown(-1)).toBe('0:00:00');
+  });
+
+  it('says a trip to the minute', () => {
+    expect(formatLong(3.6 * HOUR_MS)).toBe('3 h 36 min');
+    expect(formatLong(4 * HOUR_MS)).toBe('4 h');
+    expect(formatLong(40 * 60_000)).toBe('40 min');
+    expect(formatLong(-5)).toBe('0 min');
+  });
+});
+
+describe('formatDay', () => {
+  it('names a day in UTC in either style and tolerates a bad date', () => {
+    expect(formatDay('2026-11-03T23:59:00Z')).toBe('Nov 3, 2026');
+    expect(formatDay('2026-10-30T10:00:00.000Z', 'weekday')).toBe('Fri, Oct 30');
+    expect(formatDay('nope')).toBe('');
+    expect(formatDay('nope', 'weekday')).toBe('');
+  });
+});
+
 describe('summarize', () => {
   it('names the repository only when the row carries one', () => {
     expect(summarize(byPr(412))).toBe('Merged octo/api #412 (+318 / −97)');
@@ -85,6 +128,21 @@ describe('row helpers', () => {
     expect(creditedSkills(firstOfDay).map((skill) => skill.label)).toEqual([
       'Vigilance',
       'Endurance',
+    ]);
+  });
+
+  it('names every material the six supplies and the four tiers', () => {
+    expect(Object.values(MATERIAL_LABELS)).toEqual([
+      'Ore',
+      'Timber',
+      'Lore',
+      'Ink',
+      'Provisions',
+      'Flux',
+      'Silver',
+      'Mithril',
+      'Rune',
+      'Dragon scale',
     ]);
   });
 

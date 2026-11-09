@@ -1,6 +1,7 @@
 <script lang="ts">
   import { MOGUL_DISCLAIMER } from '@mergescape/shared';
   import Frame from '../lib/components/Frame.svelte';
+  import LegalSection from '../lib/components/LegalSection.svelte';
   import { LEGAL_UPDATED } from '../lib/promises';
 
   interface Props {
@@ -13,17 +14,15 @@
 
 <Frame title="Terms">
   <!-- Keep this page in step with TERMS.md at the repository root; Legal.test.ts checks the dates. -->
-  <section class="panel" aria-labelledby="what-heading">
-    <h2 id="what-heading">What Mergescape is</h2>
+  <LegalSection id="what" title="What Mergescape is">
     <p>
       A free idle game. Your character gains experience only from your own real activity on GitHub:
       opening, reviewing and merging pull requests. There is nothing to buy. Gold is earned by
       shipping and can never be bought, and there is no real-money store.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="who-heading">
-    <h2 id="who-heading">Who can use it</h2>
+  <LegalSection id="who" title="Who can use it">
     <ul>
       <li>
         You need a GitHub account in good standing, and you must be old enough to hold one (13 at
@@ -37,10 +36,9 @@
         owner, ask them first.
       </li>
     </ul>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="using-heading">
-    <h2 id="using-heading">Acceptable use</h2>
+  <LegalSection id="using" title="Acceptable use">
     <p>Play for yourself, and play nicely. Please don't:</p>
     <ul>
       <li>send forged, replayed or crafted deliveries to the webhook endpoint, or probe it;</li>
@@ -55,38 +53,34 @@
       Playing your own game your own way, including farming your own numbers, is fine: it is
       single-player and harms nobody. Found a security problem? Please report it privately.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="notperf-heading">
-    <h2 id="notperf-heading">Not a performance tool</h2>
+  <LegalSection id="notperf" title="Not a performance tool">
     <p>
       The game is not a measure of anyone's work and must not be used to judge, rank, monitor,
       discipline or pay people. Employers and managers must not require anyone to use it or to share
       their character, export or badge. There is no manager view.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="notaff-heading">
-    <h2 id="notaff-heading">Not affiliated, and satire</h2>
+  <LegalSection id="notaff" title="Not affiliated, and satire">
     <p>
       Mergescape is an independent project. It is not made, endorsed or sponsored by GitHub or by
       Amazon Web Services. GitHub is a trademark of its owner.
     </p>
     <p class="dim">{MOGUL_DISCLAIMER}</p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="data-heading">
-    <h2 id="data-heading">Your data</h2>
+  <LegalSection id="data" title="Your data">
     <p>
       We store counts, ids and timestamps about pull requests and reviews, and your game state, and
       nothing else. You can export it or delete it at any time. See the
       <a href="#/privacy">Privacy</a> page for the details and the
       <a href="#/cookies">Cookies</a> page for what stays in your browser.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="asis-heading">
-    <h2 id="asis-heading">As is</h2>
+  <LegalSection id="asis" title="As is">
     <p>
       Mergescape is open source under the MIT licence and is provided as is, with no warranty. In
       particular:
@@ -110,20 +104,18 @@
         Export working for a reasonable time, but that is a best effort.
       </li>
     </ul>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="liability-heading">
-    <h2 id="liability-heading">Limits on liability</h2>
+  <LegalSection id="liability" title="Limits on liability">
     <p>
       To the extent the law allows, the maintainer is not liable for indirect or consequential loss,
       or for lost data, progress or time, arising from your use of the service. It is free, and
       using it is at your own risk. Nothing here limits rights you have under the law of your
       country that cannot be limited.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="ending-heading">
-    <h2 id="ending-heading">Ending your use</h2>
+  <LegalSection id="ending" title="Ending your use">
     <ul>
       <li>
         You can stop at any time: export your data, delete it in <a href="#/settings">Settings</a>,
@@ -135,29 +127,26 @@
         an attack.
       </li>
     </ul>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="changes-heading">
-    <h2 id="changes-heading">Changes to these terms</h2>
+  <LegalSection id="changes" title="Changes to these terms">
     <p>
       If these terms change, this page changes with them and the date below changes. Changes are
       announced in the project's repository, where the history of the terms file is public. If you
       keep using the service after a change takes effect, you accept the new terms.
     </p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="law-heading">
-    <h2 id="law-heading">Governing law</h2>
+  <LegalSection id="law" title="Governing law">
     <p>[Governing law and venue: to be filled in by the maintainer before public launch.]</p>
-  </section>
+  </LegalSection>
 
-  <section class="panel" aria-labelledby="contact-heading">
-    <h2 id="contact-heading">Contact</h2>
+  <LegalSection id="contact" title="Contact">
     <p>
       Open an issue in the project's repository on GitHub, or reach the maintainer through the
       contact options on their GitHub profile.
     </p>
-  </section>
+  </LegalSection>
 
   <p class="foot dim">
     Last updated {LEGAL_UPDATED}. See also the <a href="#/privacy">Privacy</a> and
@@ -171,18 +160,6 @@
 </Frame>
 
 <style>
-  .panel ul {
-    margin: 0;
-    padding-left: 20px;
-    display: grid;
-    gap: 6px;
-  }
-
-  .panel p + p,
-  .panel p + ul {
-    margin-top: 8px;
-  }
-
   .foot {
     margin: 0;
     font-size: 13px;

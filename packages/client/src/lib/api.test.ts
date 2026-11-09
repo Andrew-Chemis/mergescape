@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isoWeekKey } from '@mergescape/shared';
 import {
   ApiError,
   clearToken,
@@ -13,7 +14,7 @@ import {
   TOKEN_KEY,
 } from './api';
 import type { Api } from './api';
-import { fixtureMe, fixtureWeek, isoWeekKey } from './fixtures/state';
+import { fixtureMe, fixtureWeek } from './fixtures/state';
 
 // A JWT-shaped string (three base64url segments); the client never decodes it.
 const TOKEN = 'aaa.bbb.ccc';

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FEAT_RULES } from '@mergescape/shared';
+  import { clamp01, FEAT_RULES } from '@mergescape/shared';
   import Frame from '../lib/components/Frame.svelte';
   import Meter from '../lib/components/Meter.svelte';
-  import { FEAT_CATEGORY_LABELS, featRewardText, formatDay } from '../lib/depth';
+  import { FEAT_CATEGORY_LABELS, featRewardText } from '../lib/depth';
+  import { formatDay } from '../lib/format';
   import type { Session } from '../lib/session.svelte';
   import type { FeatView } from '../lib/types';
 
@@ -48,7 +49,7 @@
 
   function percent(progress: number): string {
     // A bar that is 99.6% full is not "100%": round down so only a finished Feat reads as complete.
-    return `${Math.floor(Math.min(1, Math.max(0, progress)) * 100)}%`;
+    return `${Math.floor(clamp01(progress) * 100)}%`;
   }
 </script>
 
@@ -120,7 +121,7 @@
       <p class="desc">{feat.description}</p>
     {/if}
     {#if feat.unlocked}
-      {@const day = feat.unlockedAt ? formatDay(feat.unlockedAt) : ''}
+      {@const day = feat.unlockedAt ? formatDay(feat.unlockedAt, 'weekday') : ''}
       <p class="when">
         {#if day}Unlocked {day}{:else}Unlocked{/if}
         {#if featRewardText(feat.id)}&middot; {featRewardText(feat.id)}{/if}

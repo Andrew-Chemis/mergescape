@@ -7,7 +7,9 @@
     progressWithinLevel,
     SKILL_LABELS,
     SKILLS,
+    sumBy,
     totalLevel,
+    wornPower,
     xpToNext,
   } from '@mergescape/shared';
   import { featRewardText, heroLook, pieceDetail, pieceName, SLOT_LABELS } from '../lib/depth';
@@ -38,15 +40,13 @@
     const count = Math.max(me?.charmSlots ?? 5, held.length);
     return Array.from({ length: count }, (_, index) => held[index] ?? null);
   });
-  const charmPower = $derived((me?.charms ?? []).reduce((sum, charm) => sum + charm.power, 0));
+  const charmPower = $derived(sumBy(me?.charms ?? [], (charm) => charm.power));
 
   // What is worn drives how the hero looks (Requirement 16.4): the highest tier's palette and the cape colour.
   const look = $derived(me ? heroLook(me) : null);
   const worn = $derived(me?.gear.equipped ?? {});
   const wornTiers = $derived(new Set(Object.values(worn).map((piece) => piece.tier)));
-  const gearPower = $derived(
-    Object.values(worn).reduce((sum, piece) => sum + piece.power, 0) + (me?.gear.setBonus ?? 0),
-  );
+  const gearPower = $derived(wornPower(Object.values(worn), me?.gear.setBonus ?? 0));
   const pinned = $derived(
     (me?.pinnedFeats ?? [])
       .map((id) => featDefinition(id))

@@ -6,7 +6,8 @@
  * the sign-in hand-off is the api redirecting back with `#token=<jwt>`, which is stored and removed from
  * the address bar on load.
  */
-import type { ExpeditionChoice, RegionId } from '@mergescape/shared';
+import { isRecord } from '@mergescape/shared';
+import type { ExpeditionChoice, ExpeditionState, GearPiece, RegionId } from '@mergescape/shared';
 import type {
   DepthMutationResponse,
   EquipInput,
@@ -178,34 +179,38 @@ export const TOKEN_KEY = 'mergescape.token';
 /** A compact JWT: three base64url segments. Anything else in `#token=` is ignored. */
 const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
+/** `use(storage)`, or `fallback` when there is no storage or it throws (blocked storage does). */
+function withStorage<S, T>(storage: S | undefined, use: (storage: S) => T, fallback: T): T {
+  try {
+    return storage === undefined ? fallback : use(storage);
+  } catch {
+    return fallback;
+  }
+}
+
 export function readToken(
   storage: Pick<Storage, 'getItem'> | undefined = safeStorage(),
 ): string | null {
-  try {
-    return storage?.getItem(TOKEN_KEY) ?? null;
-  } catch {
-    return null;
-  }
+  return withStorage(storage, (store) => store.getItem(TOKEN_KEY) ?? null, null);
 }
 
 export function storeToken(
   token: string,
   storage: Pick<Storage, 'setItem'> | undefined = safeStorage(),
 ): boolean {
-  try {
-    storage?.setItem(TOKEN_KEY, token);
-    return storage !== undefined;
-  } catch {
-    return false;
-  }
+  return withStorage(
+    storage,
+    (store) => {
+      store.setItem(TOKEN_KEY, token);
+      return true;
+    },
+    false,
+  );
 }
 
+/** Nothing to clear, or storage is blocked: the next load starts signed out either way. */
 export function clearToken(storage: Pick<Storage, 'removeItem'> | undefined = safeStorage()): void {
-  try {
-    storage?.removeItem(TOKEN_KEY);
-  } catch {
-    // Nothing to clear, or storage is blocked: the next load starts signed out either way.
-  }
+  withStorage(storage, (store) => store.removeItem(TOKEN_KEY), undefined);
 }
 
 function safeStorage(): Storage | undefined {
@@ -277,10 +282,6 @@ export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [400, 1200];
 /** Gateway statuses that mean "the request may not have reached the handler": safe to replay with the same id. */
 const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /** The api's `{ error, message? }` body, when the failed response has one. */
 async function errorDetails(response: Response): Promise<{ code: string | null; message: string }> {
   const fallback = `The server answered ${response.status}.`;
@@ -298,23 +299,29 @@ async function errorDetails(response: Response): Promise<{ code: string | null; 
   return { code: null, message: fallback };
 }
 
-function asMutationResponse(body: Record<string, unknown>): MutationResponse {
-  const me = body['me'];
-  const week = body['week'];
-  if (!isRecord(me) || typeof me['login'] !== 'string' || typeof me['xp'] !== 'number') {
-    throw new ApiError(0, 'The server sent an unexpected profile.');
+/**
+ * `value` as the `T` an endpoint promises, once `ok` says it has the shape that matters. Only that shape
+ * is checked; the rest is taken on the contract's word. `what` finishes "The server sent ...".
+ */
+function expect<T>(value: unknown, ok: boolean, what: string): T {
+  if (!ok) {
+    throw new ApiError(0, `The server sent ${what}.`);
   }
-  if (!isRecord(week)) {
-    throw new ApiError(0, 'The server sent an unexpected week.');
-  }
-  return { me: me as unknown as MeResponse, week: week as unknown as WeekSummary };
+  return value as T;
 }
 
 function asProfile(value: unknown): MeResponse {
-  if (!isRecord(value) || typeof value['login'] !== 'string' || typeof value['xp'] !== 'number') {
-    throw new ApiError(0, 'The server sent an unexpected profile.');
-  }
-  return value as unknown as MeResponse;
+  return expect<MeResponse>(
+    value,
+    isRecord(value) && typeof value['login'] === 'string' && typeof value['xp'] === 'number',
+    'an unexpected profile',
+  );
+}
+
+function asMutationResponse(body: Record<string, unknown>): MutationResponse {
+  const me = asProfile(body['me']);
+  const week = body['week'];
+  return { me, week: expect<WeekSummary>(week, isRecord(week), 'an unexpected week') };
 }
 
 function asDepthMutation(body: Record<string, unknown>): DepthMutationResponse {
@@ -421,43 +428,38 @@ export function createHttpApi(options: HttpApiOptions): Api {
 
   return {
     async me() {
-      const body = await get('/me');
-      if (typeof body['login'] !== 'string' || typeof body['xp'] !== 'number') {
-        throw new ApiError(0, 'The server sent an unexpected profile.');
-      }
-      return body as unknown as MeResponse;
+      return asProfile(await get('/me'));
     },
     async log(cursor) {
       const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
       const body = await get(`/log${query}`);
-      if (!Array.isArray(body['entries'])) {
-        throw new ApiError(0, 'The server sent an unexpected log.');
-      }
-      return { entries: body['entries'], nextCursor: body['nextCursor'] ?? null } as LogResponse;
+      return expect<LogResponse>(
+        { entries: body['entries'], nextCursor: body['nextCursor'] ?? null },
+        Array.isArray(body['entries']),
+        'an unexpected log',
+      );
     },
     async installations() {
       const body = await get('/installations');
-      if (!Array.isArray(body['installations'])) {
-        throw new ApiError(0, 'The server sent unexpected installations.');
-      }
-      return body as unknown as InstallationsResponse;
+      return expect<InstallationsResponse>(
+        body,
+        Array.isArray(body['installations']),
+        'unexpected installations',
+      );
     },
     async getWeek() {
       const body = await get('/week');
-      if (typeof body['weekKey'] !== 'string' || !isRecord(body['targets'])) {
-        throw new ApiError(0, 'The server sent an unexpected week.');
-      }
-      return body as unknown as WeekSummary;
+      return expect<WeekSummary>(
+        body,
+        typeof body['weekKey'] === 'string' && isRecord(body['targets']),
+        'an unexpected week',
+      );
     },
     shopBuy(input, mutation) {
-      const fields: Record<string, unknown> = { kind: input.kind };
-      if (input.index !== undefined) {
-        fields['index'] = input.index;
-      }
-      return mutate('/shop/buy', fields, mutation);
+      return mutate('/shop/buy', { ...input }, mutation);
     },
     shopPick(input, mutation) {
-      return mutate('/shop/pick', { index: input.index, option: input.option }, mutation);
+      return mutate('/shop/pick', { ...input }, mutation);
     },
     shopReroll(mutation) {
       return mutate('/shop/reroll', {}, mutation);
@@ -473,75 +475,67 @@ export function createHttpApi(options: HttpApiOptions): Api {
     },
     async expedition() {
       const body = await get('/expedition');
-      if (
-        typeof body['status'] !== 'string' ||
-        !Array.isArray(body['regions']) ||
-        !Array.isArray(body['choices'])
-      ) {
-        throw new ApiError(0, 'The server sent an unexpected expedition.');
-      }
-      return { expedition: null, returnsAt: null, ...body } as unknown as ExpeditionView;
+      return expect<ExpeditionView>(
+        { expedition: null, returnsAt: null, ...body },
+        typeof body['status'] === 'string' &&
+          Array.isArray(body['regions']) &&
+          Array.isArray(body['choices']),
+        'an unexpected expedition',
+      );
     },
     async expeditionSend(input, mutation) {
-      const body = await post(
-        '/expedition/send',
-        { region: input.region, choice: input.choice },
-        mutation,
+      const body = await post('/expedition/send', { ...input }, mutation);
+      const expedition = expect<ExpeditionState>(
+        body['expedition'],
+        isRecord(body['expedition']),
+        'an unexpected expedition',
       );
-      if (!isRecord(body['expedition'])) {
-        throw new ApiError(0, 'The server sent an unexpected expedition.');
-      }
-      return {
-        me: asProfile(body['me']),
-        expedition: body['expedition'],
-      } as unknown as ExpeditionSendResponse;
+      return { me: asProfile(body['me']), expedition };
     },
     async expeditionCollect(mutation) {
       const body = await post('/expedition/collect', {}, mutation);
-      if (!isRecord(body['expedition']) || !Array.isArray(body['loot'])) {
-        throw new ApiError(0, 'The server sent an unexpected haul.');
-      }
+      const { expedition, loot } = expect<Pick<ExpeditionCollectResponse, 'expedition' | 'loot'>>(
+        body,
+        isRecord(body['expedition']) && Array.isArray(body['loot']),
+        'an unexpected haul',
+      );
       return {
         me: asProfile(body['me']),
-        expedition: body['expedition'],
-        loot: body['loot'],
+        expedition,
+        loot,
         applied: body['applied'] !== false,
         featsUnlocked: Array.isArray(body['featsUnlocked']) ? body['featsUnlocked'] : [],
-      } as unknown as ExpeditionCollectResponse;
+      };
     },
     async packOptions(seed) {
       const body = await get(`/packs/${encodeURIComponent(String(seed))}`);
-      if (!Array.isArray(body['options'])) {
-        throw new ApiError(0, 'The server sent an unexpected pack.');
-      }
-      return body as unknown as PackOptionsResponse;
+      return expect<PackOptionsResponse>(
+        body,
+        Array.isArray(body['options']),
+        'an unexpected pack',
+      );
     },
     async packOpen(input, mutation) {
-      return asDepthMutation(
-        await post('/packs/open', { seed: input.seed, charmId: input.charmId }, mutation),
-      );
+      return asDepthMutation(await post('/packs/open', { ...input }, mutation));
     },
     async forge() {
       const body = await get('/forge');
-      if (!isRecord(body['stations']) || !Array.isArray(body['recipes'])) {
-        throw new ApiError(0, 'The server sent an unexpected Forge.');
-      }
-      return { upgrades: [], ...body } as unknown as ForgeView;
+      return expect<ForgeView>(
+        { upgrades: [], ...body },
+        isRecord(body['stations']) && Array.isArray(body['recipes']),
+        'an unexpected Forge',
+      );
     },
     async forgeStart(input, mutation) {
-      const fields: Record<string, unknown> = { recipeId: input.recipeId };
-      if (input.pieceId !== undefined) {
-        fields['pieceId'] = input.pieceId;
-      }
-      return asDepthMutation(await post('/forge/start', fields, mutation));
+      return asDepthMutation(await post('/forge/start', { ...input }, mutation));
     },
     async forgeCollect(station, mutation) {
       const body = await post('/forge/collect', { station }, mutation);
       return {
         me: asProfile(body['me']),
-        piece: isRecord(body['piece']) ? body['piece'] : null,
+        piece: isRecord(body['piece']) ? (body['piece'] as unknown as GearPiece) : null,
         applied: body['applied'] !== false,
-      } as unknown as ForgeCollectResponse;
+      };
     },
     async forgeUpgrade(input, mutation) {
       return asDepthMutation(await post('/forge/upgrade', { ...input }, mutation));
@@ -551,10 +545,7 @@ export function createHttpApi(options: HttpApiOptions): Api {
     },
     async feats() {
       const body = await get('/feats');
-      if (!Array.isArray(body['feats'])) {
-        throw new ApiError(0, 'The server sent unexpected Feats.');
-      }
-      return body as unknown as FeatsResponse;
+      return expect<FeatsResponse>(body, Array.isArray(body['feats']), 'unexpected Feats');
     },
     async featPin(featId, pinned, mutation) {
       return asDepthMutation(await post('/feats/pin', { featId, pinned }, mutation));

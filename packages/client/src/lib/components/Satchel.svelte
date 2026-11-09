@@ -1,8 +1,8 @@
 <script lang="ts">
   import { SUPPLY_KINDS } from '@mergescape/shared';
   import type { MaterialKind, Satchel } from '@mergescape/shared';
-  import { MATERIAL_LABELS, TIER_MATERIAL_KINDS } from '../depth';
-  import { formatInt } from '../format';
+  import { TIER_MATERIAL_KINDS } from '../depth';
+  import { formatInt, MATERIAL_LABELS } from '../format';
 
   interface Props {
     satchel: Satchel;

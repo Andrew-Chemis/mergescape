@@ -10,9 +10,12 @@
  * expedition.
  */
 import {
+  DAY_MS,
   emptySatchel,
   featDefinition,
+  HOUR_MS,
   makePiece,
+  MINUTE_MS,
   petDefinition,
   petPiece,
   uniqueDefinition,
@@ -21,10 +24,6 @@ import {
 import type { ExpeditionState, ForgeJob, GearPiece, Satchel } from '@mergescape/shared';
 import type { FeatView, MeResponse } from '../types';
 import type { FixtureVariant } from './state';
-
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 /** The depth fields of a `MeResponse`. */
 export type FixtureDepth = Pick<
@@ -74,8 +73,8 @@ function returnedExpedition(now: number): ExpeditionState {
     region: 'silverhall',
     hours: 24,
     forage: false,
-    sentAt: now - 26 * HOUR,
-    returnsAt: now - 2 * HOUR,
+    sentAt: now - 26 * HOUR_MS,
+    returnsAt: now - 2 * HOUR_MS,
     seed: FIXTURE_RETURNED_SEED,
     provisionsPaid: 4,
     packBonus: 0,
@@ -85,13 +84,13 @@ function returnedExpedition(now: number): ExpeditionState {
 
 /** The Forage the first scored event sends by itself (Requirement 15.6): four hours at Koko Woods, free. */
 function onboardingExpedition(now: number, sentMinutesAgo: number): ExpeditionState {
-  const sentAt = now - sentMinutesAgo * MINUTE;
+  const sentAt = now - sentMinutesAgo * MINUTE_MS;
   return {
     region: 'koko-woods',
     hours: 4,
     forage: true,
     sentAt,
-    returnsAt: sentAt + 4 * HOUR,
+    returnsAt: sentAt + 4 * HOUR_MS,
     seed: FIXTURE_FORAGE_SEED,
     provisionsPaid: 0,
     packBonus: 0,
@@ -103,8 +102,8 @@ function workingForgeJob(now: number): ForgeJob {
   return {
     recipe: 'forge:weapon:silver',
     station: 'forge',
-    startedAt: now - 3 * HOUR,
-    doneAt: now + 5 * HOUR,
+    startedAt: now - 3 * HOUR_MS,
+    doneAt: now + 5 * HOUR_MS,
     seed: 7101,
     collected: false,
   };
@@ -114,8 +113,8 @@ function readyLoomJob(now: number): ForgeJob {
   return {
     recipe: 'loom:cape:iron',
     station: 'loom',
-    startedAt: now - 6 * HOUR,
-    doneAt: now - 2 * HOUR,
+    startedAt: now - 6 * HOUR_MS,
+    doneAt: now - 2 * HOUR_MS,
     seed: 7102,
     collected: false,
   };
@@ -227,7 +226,7 @@ function featRow(now: number, seed: FeatSeed): FeatView {
     pinned: seed.pinned ?? false,
     reward: shown ? definition.reward : null,
     ...(unlocked
-      ? { unlockedAt: new Date(now - (seed.unlockedDaysAgo ?? 0) * DAY).toISOString() }
+      ? { unlockedAt: new Date(now - (seed.unlockedDaysAgo ?? 0) * DAY_MS).toISOString() }
       : {}),
   };
 }

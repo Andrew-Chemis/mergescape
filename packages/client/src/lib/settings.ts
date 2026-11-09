@@ -1,10 +1,10 @@
 /** Small helpers for the Settings screen: the file name of an export and the player's timezone. */
-import { weekStartUtc } from '@mergescape/shared';
+import { utcDay, weekStartUtc } from '@mergescape/shared';
 
 /** `mergescape-octo-dev-2026-11-11.json`; the login is already safe for a file name on GitHub. */
 export function exportFileName(login: string, at: Date): string {
   const safe = login.replace(/[^A-Za-z0-9._-]/g, '_');
-  return `mergescape-${safe}-${at.toISOString().slice(0, 10)}.json`;
+  return `mergescape-${safe}-${utcDay(at.getTime())}.json`;
 }
 
 export interface TimezoneInfo {
