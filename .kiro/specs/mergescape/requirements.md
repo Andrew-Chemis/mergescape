@@ -132,7 +132,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 #### Acceptance Criteria
 
-1. THE system SHALL implement the nine Charms in design.md §6.3 (as audited in game-design.md §8.3) with their conditions and power values, 5 slots by default, a 6th with the Charm Belt voucher; a duplicate SHALL stack once and a third copy SHALL be auto-sold.
+1. THE system SHALL implement the twelve Charms in design.md §6.3 (as audited in game-design.md §8.3; the last three came with the content pass of task 24) with their conditions and power values, 5 slots by default, a 6th with the Charm Belt voucher; a duplicate SHALL stack once and a third copy SHALL be auto-sold.
 2. THE system SHALL start each character with the deck Strike, Defend, Big Game Hunter, Mentor, Tidy, and SHALL cap the deck at 20.
 3. WHEN a run begins THEN the system SHALL draw 5 Pledges; the player MAY play up to 3 until Tuesday 23:59 UTC, after which the top 3 undrawn SHALL auto-play.
 4. WHEN any event is scored THEN the system SHALL evaluate Pledge progress and SHALL apply each completion bonus at most once per week.
