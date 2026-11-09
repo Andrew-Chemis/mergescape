@@ -2,7 +2,6 @@ import {
   CHARM_POWER_BY_RARITY,
   CHARM_PRICE_BY_RARITY,
   CHARM_RULES,
-  CHARM_SLOTS,
   MAX_CHARM_COPIES,
   POINTS,
   SHOP,
@@ -11,6 +10,7 @@ import type { Rarity } from './constants';
 import { utcDay } from './calendar';
 import { eventLines, hoursBetween } from './facts';
 import { tidy } from './math';
+import { charmSlotCount } from './vouchers';
 import type {
   BreakdownLine,
   Charm,
@@ -273,7 +273,7 @@ export function charmSlotsUsed(player: PlayerState): number {
 }
 
 export function freeCharmSlots(player: PlayerState): number {
-  return Math.max(0, CHARM_SLOTS - charmSlotsUsed(player));
+  return Math.max(0, charmSlotCount(player) - charmSlotsUsed(player));
 }
 
 /** Gold a Charm of this rarity sells for: half its shop price, rounded down. */

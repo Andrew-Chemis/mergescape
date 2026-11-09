@@ -1,18 +1,23 @@
 import { loadedDiceFires } from './charms';
+import type { PledgeEvaluation } from './pledges';
 import type { CounterUpdates, GameEvent, PlayerState, PowerContext } from './types';
 
 /**
  * The player-side counter updates a scored event causes beyond the original three (opens, daily first,
- * streak): Loaded Dice's spent charge, and the
+ * streak): Pledge progress and completions, Loaded Dice's spent charge, and the
  * lifetime merge count of the repository (Grey Beard, Mentor). Only keys that changed are present.
  */
 export function stateUpdates(input: {
   player: PlayerState;
   event: GameEvent;
+  pledge: PledgeEvaluation;
   ctx: PowerContext | undefined;
-}): Pick<CounterUpdates, 'loadedDiceUsed' | 'repoMerges'> {
-  const { player, event, ctx } = input;
-  const updates: Pick<CounterUpdates, 'loadedDiceUsed' | 'repoMerges'> = {};
+}): Pick<CounterUpdates, 'pledges' | 'loadedDiceUsed' | 'repoMerges'> {
+  const { player, event, pledge, ctx } = input;
+  const updates: Pick<CounterUpdates, 'pledges' | 'loadedDiceUsed' | 'repoMerges'> = {};
+  if (pledge.next !== null) {
+    updates.pledges = pledge.next;
+  }
   if (loadedDiceFires(player, ctx)) {
     updates.loadedDiceUsed = true;
   }

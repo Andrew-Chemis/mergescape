@@ -12,6 +12,7 @@ import { actWindow, DAY_MS, utcDay } from './calendar';
 import { hasCharm, partyBonusPoints, riposteMultiplier } from './charms';
 import { levelFor } from './d2table';
 import { mergeFacts } from './facts';
+import { evaluatePledges } from './pledges';
 import { computePower, powerBreakdown, powerContext, powerOf } from './power';
 import { stateUpdates } from './progress';
 import { emptySkillXp, SKILL_LABELS, SKILLS } from './skills';
@@ -510,8 +511,9 @@ export function score(
   const power = powerOf(powerLines);
 
   // Multipliers: every point of a PR is halved off the default branch; merge, size and party points
-  // are also halved on a solo kill.
+  // are also halved on a solo kill; a completed Big Game Hunter adds its factor.
   // Each term is floored so the breakdown lines add up to `points`.
+  const pledge = evaluatePledges(player, event, pr);
   const offDefaultBranch = 'pr' in event && !event.pr.baseRefIsDefault;
   const breakdown: BreakdownLine[] = [];
   let points = 0;
@@ -526,15 +528,27 @@ export function score(
       multiplier *= NON_DEFAULT_BRANCH_MULTIPLIER;
       modifiers.push(`non-default branch x${NON_DEFAULT_BRANCH_MULTIPLIER}`);
     }
+    for (const factor of pledge.factors) {
+      multiplier *= factor.factor;
+      modifiers.push(factor.label);
+    }
     const value = Math.floor(term.points * multiplier);
     points += value;
     breakdown.push({ label: term.label + modifierSuffix(modifiers), value, kind: 'points' });
+  }
+  // A completed Pledge's bonus is flat: it is not subject to the multipliers above.
+  for (const bonus of pledge.bonuses) {
+    points += bonus.points;
+    breakdown.push({ label: bonus.label, value: bonus.points, kind: 'points' });
   }
 
   // Daily first event: the first scored event of each UTC day earns +20 for Endurance. The weekly
   // streak is rollover bookkeeping, not play, so it neither claims nor needs the bonus.
   const today = utcDay(now);
-  const counterUpdates = Object.assign(outcome.counters, stateUpdates({ player, event, ctx }));
+  const counterUpdates = Object.assign(
+    outcome.counters,
+    stateUpdates({ player, event, pledge, ctx }),
+  );
   const supplies = { ...zeroSupplies(), ...outcome.supplies };
   let dailyPoints = 0;
   if (event.kind !== 'weekly_streak' && player.counters.dailyFirstDay !== today) {

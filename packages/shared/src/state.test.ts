@@ -17,7 +17,7 @@ import {
 } from './test-builders';
 
 describe('createPlayerState', () => {
-  it('is a level-1 character with the default Zone exponent', () => {
+  it('is a level-1 character with the starter deck, no gold and the default Zone exponent', () => {
     expect(createPlayerState(42)).toEqual({
       id: 42,
       xp: 0,
@@ -26,10 +26,18 @@ describe('createPlayerState', () => {
       counters: { opens: { day: '', count: 0 }, dailyFirstDay: null, streakWeeks: 0 },
       charms: [],
       gear: { pieces: [], setBonus: 0 },
-      pledges: { played: [], powerBonus: 0 },
+      pledges: { played: [], progress: {}, completed: [] },
       feats: { unlocked: [], powerBonus: 0 },
       moguls: { current: null, bag: [] },
       week: { loadedDiceUsed: false },
+      vouchers: [],
+      deck: [
+        { id: 'strike', name: 'Strike', upgraded: false },
+        { id: 'defend', name: 'Defend', upgraded: false },
+        { id: 'big-game-hunter', name: 'Big Game Hunter', upgraded: false },
+        { id: 'mentor', name: 'Mentor', upgraded: false },
+        { id: 'tidy', name: 'Tidy', upgraded: false },
+      ],
       repoMerges: {},
     });
   });

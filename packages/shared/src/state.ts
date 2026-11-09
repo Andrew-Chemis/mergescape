@@ -1,9 +1,11 @@
 import { ZONE_EXPONENT } from './constants';
+import { starterDeck } from './pledges';
 import { emptySkillXp, SKILLS } from './skills';
 import type { PlayerState, PRState, PullRequestFacts, ScoreResult } from './types';
 
 /**
- * A level-1 character: no Charms, gear, Feats or Moguls, and an empty week.
+ * A level-1 character: no Charms, gear, Vouchers, Feats or Moguls, the five-card starter Pledge deck
+ * (Requirement 9.2) and an empty week.
  */
 export function createPlayerState(id: number): PlayerState {
   return {
@@ -14,10 +16,12 @@ export function createPlayerState(id: number): PlayerState {
     counters: { opens: { day: '', count: 0 }, dailyFirstDay: null, streakWeeks: 0 },
     charms: [],
     gear: { pieces: [], setBonus: 0 },
-    pledges: { played: [], powerBonus: 0 },
+    pledges: { played: [], progress: {}, completed: [] },
     feats: { unlocked: [], powerBonus: 0 },
     moguls: { current: null, bag: [] },
     week: { loadedDiceUsed: false },
+    vouchers: [],
+    deck: starterDeck(),
     repoMerges: {},
   };
 }
@@ -39,7 +43,7 @@ export function createPRState(facts: PullRequestFacts): PRState {
 
 /**
  * Apply a ScoreResult to the states it was computed from: XP, skill XP and every
- * counter update (including Loaded Dice and repository merge
+ * counter update (including Pledge progress, Loaded Dice and repository merge
  * counts). Pure; the backend does the same with DynamoDB writes, tests and previews use this.
  */
 export function applyScoreResult(
@@ -58,9 +62,10 @@ export function applyScoreResult(
     skillXp,
     counters: { ...player.counters, ...playerUpdates },
   };
-  const { loadedDiceUsed, repoMerges } = result.counterUpdates;
+  const { pledges, loadedDiceUsed, repoMerges } = result.counterUpdates;
   const nextPlayer: PlayerState = {
     ...earned,
+    pledges: pledges ?? earned.pledges,
     week: loadedDiceUsed ? { ...earned.week, loadedDiceUsed: true } : earned.week,
     repoMerges: repoMerges
       ? { ...earned.repoMerges, [String(repoMerges.repoId)]: repoMerges.count }

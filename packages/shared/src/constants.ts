@@ -187,6 +187,28 @@ export const DECK_CAP = 20;
 export const PLEDGE_HAND_SIZE = 5;
 export const PLEDGE_PLAY_LIMIT = 3;
 
+/** Plays close this many days after Monday 00:00 UTC, i.e. at the end of Tuesday (Requirement 9.3). */
+export const PLEDGE_PLAY_WINDOW_DAYS = 2;
+
+/** The deck every character starts with (Requirement 9.2), by Pledge id. */
+export const STARTER_DECK_IDS = ['strike', 'defend', 'big-game-hunter', 'mentor', 'tidy'] as const;
+
+/** Pledge contracts and rewards (design.md 6.4). "Under" is strict, "at least" is inclusive. */
+export const PLEDGE_RULES = {
+  /** Strike: merge this many PRs this week, +300 points on the last. */
+  strike: { merges: 3, bonusPoints: 300 },
+  /** Defend: this many scoring reviews, then +1 Power on all reviews for the rest of the week. */
+  defend: { reviews: 5, powerBonus: 1 },
+  /** Big Game Hunter: review a PR of at least this many lines; that review scores x3. */
+  bigGameHunter: { minLoc: 800, reviewMultiplier: 3 },
+  /** Mentor: approve this many PRs from authors with fewer merges than you, then +0.5 Power until Sunday. */
+  mentor: { approvals: 2, powerBonus: 0.5 },
+  /** Tidy: merge this many PRs each under `maxLoc` lines, +200 points on the last. */
+  tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
+  /** Pair Up (Strike+): merge this many PRs each with the party bonus, +600 points on the last. */
+  pairUp: { merges: 3, bonusPoints: 600 },
+} as const;
+
 // ---------------------------------------------------------------------------------------------
 // Weekly run (design.md 6.1; requirements.md 6)
 // ---------------------------------------------------------------------------------------------

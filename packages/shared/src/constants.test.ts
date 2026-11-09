@@ -13,12 +13,15 @@ import {
   INTEREST,
   MAX_CHARM_COPIES,
   OVERCLOCK_ZONE_EXPONENT,
+  PLEDGE_PLAY_WINDOW_DAYS,
+  PLEDGE_RULES,
   POINTS,
   POWER_CAP,
   RARITIES,
   RARITY_WEIGHTS,
   SHOP,
   SIZE_POINTS,
+  STARTER_DECK_IDS,
   ZONE_EXPONENT,
 } from './constants';
 
@@ -110,6 +113,19 @@ describe('constants match the spec tables', () => {
       greyBeardMerges: 50,
       jestersRiposteMultiplier: 4,
       loadedDicePower: 10,
+    });
+  });
+
+  it('Pledges (design.md 6.4)', () => {
+    expect(STARTER_DECK_IDS).toEqual(['strike', 'defend', 'big-game-hunter', 'mentor', 'tidy']);
+    expect(PLEDGE_PLAY_WINDOW_DAYS).toBe(2);
+    expect(PLEDGE_RULES).toEqual({
+      strike: { merges: 3, bonusPoints: 300 },
+      defend: { reviews: 5, powerBonus: 1 },
+      bigGameHunter: { minLoc: 800, reviewMultiplier: 3 },
+      mentor: { approvals: 2, powerBonus: 0.5 },
+      tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
+      pairUp: { merges: 3, bonusPoints: 600 },
     });
   });
 });

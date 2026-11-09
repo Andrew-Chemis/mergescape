@@ -127,10 +127,12 @@ export interface GearLoadout {
 }
 
 export interface PledgeLoadout {
-  /** Pledges played this week. */
+  /** Pledges played this week: the contracts in force. */
   played: readonly Pledge[];
-  /** Sum of the Power bonuses of active Pledges. */
-  powerBonus: number;
+  /** Progress toward each played Pledge's goal, keyed by Pledge id. */
+  progress: Readonly<Record<string, number>>;
+  /** Ids of played Pledges whose one-time completion bonus has already fired this week. */
+  completed: readonly string[];
 }
 
 export interface FeatLoadout {
@@ -196,6 +198,10 @@ export interface PlayerState {
   feats: FeatLoadout;
   moguls: MogulHook;
   week: WeekHook;
+  /** Vouchers bought; each once. */
+  vouchers: readonly VoucherId[];
+  /** The Pledge deck (cap 20). */
+  deck: readonly Pledge[];
   /** Lifetime scored merges per repository, keyed by the repo id as a string (Grey Beard, Mentor). */
   repoMerges: Readonly<Record<string, number>>;
 }
@@ -216,6 +222,11 @@ export interface PRState {
   reviews: readonly ReviewRecord[];
   /** Per-reviewer caps, keyed by the reviewer's numeric id as a string. */
   reviewerCounters: Readonly<Record<string, ReviewerCounters>>;
+  /**
+   * Merges the PR's author has made, as best the caller knows (their profile counter, or the merged PRs
+   * seen for them). The Mentor Pledge compares it to the reviewer's own merges; absent counts as 0.
+   */
+  authorMerges?: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -400,6 +411,8 @@ export interface CounterUpdates {
     /** Replace the actor's entry in `PRState.reviewerCounters`. */
     reviewerCounters?: { reviewerId: number; counters: ReviewerCounters };
   };
+  /** The new `PlayerState.pledges` (progress and completions), when this event changed it. */
+  pledges?: PledgeLoadout;
   /** Loaded Dice fired on this event: set `PlayerState.week.loadedDiceUsed`. */
   loadedDiceUsed?: true;
   /** The new lifetime scored merge count of one repository (`PlayerState.repoMerges`). */
@@ -447,4 +460,19 @@ export interface PowerContext {
   pr: PRState;
   /** Epoch milliseconds. */
   now: number;
+}
+
+/**
+ * A multiplier on the points terms of one event, from a Mogul or a Pledge. It becomes a suffix on each
+ * affected term's breakdown label, so the Combat Log shows where a number came from.
+ */
+export interface PointsFactor {
+  label: string;
+  factor: number;
+}
+
+/** A flat points bonus (a completed Pledge) added after the multipliers. */
+export interface PointsBonus {
+  label: string;
+  points: number;
 }

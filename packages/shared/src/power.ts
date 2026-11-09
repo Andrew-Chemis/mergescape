@@ -1,6 +1,7 @@
 import { BASE_POWER, CHARM_RULES, POWER_CAP } from './constants';
 import { charmPowerLines, loadedDiceFires } from './charms';
 import { tidy } from './math';
+import { pledgePower } from './pledges';
 import type { BreakdownLine, GameEvent, PlayerState, PowerContext, PRState } from './types';
 
 /**
@@ -24,7 +25,7 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
  * final negative "Power cap" line makes the lines sum to the capped Power.
  *
  * Without a context this is the unconditional baseline (what the Character sheet shows): Charms'
- * conditional Power needs an event. With a context:
+ * conditional Power and Defend's review-only bonus need an event. With a context:
  * - event-conditional Charms (Rubber Duck's extra, Lantern, Small Hands, Hot Potato, Grey Beard) apply;
  * - Loaded Dice, once a week, replaces the capped Power with 10 through a final positive line. This is the
  *   one way past the cap of 9, and the line makes the lines sum to exactly 10.
@@ -37,7 +38,7 @@ export function powerBreakdown(player: PlayerState, ctx?: PowerContext): Breakdo
   );
   const flat: [string, number][] = [
     ['Gear', gear],
-    ['Pledge bonus', player.pledges.powerBonus],
+    ['Pledge bonus', pledgePower(player, ctx)],
     ['Feat bonus', player.feats.powerBonus],
   ];
   for (const [label, value] of flat) {
