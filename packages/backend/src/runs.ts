@@ -3,7 +3,8 @@
  * loading the player's current state for scoring and for the endpoints.
  *
  * Starting a week is shared by the Monday rollover and by a lazy start (a new player, or a missed
- * rollover), so both are `ensureRun`. It is idempotent and safe to repeat after a crash at any point:
+ * rollover), so both are `ensureRun`. The same profile write also banks the equipped pet's weekly supply
+ * and checks the Feats the new week can reach (the weekly streak, Renown), once per run start. It is idempotent and safe to repeat after a crash at any point:
  *
  *   1. read the profile and this week's `WEEK#` item;
  *   2. if the profile's `run_week` is this week, there is nothing to do;
@@ -18,21 +19,32 @@
  * transition resets it by changing `run_week` alone.
  */
 import {
+  addSupplies,
   applyFounderBoard,
+  applyPetWeekly,
   applyScoreResult,
   autoPlayPledges,
+  evaluateFeats,
   isoWeekKey,
   levelFor,
   MEDIAN_WEEKS,
   playerWithRun,
+  recordWorldEvent,
   score,
   startRun,
   weekStartUtc,
 } from '@mergescape/shared';
-import type { PlayerState, PRState, RunState, WeeklyStreakEvent } from '@mergescape/shared';
+import type {
+  FeatUnlock,
+  PlayerState,
+  PRState,
+  RunState,
+  WeeklyStreakEvent,
+} from '@mergescape/shared';
 import { VersionConflictError } from './db';
 import type { Db, EventRow, ProfileItem, ProfilePatch, WeekItem } from './db';
-import { runWithScorerState, toPlayerState } from './player';
+import { applyFeats, writeFeats } from './feat-flow';
+import { depthPatch, runWithScorerState, toPlayerState } from './player';
 import { vocationFor } from './vocation';
 import { weeksBetween } from './weeks';
 
@@ -75,6 +87,8 @@ export interface RolloverPlan {
   profilePatch: ProfilePatch | null;
   /** The Combat Log row of the weekly streak, when last week qualified. */
   streakRow: EventRow | null;
+  /** Feats the weekly streak and the new week unlocked; their `FEAT#` records follow the profile write. */
+  unlocked: FeatUnlock[];
 }
 
 /** A PRState for the events that belong to no PR (the weekly streak never reads one). */
@@ -118,9 +132,12 @@ export function planRollover(
       run: startRun({ player, now, seed, history: profile.history }).run,
       profilePatch: null,
       streakRow: null,
+      unlocked: [],
     };
   }
 
+  const before = player;
+  const unlocked: FeatUnlock[] = [];
   let history = [...profile.history];
   let streakRow: EventRow | null = null;
   if (profile.runWeek !== null) {
@@ -142,7 +159,12 @@ export function planRollover(
     };
     const pr = noPr(profile.id);
     const result = score(event, player, pr, now);
-    player = applyScoreResult(player, pr, result).player;
+    const evaluation = evaluateFeats(player, event, pr, result, now);
+    player = addSupplies(applyScoreResult(player, pr, result).player, result.supplies);
+    // The weekly streak can unlock the streak Feats (Perennial, Evergreen).
+    const streakFeats = applyFeats(player, evaluation, now);
+    player = streakFeats.player;
+    unlocked.push(...streakFeats.unlocked);
     if (result.skip === null && result.skill !== null) {
       streakRow = {
         userId: profile.id,
@@ -165,11 +187,18 @@ export function planRollover(
   }
 
   const started = startRun({ player, now, seed, history });
-  const next = started.player;
+  // Once per run start (this write is the single step that moves the profile into the week): the pet's
+  // weekly supply, then a look at the Feats the new week can have reached.
+  const petted = applyPetWeekly(started.player);
+  const refreshed = applyFeats(petted, recordWorldEvent(petted, { kind: 'refresh' }, now), now);
+  const next = refreshed.player;
+  unlocked.push(...refreshed.unlocked);
   return {
     run: started.run,
     streakRow,
+    unlocked,
     profilePatch: {
+      ...depthPatch(before, next),
       xp: next.xp,
       skillXp: next.skillXp,
       level: levelFor(next.xp),
@@ -226,6 +255,7 @@ export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled
           names: { '#r': 'run_week' },
           values: { ':r': weekKey },
         });
+        await writeFeats(ctx.db, userId, plan.unlocked, ctx.now, `rollover-${weekKey}`);
       } catch (error) {
         if (!(error instanceof VersionConflictError)) {
           throw error;

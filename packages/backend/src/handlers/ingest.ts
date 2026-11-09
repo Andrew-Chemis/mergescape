@@ -40,6 +40,8 @@ export interface IngestDeps {
   now?: () => number;
   /** Seeds for runs started by a player's first event of a week; injectable for tests. */
   newSeed?: () => number;
+  /** The seed of the onboarding expedition; injectable for tests. */
+  rollSeed?: () => number;
 }
 
 export function createIngestHandler(
@@ -92,6 +94,7 @@ export function createIngestHandler(
           log: deps.log,
           now,
           ...(deps.newSeed ? { newSeed: deps.newSeed } : {}),
+          ...(deps.rollSeed ? { rollSeed: deps.rollSeed } : {}),
         },
         deliveryId,
         events,

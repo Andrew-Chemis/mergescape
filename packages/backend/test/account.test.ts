@@ -350,7 +350,9 @@ describe('GET /export', () => {
     expect(typeof profile.xp_smithing).toBe('number');
 
     const stored = itemsWithPrefix(game.fake, `USER#${AUTHOR_ID}`);
-    expect(stored.length).toBe(6); // the profile, four Combat Log rows and the week
+    // The profile, four Combat Log rows, the week, the onboarding expedition and the Feat the author's
+    // second merge in the same minute unlocked.
+    expect(stored.length).toBe(8);
     const exported = [
       body.profile as Record<string, unknown>,
       ...(body.events as Record<string, unknown>[]),
@@ -362,6 +364,10 @@ describe('GET /export', () => {
     expect(keysOf(exported)).toEqual(keysOf(stored));
     expect((body.events as unknown[]).length).toBeGreaterThanOrEqual(4);
     expect((body.weeks as unknown[]).length).toBe(1);
+    expect((body.expeditions as unknown[]).length).toBe(1);
+    expect((body.feats as { SK: string }[]).map((feat) => feat.SK)).toEqual([
+      'FEAT#merge-conflict',
+    ]);
     // Nobody else's data and no shared PR records.
     for (const item of exported) {
       expect(String(item.PK)).toBe(`USER#${AUTHOR_ID}`);
@@ -390,7 +396,7 @@ describe('GET /export', () => {
       [...paged.events.map((event) => event.SK)].sort(),
     );
     const queries = game.fake.calls.slice(before).filter((call) => call.operation === 'Query');
-    expect(queries.length).toBe(3); // six items, two to a page
+    expect(queries.length).toBe(4); // eight items, two to a page
   });
 
   it('gzips the body for a client that accepts it, and the bytes decode to the same document', async () => {

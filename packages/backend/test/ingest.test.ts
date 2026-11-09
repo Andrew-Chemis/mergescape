@@ -589,9 +589,10 @@ describe('ingest: attribution', () => {
     // No EVT#, profile or any USER# item for the unlinked reviewer or merger.
     expect(itemsWithPrefix(h.fake, `USER#${REVIEWER_ID}`)).toHaveLength(0);
     expect(itemsWithPrefix(h.fake, `USER#${MERGER_ID}`)).toHaveLength(0);
-    // The author's profile, this week's run and the two Combat Log rows are all there is.
+    // The author's profile, this week's run, the two Combat Log rows and the onboarding expedition are
+    // all there is.
     expect(itemsWithPrefix(h.fake, 'USER#').map((item) => item.PK)).toEqual(
-      new Array<string>(4).fill(`USER#${AUTHOR_ID}`),
+      new Array<string>(5).fill(`USER#${AUTHOR_ID}`),
     );
     // The PR facts and the human review record exist, because the author is a player.
     const pr = await h.db.getPR(REPO_ID, PR_NUMBER);

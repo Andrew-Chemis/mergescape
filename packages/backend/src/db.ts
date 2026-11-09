@@ -19,12 +19,23 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { emptySkillXp, SKILLS, starterDeck } from '@mergescape/shared';
+import {
+  emptySatchel,
+  emptySkillXp,
+  MATERIAL_KINDS,
+  SKILLS,
+  starterDeck,
+} from '@mergescape/shared';
 import type {
   ActId,
   BenchedCharm,
   BreakdownLine,
   Charm,
+  ExpeditionState,
+  FeatCounters,
+  ForgeJob,
+  ForgeState,
+  GearPiece,
   MogulId,
   MonsterId,
   PackKind,
@@ -33,6 +44,7 @@ import type {
   PullRequestFacts,
   ReviewState,
   RunState,
+  Satchel,
   ShopStock,
   Skill,
   SkillXp,
@@ -45,8 +57,11 @@ import {
   GITHUB_LOGIN,
   deliveryKey,
   eventKey,
+  expeditionKey,
+  featKey,
   inlineKey,
   installKey,
+  jobKey,
   prMetaKey,
   prPk,
   profileKey,
@@ -137,6 +152,33 @@ export interface ProfileItem {
   firstSeen: Partial<Record<MonsterId, string>>;
   /** Week-scoped scorer state; stale (another week) means empty. */
   weekState: WeekScorerState | null;
+  /*
+   * The depth layers (tasks 20 to 22). A profile stored before they existed reads as empty everywhere.
+   */
+  /** Supplies and crafting materials; all ten counts present. */
+  satchel: Satchel;
+  /** The latest expedition, collected or not; null before the first one. */
+  expedition: ExpeditionState | null;
+  /** Gear owned and not worn. */
+  inventory: GearPiece[];
+  /** Gear worn and the cape colour chosen at the Loom (the set bonus is worked out on read). */
+  gear: { pieces: GearPiece[]; capeColor: string | null };
+  /** Pet ids owned; null when never stored (the character has the starter, the Linter Cat). */
+  pets: string[] | null;
+  /** Seeds of unopened Charm packs. */
+  charmPacks: number[];
+  /** The stations' current orders and the upgrades bought. */
+  forge: ForgeState;
+  /** Feats unlocked, titles earned and the (at most three) pinned Feats. */
+  featsUnlocked: string[];
+  titles: string[];
+  pinnedFeats: string[];
+  /** Rolling Feat counters; null before the first scored event after Feats existed. */
+  featCounters: FeatCounters | null;
+  /** The Old Coin has been found (what the badge shows beside the pinned Feats). */
+  oldCoin: boolean;
+  /** Minutes east of UTC; null means UTC. */
+  tzOffsetMinutes: number | null;
   /** Optimistic-lock counter, bumped by every score write. */
   version: number;
 }
@@ -175,6 +217,20 @@ export interface ProfilePatch {
   kills?: Readonly<Partial<Record<MonsterId, number>>>;
   firstSeen?: Readonly<Partial<Record<MonsterId, string>>>;
   weekState?: WeekScorerState;
+  // The depth layers: absolute values, like every other field of a patch.
+  satchel?: Readonly<Satchel>;
+  expedition?: ExpeditionState;
+  inventory?: readonly GearPiece[];
+  gear?: { pieces: readonly GearPiece[]; capeColor?: string };
+  pets?: readonly string[];
+  charmPacks?: readonly number[];
+  forge?: ForgeState;
+  featsUnlocked?: readonly string[];
+  titles?: readonly string[];
+  pinnedFeats?: readonly string[];
+  featCounters?: FeatCounters;
+  oldCoin?: boolean;
+  tzOffsetMinutes?: number;
 }
 
 /** What one scored event changes on a profile. */
@@ -288,6 +344,10 @@ export interface BadgeProfile {
   level: number;
   renown: number;
   vocation: string;
+  /** The pinned Feat ids (Requirement 17.7); the badge draws the ones it knows. */
+  pins: string[];
+  /** The Old Coin has been found. */
+  coin: boolean;
 }
 
 /** What `Db#deleteUser` removed. */
@@ -446,7 +506,54 @@ function toProfile(item: Attrs): ProfileItem {
     kills: record<number>(item.kills),
     firstSeen: record<string>(item.first_seen),
     weekState: toWeekState(item),
+    satchel: toSatchel(item.satchel),
+    expedition: isPlainRecord(item.expedition)
+      ? (item.expedition as unknown as ExpeditionState)
+      : null,
+    inventory: list<GearPiece>(item.inventory),
+    gear: toGear(item.gear),
+    pets: Array.isArray(item.pets) ? stringList(item.pets) : null,
+    charmPacks: list<unknown>(item.charm_packs).filter(
+      (seed): seed is number => typeof seed === 'number',
+    ),
+    forge: toForge(item.forge),
+    featsUnlocked: stringList(item.feats_unlocked),
+    titles: stringList(item.titles),
+    pinnedFeats: stringList(item.pinned_feats),
+    featCounters: isPlainRecord(item.feat_counters)
+      ? (item.feat_counters as unknown as FeatCounters)
+      : null,
+    oldCoin: bool(item, 'old_coin', false),
+    tzOffsetMinutes: numOrNull(item, 'tz_offset'),
     version: num(item, 'version', 0),
+  };
+}
+
+/** The strings in a stored list; anything else in it is ignored. */
+function stringList(value: unknown): string[] {
+  return list<unknown>(value).filter((entry): entry is string => typeof entry === 'string');
+}
+
+/** All ten satchel counts; an absent or damaged count reads as zero. */
+function toSatchel(value: unknown): Satchel {
+  const stored = isPlainRecord(value) ? value : {};
+  const satchel = emptySatchel();
+  for (const kind of MATERIAL_KINDS) {
+    satchel[kind] = Math.max(0, Math.floor(num(stored, kind, 0)));
+  }
+  return satchel;
+}
+
+function toGear(value: unknown): ProfileItem['gear'] {
+  const stored = isPlainRecord(value) ? value : {};
+  return { pieces: list<GearPiece>(stored.pieces), capeColor: str(stored, 'capeColor') };
+}
+
+function toForge(value: unknown): ForgeState {
+  const stored = isPlainRecord(value) ? value : {};
+  return {
+    stations: record<ForgeJob>(stored.stations) as ForgeState['stations'],
+    upgrades: stringList(stored.upgrades) as ForgeState['upgrades'],
   };
 }
 
@@ -669,6 +776,16 @@ function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
     ['history', patch.history],
     ['kills', patch.kills],
     ['first_seen', patch.firstSeen],
+    ['satchel', patch.satchel],
+    ['expedition', patch.expedition],
+    ['inventory', patch.inventory],
+    ['pets', patch.pets],
+    ['charm_packs', patch.charmPacks],
+    ['forge', patch.forge],
+    ['feats_unlocked', patch.featsUnlocked],
+    ['titles', patch.titles],
+    ['pinned_feats', patch.pinnedFeats],
+    ['feat_counters', patch.featCounters],
   ];
   for (const [attribute, value] of nested) {
     if (value !== undefined) {
@@ -684,6 +801,18 @@ function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
     } else if (value !== undefined) {
       set[attribute] = clean(value);
     }
+  }
+  if (patch.gear !== undefined) {
+    set.gear = clean({
+      pieces: patch.gear.pieces,
+      ...(patch.gear.capeColor !== undefined ? { capeColor: patch.gear.capeColor } : {}),
+    });
+  }
+  if (patch.oldCoin !== undefined) {
+    set.old_coin = patch.oldCoin;
+  }
+  if (patch.tzOffsetMinutes !== undefined) {
+    set.tz_offset = patch.tzOffsetMinutes;
   }
   if (patch.weekState !== undefined) {
     set.wk_week = patch.weekState.week;
@@ -986,6 +1115,8 @@ export class Db {
         level: num(item, 'level', 1),
         renown: num(item, 'renown', 0),
         vocation: str(item, 'vocation') ?? 'Journeyman',
+        pins: stringList(item.pinned_feats),
+        coin: bool(item, 'old_coin', false),
       }))
       .filter((player) => Number.isSafeInteger(player.id));
     return players.reduce<BadgeProfile | null>(
@@ -1443,6 +1574,137 @@ export class Db {
     }
   }
 
+  // ----- expeditions, Forge orders and Feats: EXPEDITION#<ts>, JOB#<station>, FEAT#<id> -----
+  //
+  // The profile holds the state the scorer and the endpoints read (the latest expedition, the stations'
+  // orders, the unlocked Feats) and is the lock: it is written first, under its `version`. These items are
+  // the durable record of each event, written conditionally so that repeating a request cannot repeat it.
+
+  /** Record a sent expedition. False when one is already stored for that instant (a repeat of the send). */
+  async putExpedition(userId: number, expedition: ExpeditionState): Promise<boolean> {
+    try {
+      await this.put(
+        'EXPEDITION',
+        expeditionKey(userId, new Date(expedition.sentAt).toISOString()),
+        expeditionAttributes(expedition),
+        { expression: 'attribute_not_exists(#c0)', names: { '#c0': 'PK' } },
+      );
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Claim a returned expedition's loot: flip `collected` false to true and store the loot rolled from the
+   * seed, once. The item is created if the send never recorded it. False when it was already claimed, in
+   * which case nothing changed (the loot on the item is the same, because it is a function of the seed).
+   */
+  async claimExpedition(
+    userId: number,
+    collected: ExpeditionState,
+    nowMs: number,
+  ): Promise<boolean> {
+    try {
+      await this.update(
+        'EXPEDITION',
+        expeditionKey(userId, new Date(collected.sentAt).toISOString()),
+        {
+          set: {
+            ...expeditionAttributes(collected),
+            collected: true,
+            collected_at: new Date(nowMs).toISOString(),
+          },
+        },
+        {
+          expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
+          names: { '#c0': 'PK', '#c1': 'collected' },
+          values: { ':c0': false },
+        },
+      );
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Record a started order at its station, replacing the station's previous (collected) order. False when
+   * the station's stored order is still waiting to be collected, which the profile never allows.
+   */
+  async putJob(userId: number, job: ForgeJob): Promise<boolean> {
+    try {
+      await this.put('JOB', jobKey(userId, job.station), jobAttributes(job), {
+        expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
+        names: { '#c0': 'PK', '#c1': 'collected' },
+        values: { ':c0': true },
+      });
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** Claim a finished order: flip `collected` false to true and store the piece it made. False if already claimed. */
+  async claimJob(userId: number, collected: ForgeJob, nowMs: number): Promise<boolean> {
+    try {
+      await this.update(
+        'JOB',
+        jobKey(userId, collected.station),
+        {
+          set: {
+            ...jobAttributes(collected),
+            collected: true,
+            collected_at: new Date(nowMs).toISOString(),
+          },
+        },
+        {
+          expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
+          names: { '#c0': 'PK', '#c1': 'collected' },
+          values: { ':c0': false },
+        },
+      );
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** Record a Feat's unlock, once. False when it was already recorded (so a repeat never writes twice). */
+  async putFeat(
+    userId: number,
+    featId: string,
+    unlockedAtMs: number,
+    deliveryId: string,
+  ): Promise<boolean> {
+    try {
+      await this.put(
+        'FEAT',
+        featKey(userId, featId),
+        { unlocked_at: new Date(unlockedAtMs).toISOString(), delivery_id: deliveryId },
+        { expression: 'attribute_not_exists(#c0)', names: { '#c0': 'PK' } },
+      );
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   // ----- weekly run: USER#<id> / WEEK#<yyyy-ww> -----
 
   async getWeek(userId: number, weekKey: string): Promise<RunState | null> {
@@ -1596,6 +1858,34 @@ export class Db {
       throw error;
     }
   }
+}
+
+function expeditionAttributes(expedition: ExpeditionState): Attrs {
+  return {
+    region: expedition.region,
+    hours: expedition.hours,
+    forage: expedition.forage,
+    sent_at: expedition.sentAt,
+    returns_at: expedition.returnsAt,
+    seed: expedition.seed,
+    provisions_paid: expedition.provisionsPaid,
+    pack_bonus: expedition.packBonus,
+    collected: expedition.collected,
+    ...(expedition.loot !== undefined ? { loot: clean(expedition.loot) } : {}),
+  };
+}
+
+function jobAttributes(job: ForgeJob): Attrs {
+  return {
+    recipe: job.recipe,
+    station: job.station,
+    started_at: job.startedAt,
+    done_at: job.doneAt,
+    seed: job.seed,
+    collected: job.collected,
+    ...(job.piece !== undefined ? { piece: clean(job.piece) } : {}),
+    ...(job.output !== undefined ? { output: clean(job.output) } : {}),
+  };
 }
 
 /** A run plus what the endpoints keep beside it on the `WEEK#` item. */

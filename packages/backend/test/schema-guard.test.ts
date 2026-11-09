@@ -3,8 +3,8 @@
  * `Db#put` or `Db#update`, and every item type those two are called with has an allow-list.
  *
  * The scan reads the production sources, so a new write call site, or a new item type, that skips the
- * guard fails here instead of shipping. (When task 22 adds `FEAT#`, `EXPEDITION#` and `JOB#` items, this
- * test will not pass until `schema.ts` has an allow-list for each.)
+ * guard fails here instead of shipping. Task 22's `EXPEDITION#`, `JOB#` and `FEAT#` items have an
+ * allow-list each, and `db.ts` writes each one.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +97,9 @@ describe('every write goes through the schema guard', () => {
       INSTALL: ['INSTALL#1', 'META'],
       DELIVERY: ['DELIVERY#d', 'META'],
       STATE: ['STATE#n', 'META'],
+      EXPEDITION: ['USER#1', 'EXPEDITION#2026-11-09T12:00:00.000Z'],
+      JOB: ['USER#1', 'JOB#forge'],
+      FEAT: ['USER#1', 'FEAT#merge-conflict'],
     };
     expect(Object.keys(samples).sort()).toEqual([...KINDS].sort());
     for (const kind of KINDS) {

@@ -14,17 +14,22 @@
  * "Redeliver" works; after a credit the claim is kept, so a redelivery cannot credit XP twice.
  */
 import {
+  addSupplies,
   applyScoreResult,
   clearAct,
   createPlayerState,
+  evaluateFeats,
   levelFor,
   lifetimeMerges,
   riposteCreditEvents,
   score,
+  sendExpedition,
   verifiedKillEvents,
 } from '@mergescape/shared';
 import type {
   EventActor,
+  ExpeditionState,
+  FeatUnlock,
   GameEvent,
   InstallationEvent,
   InstallationRepositoriesEvent,
@@ -36,14 +41,26 @@ import type {
   VerifiedKillEvent,
 } from '@mergescape/shared';
 import { VersionConflictError } from './db';
-import type { Db, EventRow, InstallationItem, PRBundle, ProfileItem, ScoreWrite } from './db';
+import type {
+  Db,
+  EventRow,
+  InstallationItem,
+  PRBundle,
+  ProfileItem,
+  ProfilePatch,
+  ScoreWrite,
+} from './db';
+import { applyFeats, settleWorld, writeFeats } from './feat-flow';
 import type { Logger } from './log';
 import type { MetricName, Metrics } from './metrics';
 import { buildPRState } from './pr-state';
-import { scorerStateOf, toPlayerState } from './player';
+import { depthPatch, scorerStateOf, toPlayerState } from './player';
 import { loadCurrent } from './runs';
 import type { RunContext } from './runs';
 import { randomSeed } from './seed';
+
+/** The one expedition the game sends on its own: the free 4 h Forage to Koko Woods after the first scored event. */
+const ONBOARDING = { region: 'koko-woods', choice: 'forage' } as const;
 
 export interface IngestContext {
   db: Db;
@@ -53,6 +70,8 @@ export interface IngestContext {
   now: () => number;
   /** A fresh random uint32 for a run started lazily by a player's first event of a week. */
   newSeed?: () => number;
+  /** The seed of the onboarding expedition (a random uint32 in production; tests pin it). */
+  rollSeed?: () => number;
 }
 
 export type ProcessOutcome = 'processed' | 'duplicate' | 'dropped';
@@ -367,9 +386,11 @@ function scoreWrite(
   after: PlayerState,
   result: ScoreResult,
   now: number,
+  depth: ProfilePatch,
 ): ScoreWrite {
   const updates = result.counterUpdates;
-  const patch: NonNullable<ScoreWrite['patch']> = {};
+  // Supplies, Feat counters, Feats and the onboarding expedition ride in the same guarded write.
+  const patch: NonNullable<ScoreWrite['patch']> = { ...depth };
   if (updates.repoMerges !== undefined) {
     patch.repoMerges = after.repoMerges;
   }
@@ -409,6 +430,7 @@ async function creditWeek(
   event: PullRequestEvent,
   result: ScoreResult,
   after: PlayerState,
+  now: number,
 ): Promise<void> {
   if (result.xp <= 0) {
     return;
@@ -443,6 +465,21 @@ async function creditWeek(
       gold: cleared.player.gold - after.gold,
       renown: cleared.clear.renown - after.renown,
     });
+    if (cleared.clear.act === 'boss') {
+      // The Boss is down: the Mogul and the unbroken run of Boss weeks feed the World and Endurance Feats,
+      // and the Renown it just paid can reach one (read after the payout, which is why it is a second write).
+      try {
+        await settleWorld(
+          ctx.db,
+          userId,
+          { kind: 'boss_cleared', mogul: week.run.mogul },
+          now,
+          `boss-${weekKey}`,
+        );
+      } catch (error) {
+        ctx.log.error('ingest.feat_failed', { userId }, error);
+      }
+    }
   }
 }
 
@@ -470,13 +507,34 @@ async function credit(
     }
     const { profile, player, run } = current;
     const result = score(event, player, prState, now);
-    if (result.xp > 0 || changesProfile(result)) {
-      const after = applyScoreResult(player, prState, result).player;
+    // What the event does to the character beyond its XP (tasks.md 22): bank its supplies, count it toward
+    // the Feats and unlock the ones it reaches, and send the onboarding expedition after the first one.
+    const scored = applyScoreResult(player, prState, result).player;
+    const banked = addSupplies(scored, result.supplies);
+    const evaluation = evaluateFeats(player, event, prState, result, now);
+    const featured = applyFeats(banked, evaluation, now);
+    let after = featured.player;
+    let onboarding: ExpeditionState | null = null;
+    if (result.skip === null && !isBackfill(event) && (player.expedition ?? null) === null) {
+      const sent = sendExpedition(
+        after,
+        ONBOARDING.region,
+        ONBOARDING.choice,
+        now,
+        (ctx.rollSeed ?? randomSeed)(),
+      );
+      if (sent.ok) {
+        after = sent.player;
+        onboarding = sent.expedition;
+      }
+    }
+    const depth = depthPatch(player, after);
+    if (result.xp > 0 || changesProfile(result) || Object.keys(depth).length > 0) {
       try {
         await ctx.db.applyScore(
           userId,
           profile.version,
-          scoreWrite(profile, run.weekKey, player, after, result, now),
+          scoreWrite(profile, run.weekKey, player, after, result, now, depth),
         );
       } catch (error) {
         if (error instanceof VersionConflictError) {
@@ -485,8 +543,10 @@ async function credit(
         throw error;
       }
       progress.committed = true;
+      const source = creditSuffix(event, deliveryId);
+      await recordDepth(ctx, userId, featured.unlocked, onboarding, source, now);
       try {
-        await creditWeek(ctx, userId, run.weekKey, event, result, after);
+        await creditWeek(ctx, userId, run.weekKey, event, result, after, now);
       } catch (error) {
         // The profile is already credited: keep the Combat Log row and report the week's failure.
         ctx.log.error('ingest.week_failed', { userId }, error);
@@ -500,6 +560,34 @@ async function credit(
     return;
   }
   throw new VersionConflictError();
+}
+
+/** An event replayed from history never counts toward a Feat or starts an expedition (Requirement 17.6). */
+function isBackfill(event: PullRequestEvent): boolean {
+  return event.backfill === true;
+}
+
+/**
+ * The records that follow a committed profile write: a `FEAT#` item for each Feat the event unlocked, and
+ * the `EXPEDITION#` item of the onboarding expedition. The profile already holds both, so a failure here
+ * is logged and leaves nothing to redo: the item types are an audit trail, never read for the game.
+ */
+async function recordDepth(
+  ctx: IngestContext,
+  userId: number,
+  unlocked: readonly FeatUnlock[],
+  onboarding: ExpeditionState | null,
+  source: string,
+  now: number,
+): Promise<void> {
+  try {
+    await writeFeats(ctx.db, userId, unlocked, now, source);
+    if (onboarding !== null) {
+      await ctx.db.putExpedition(userId, onboarding);
+    }
+  } catch (error) {
+    ctx.log.error('ingest.depth_records_failed', { userId }, error);
+  }
 }
 
 function reviewTime(submittedAt: string | null): string {

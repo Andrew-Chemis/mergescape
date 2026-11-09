@@ -53,6 +53,24 @@ export const weekKeyOf = (userId: number, weekKey: string): Key => ({
   SK: `WEEK#${assertToken(weekKey, 'week key')}`,
 });
 
+/** One expedition, keyed by the instant it was sent (design.md 9.1). */
+export const expeditionKey = (userId: number, sentAt: string): Key => ({
+  PK: userPk(userId),
+  SK: `EXPEDITION#${assertInstant(sentAt, 'expedition time')}`,
+});
+
+/** The current (or last) order at a station. */
+export const jobKey = (userId: number, station: string): Key => ({
+  PK: userPk(userId),
+  SK: `JOB#${assertToken(station, 'station')}`,
+});
+
+/** A Feat, written once when it unlocks. */
+export const featKey = (userId: number, featId: string): Key => ({
+  PK: userPk(userId),
+  SK: `FEAT#${assertToken(featId, 'feat id')}`,
+});
+
 export const prMetaKey = (repoId: number, number: number): Key => ({
   PK: prPk(repoId, number),
   SK: 'META',

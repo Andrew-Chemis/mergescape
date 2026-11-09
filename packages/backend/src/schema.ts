@@ -5,7 +5,17 @@
  */
 
 export type ItemKind =
-  'PROFILE' | 'EVENT' | 'PR' | 'REVIEW' | 'INSTALL' | 'DELIVERY' | 'STATE' | 'WEEK';
+  | 'PROFILE'
+  | 'EVENT'
+  | 'PR'
+  | 'REVIEW'
+  | 'INSTALL'
+  | 'DELIVERY'
+  | 'STATE'
+  | 'WEEK'
+  | 'EXPEDITION'
+  | 'JOB'
+  | 'FEAT';
 
 /** Attributes every item has. */
 export const KEY_ATTRIBUTES = ['PK', 'SK'] as const;
@@ -55,6 +65,29 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'wk_completed',
     'wk_chain',
     'wk_dice',
+    // The depth layers (tasks 20 to 22): what the character carries and has earned. All of it is derived
+    // game state (ids, counts, timestamps and the seeds that fix a roll), never anything from GitHub.
+    // The satchel of six supplies and four crafting materials.
+    'satchel',
+    // The latest expedition, collected or not; `EXPEDITION#` keeps every one.
+    'expedition',
+    // Gear owned and not worn, the worn pieces with the cape colour, and the pets owned.
+    'inventory',
+    'gear',
+    'pets',
+    // Seeds of unopened Charm packs from loot.
+    'charm_packs',
+    // The three stations (their current orders) and the upgrades bought; `JOB#` keeps the orders.
+    'forge',
+    // Feats: the unlocked ids, titles earned, the pinned three, and the rolling counters they read.
+    'feats_unlocked',
+    'titles',
+    'pinned_feats',
+    'feat_counters',
+    // True once The Old Coin is found: with `pinned_feats` it is all the badge reads about Feats (GSI1).
+    'old_coin',
+    // Minutes east of UTC for the local-time Feats. Nothing writes it yet (the timezone setting is deferred).
+    'tz_offset',
   ],
   // USER#<id> / EVT#<ts>#<delivery>: one Combat Log row. Numbers and scorer-generated labels only.
   EVENT: [
@@ -139,6 +172,36 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'free_pack',
     'legendary',
   ],
+  // USER#<id> / EXPEDITION#<iso sent_at>: one expedition. The seed is stored at send time and the loot is
+  // rolled from it once, on collection, then stored here (Requirement 15.4).
+  EXPEDITION: [
+    'region',
+    'hours',
+    'forage',
+    'sent_at',
+    'returns_at',
+    'seed',
+    'provisions_paid',
+    'pack_bonus',
+    'collected',
+    'collected_at',
+    'loot',
+  ],
+  // USER#<id> / JOB#<station>: the current (or last) order at a station.
+  JOB: [
+    'recipe',
+    'station',
+    'started_at',
+    'done_at',
+    'seed',
+    'piece',
+    'collected',
+    'collected_at',
+    'output',
+  ],
+  // USER#<id> / FEAT#<feat_id>: written once when the Feat unlocks, recording the event that unlocked it
+  // (a delivery id, or the id of the expedition, Boss clear or rollover that did) so it can be audited.
+  FEAT: ['unlocked_at', 'delivery_id'],
 };
 
 export class SchemaViolationError extends Error {
@@ -182,7 +245,16 @@ export function classifyItem(pk: string, sk: string): ItemKind | null {
     if (sk.startsWith('EVT#')) {
       return 'EVENT';
     }
-    return sk.startsWith('WEEK#') ? 'WEEK' : null;
+    if (sk.startsWith('WEEK#')) {
+      return 'WEEK';
+    }
+    if (sk.startsWith('EXPEDITION#')) {
+      return 'EXPEDITION';
+    }
+    if (sk.startsWith('JOB#')) {
+      return 'JOB';
+    }
+    return sk.startsWith('FEAT#') ? 'FEAT' : null;
   }
   if (pk.startsWith('PR#')) {
     if (sk === 'META') {

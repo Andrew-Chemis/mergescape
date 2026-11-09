@@ -73,6 +73,9 @@ export const GSI1_PROJECTED_ATTRIBUTES: readonly string[] = [
   'xp',
   'renown',
   'vocation',
+  // Task 22: the badge draws the pinned Feats and the Old Coin.
+  'pinned_feats',
+  'old_coin',
 ];
 
 export interface FakeDynamoOptions {

@@ -1,4 +1,11 @@
-import { createPlayerState, zoneExponentFor } from '@mergescape/shared';
+import {
+  createPlayerState,
+  featBonusFor,
+  forgeOf,
+  loadoutOf,
+  satchelOf,
+  zoneExponentFor,
+} from '@mergescape/shared';
 import type { PlayerState, RunState } from '@mergescape/shared';
 import type { ProfileItem, ProfilePatch, WeekScorerState } from './db';
 
@@ -35,6 +42,19 @@ export function toPlayerState(profile: ProfileItem): PlayerState {
       benched: profile.mogulBenched,
       boardWeek: profile.mogulBoardWeek,
     },
+    // The depth layers. The set bonus and the Feat Power bonus are worked out, never stored.
+    gear: loadoutOf(profile.gear.pieces, profile.gear.capeColor ?? undefined),
+    feats: { unlocked: profile.featsUnlocked, powerBonus: featBonusFor(profile.featsUnlocked) },
+    satchel: profile.satchel,
+    expedition: profile.expedition,
+    inventory: profile.inventory,
+    ...(profile.pets !== null ? { pets: profile.pets } : {}),
+    charmPacks: profile.charmPacks,
+    forge: profile.forge,
+    titles: profile.titles,
+    pinnedFeats: profile.pinnedFeats,
+    ...(profile.featCounters !== null ? { featCounters: profile.featCounters } : {}),
+    ...(profile.tzOffsetMinutes !== null ? { tzOffsetMinutes: profile.tzOffsetMinutes } : {}),
   };
 }
 
@@ -89,6 +109,57 @@ export function shopPatch(before: PlayerState, after: PlayerState): ProfilePatch
   }
   if (!same(after.cosmetics, before.cosmetics)) {
     patch.cosmetics = after.cosmetics;
+  }
+  return patch;
+}
+
+/** The id of the Feat whose coin the badge shows. */
+export const OLD_COIN_FEAT = 'the-old-coin';
+
+/**
+ * The profile fields an expedition, Forge, gear, Feat or pack action changed between two states of the same
+ * player: the satchel, the latest expedition, the inventory and worn gear, pets, Charm packs, the Forge, Feats
+ * and titles, pins and the Feat counters. Only changed fields are present. Gold, Charms and the like belong
+ * to `shopPatch`; an action that changes both (opening a Charm pack) uses both.
+ */
+export function depthPatch(before: PlayerState, after: PlayerState): ProfilePatch {
+  const patch: ProfilePatch = {};
+  if (!same(after.satchel, before.satchel)) {
+    patch.satchel = satchelOf(after);
+  }
+  if (!same(after.expedition, before.expedition) && after.expedition) {
+    patch.expedition = after.expedition;
+  }
+  if (!same(after.inventory, before.inventory)) {
+    patch.inventory = after.inventory ?? [];
+  }
+  if (!same(after.gear, before.gear)) {
+    patch.gear = {
+      pieces: after.gear.pieces,
+      ...(after.gear.capeColor !== undefined ? { capeColor: after.gear.capeColor } : {}),
+    };
+  }
+  if (!same(after.pets, before.pets)) {
+    patch.pets = after.pets ?? [];
+  }
+  if (!same(after.charmPacks, before.charmPacks)) {
+    patch.charmPacks = after.charmPacks ?? [];
+  }
+  if (!same(after.forge, before.forge)) {
+    patch.forge = forgeOf(after);
+  }
+  if (!same(after.feats.unlocked, before.feats.unlocked)) {
+    patch.featsUnlocked = after.feats.unlocked;
+    patch.oldCoin = after.feats.unlocked.includes(OLD_COIN_FEAT);
+  }
+  if (!same(after.titles, before.titles)) {
+    patch.titles = after.titles ?? [];
+  }
+  if (!same(after.pinnedFeats, before.pinnedFeats)) {
+    patch.pinnedFeats = after.pinnedFeats ?? [];
+  }
+  if (!same(after.featCounters, before.featCounters) && after.featCounters) {
+    patch.featCounters = after.featCounters;
   }
   return patch;
 }

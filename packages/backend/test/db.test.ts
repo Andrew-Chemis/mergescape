@@ -978,8 +978,51 @@ describe('schema guard', () => {
         'wk_completed',
         'wk_chain',
         'wk_dice',
+        // The depth layers (task 22).
+        'satchel',
+        'expedition',
+        'inventory',
+        'gear',
+        'pets',
+        'charm_packs',
+        'forge',
+        'feats_unlocked',
+        'titles',
+        'pinned_feats',
+        'feat_counters',
+        'old_coin',
+        'tz_offset',
       ].sort(),
     );
+    expect([...ALLOWED_ATTRIBUTES.EXPEDITION].sort()).toEqual(
+      [
+        'region',
+        'hours',
+        'forage',
+        'sent_at',
+        'returns_at',
+        'seed',
+        'provisions_paid',
+        'pack_bonus',
+        'collected',
+        'collected_at',
+        'loot',
+      ].sort(),
+    );
+    expect([...ALLOWED_ATTRIBUTES.JOB].sort()).toEqual(
+      [
+        'recipe',
+        'station',
+        'started_at',
+        'done_at',
+        'seed',
+        'piece',
+        'collected',
+        'collected_at',
+        'output',
+      ].sort(),
+    );
+    expect([...ALLOWED_ATTRIBUTES.FEAT].sort()).toEqual(['unlocked_at', 'delivery_id'].sort());
     expect([...ALLOWED_ATTRIBUTES.WEEK].sort()).toEqual(
       [
         'week_key',
@@ -1001,7 +1044,7 @@ describe('schema guard', () => {
       ].sort(),
     );
     // Game state is ids, counts and timestamps: never text from a pull request.
-    for (const kind of ['PROFILE', 'WEEK'] as const) {
+    for (const kind of ['PROFILE', 'WEEK', 'EXPEDITION', 'JOB', 'FEAT'] as const) {
       for (const forbidden of ['title', 'body', 'comment', 'path', 'diff', 'repo_name', 'branch']) {
         expect(ALLOWED_ATTRIBUTES[kind]).not.toContain(forbidden);
       }
