@@ -150,13 +150,13 @@ Conventions for the implementer:
 
 ---
 
-- [ ] 20. **[v1.5]** Shared: supplies, expeditions, loot tables
+- [x] 20. **[v1.5]** Shared: supplies, expeditions, loot tables
   - `supplies.ts`: drop table per event (game-design.md §6.1) emitted by `score()` alongside XP; satchel model on the profile.
   - `expeditions.ts`: region definitions with Renown gates and loot leans, duration/cost table, diminishing yield curve, seeded loot roll (mulberry32 over the stored seed), item count 3 to 6, rarity bands for gear, Charm packs, pets, uniques; Reclaimed unique naming from a curated list of invented former owners.
   - _Requirements: 4.11, 15.1, 15.2, 15.3, 15.4, 15.7_
   - Verify: same seed yields identical loot; yield per Provision strictly decreasing across 4/12/24/48 h; every region's table sums to 100%.
 
-- [ ] 21. **[v1.5]** Shared: gear, Forge recipes, pets, Feats
+- [x] 21. **[v1.5]** Shared: gear, Forge recipes, pets, Feats
   - `gear.ts`: slots, tiers, Power per piece, set bonus, affixes, equip validation; wire into `score()` Power with the cap raised to 9.
   - `forge.ts`: station recipes (inputs, duration, output), upgrades (Bellows, Dyes, Index), job state machine.
   - `pets.ts`: six pets with passives (passives may only touch supplies, expedition duration or pack odds).
@@ -184,6 +184,14 @@ Conventions for the implementer:
   - Tune onboarding so a normal first week reaches the Boss act (game-design.md §10) using fixture weeks.
   - _Requirements: 10.5, 7.5_
   - Verify: owner walkthrough of day 0 to week 2 on fixture data; axe clean; reduced-motion run shows no animation.
+
+- [ ] 25. **[v1.5]** Infra: convert to CDK for the landing zone
+  - Rewrite `packages/infra` as a CDK v2 app (TypeScript) producing the same resources as the SAM template (table, two NodejsFunctions with Function URLs, CloudFront badge distribution, SSM-read IAM, EventBridge rollover, log retention, budgets), targeting the landing zone's bootstrap (`cdk-hnb659fds-*` roles) in `us-west-2`.
+  - Replace `scripts/validate.mjs` with `aws-cdk-lib/assertions` tests asserting the same IAM and resource set; keep cfn-lint/checkov on the synthesized template in CI.
+  - `deploy.yml`: assume `lz-mergescape-deploy` in the Infrastructure account via OIDC, then `cdk deploy --require-approval never`; Pages job unchanged.
+  - Update infra README, root README self-hosting guide and `docs/decisions.md` (CDK chosen because the landing zone grants deploys only through CDK bootstrap roles).
+  - _Requirements: 12.1, 12.2, 12.7_
+  - Verify: `cdk synth` succeeds; assertions tests green; cfn-lint and checkov clean on the synthesized template; `pnpm lint/typecheck/test/build` green.
 
 ---
 

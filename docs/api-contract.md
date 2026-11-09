@@ -84,3 +84,24 @@ Served from `MeResponse.kills` and `firstSeen`; no extra route.
 - After any mutation, replace local `me` and `week` with the response; do not refetch.
 - Shop and pledge errors (409) are shown inline next to the control, never as a modal.
 - Fixture mode (`?fixture=1`) must include a `week` with an open shop so the Shop screen renders offline.
+
+## Depth layer (tasks 22–23)
+
+Types from `@mergescape/shared`: `Satchel`, `LootItem`, `ExpeditionState`, `ForgeJob`, `GearPiece`, `FeatStatus`, `RegionId`, `ExpeditionChoice` (`4 | 12 | 24 | 48 | 'forage'`), `Station` (`'forge' | 'loom' | 'scriptorium'`), `RecipeId`, `PetId`, `CapeColor`.
+
+`MeResponse` gains: `satchel: Satchel`, `inventory: GearPiece[]`, `gear: { equipped: Partial<Record<Slot, GearPiece>>; setBonus: number; capeColor: CapeColor | null }`, `pets: PetId[]`, `charmPacks: number[]` (unopened pack seeds), `forge: { upgrades: string[]; stations: Partial<Record<Station, ForgeJob>> }`, `titles: string[]`, `pinnedFeats: string[]`, `expedition: ExpeditionState | null` (latest), `tzOffsetMinutes: number | null`.
+
+- `GET /expedition` → `{ expedition: ExpeditionState | null, status: 'none' | 'away' | 'returned' | 'collected', returnsAt: string | null, regions: { id: RegionId; name: string; unlocked: boolean; renownRequired: number; lean: string | null }[], choices: { choice: ExpeditionChoice; hours: number; provisions: number; affordable: boolean }[] }`
+- `POST /expedition/send` `{ requestId, region: RegionId, choice: ExpeditionChoice }` → `{ me, expedition }`; 409 codes `in_progress`, `uncollected`, `region_locked`, `insufficient_provisions`.
+- `POST /expedition/collect` `{ requestId }` → `{ me, expedition, loot: LootItem[], applied: boolean, featsUnlocked: string[] }`; 409 `not_returned`, 404 `no_expedition`.
+- `POST /packs/open` `{ requestId, seed: number, charmId: string }` → `{ me }`; `GET /packs/:seed` → `{ options: Charm[] }`; 409 `no_such_pack`, `bad_option`, `no_free_slot`.
+- `GET /forge` → `{ stations: Record<Station, { job: ForgeJob | null; status: 'idle' | 'working' | 'ready' | 'collected'; readyAt: string | null }>, recipes: { id: RecipeId; station: Station; name: string; inputs: Partial<Satchel>; hours: number; unlocked: boolean; affordable: boolean }[], upgrades: { id: string; owned: boolean; cost: Partial<Satchel> }[] }`
+- `POST /forge/start` `{ requestId, recipeId: RecipeId, pieceId?: string }` → `{ me }`; 409 codes from shared `ForgeError`.
+- `POST /forge/collect` `{ requestId, station: Station }` → `{ me, piece: GearPiece | null, applied: boolean }`; 409 `no_job`, `not_ready`.
+- `POST /forge/upgrade` `{ requestId, upgrade: 'bellows' | 'dyes' | 'index' }` or `{ requestId, capeColor: CapeColor | null }` → `{ me }`; 409 `already_owned`, `insufficient_supplies`, `dyes_required`.
+- `POST /gear/equip` `{ requestId, pieceId: string }` or `{ requestId, unequip: Slot }` or `{ requestId, petId: PetId }` → `{ me }`; 409 `not_owned`, `already_equipped`, `tier_locked`, `nothing_equipped`, `pet_slot`.
+- `GET /feats` → `{ feats: FeatStatus[] }` (hidden ones come back as `???` with hint only, per shared `featStatuses`).
+- `POST /feats/pin` `{ requestId, featId: string, pinned: boolean }` → `{ me }`; 409 `not_unlocked`, `already_pinned`, `too_many_pinned`.
+- `GET /badge/:login.svg` additionally renders up to three pinned Feat glyphs and the Old Coin when unlocked.
+
+Client fixture mode must include: a returned, uncollected expedition; one working and one ready Forge job; an inventory with a few pieces and one equipped set; 2 unopened charm packs; 6 feats (2 unlocked, 1 pinned, 1 hidden).
