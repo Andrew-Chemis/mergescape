@@ -58,7 +58,7 @@ describe('the shop is open after the Scout clear', () => {
       visit: 1,
       charms: [
         { index: 0, charm: expect.objectContaining({ id: 'lantern' }), price: 40, sold: false },
-        { index: 1, charm: expect.objectContaining({ id: 'rubber-duck' }), price: 40, sold: false },
+        { index: 1, charm: expect.objectContaining({ id: 'whetstone' }), price: 40, sold: false },
       ],
       packs: [
         { index: 0, kind: 'charm', price: 100, bought: false, picked: false, options: null },

@@ -86,8 +86,8 @@ function merge(player: PlayerState, size: number, reviews = approved): Step {
   return step(player, mergedEvent(pr), prStateFor(pr, { reviews }));
 }
 
-describe('the six Pledges (design.md 6.4)', () => {
-  it('are Strike, Defend, Big Game Hunter, Mentor, Tidy and Pair Up (Strike+)', () => {
+describe('the eight Pledges (design.md 6.4)', () => {
+  it('are Strike, Defend, Big Game Hunter, Mentor, Tidy, Pair Up (Strike+), Fine Comb and Well Reviewed', () => {
     expect(PLEDGES.map((entry) => [entry.id, entry.name, entry.upgraded])).toEqual([
       ['strike', 'Strike', false],
       ['defend', 'Defend', false],
@@ -95,6 +95,8 @@ describe('the six Pledges (design.md 6.4)', () => {
       ['mentor', 'Mentor', false],
       ['tidy', 'Tidy', false],
       ['pair-up', 'Pair Up', true],
+      ['fine-comb', 'Fine Comb', false],
+      ['well-reviewed', 'Well Reviewed', false],
     ]);
     expect(pledgeDefinition('pair-up')?.upgradeOf).toBe('strike');
     expect(pledgeDefinition('clean-sweep')).toBeUndefined();
@@ -495,6 +497,121 @@ describe('Mentor: approve 2 PRs from authors with fewer merges than you, +0.5 Po
       kind: 'power',
     });
     expect(pledgePower(second.player)).toBe(0.5);
+  });
+});
+
+describe('Fine Comb: 3 reviews after 3+ inline comments each, +0.5 Power on reviews', () => {
+  const counters = (inline: number): Partial<PRState> => ({
+    reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline } },
+  });
+  const review = (
+    player: PlayerState,
+    inline: number,
+    state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' = 'APPROVED',
+  ) => step(player, reviewEvent(state), prStateFor(facts(), counters(inline)));
+
+  it('counts a scoring review only after the reviewer left 3 inline comments on that PR', () => {
+    let player = playing(REVIEWER_ID, 'fine-comb');
+    player = review(player, 2).player;
+    expect(player.pledges.progress).toEqual({});
+    player = review(player, 3).player;
+    expect(player.pledges.progress).toEqual({ 'fine-comb': 1 });
+    player = review(player, 10, 'CHANGES_REQUESTED').player;
+    expect(player.pledges.progress).toEqual({ 'fine-comb': 2 });
+  });
+
+  it('does not count a bare comment review, however many inline comments came first', () => {
+    const next = review(playing(REVIEWER_ID, 'fine-comb'), 10, 'COMMENTED');
+    expect(next.player.pledges.progress).toEqual({});
+  });
+
+  it('counts the reviewer who is acting, not another reviewer on the same PR', () => {
+    const other = prStateFor(facts(), {
+      reviewerCounters: { [String(OTHER_REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 9 } },
+    });
+    const next = step(playing(REVIEWER_ID, 'fine-comb'), reviewEvent('APPROVED'), other);
+    expect(next.player.pledges.progress).toEqual({});
+  });
+
+  it('ignores merges', () => {
+    const next = merge(playing(AUTHOR_ID, 'fine-comb'), 40);
+    expect(next.player.pledges.progress).toEqual({});
+  });
+
+  it('adds +0.5 Power to reviews only, from the next event on', () => {
+    let player = playing(REVIEWER_ID, 'fine-comb');
+    player = review(player, 3).player;
+    player = review(player, 3).player;
+    const third = review(player, 3);
+    expect(third.result.power).toBe(1);
+    expect(third.player.pledges.completed).toEqual(['fine-comb']);
+    const next = review(third.player, 0);
+    expect(next.result.power).toBe(1.5);
+    expect(next.result.breakdown).toContainEqual({
+      label: 'Pledge bonus',
+      value: 0.5,
+      kind: 'power',
+    });
+    expect(pledgePower(third.player)).toBe(0);
+    const merged = step(third.player, mergedEvent(), prStateFor(mergedFacts()));
+    expect(merged.result.power).toBe(1);
+  });
+});
+
+describe('Well Reviewed: merge 2 PRs that each drew 3+ inline comments, +250 points', () => {
+  const read = (inline: number, reviewerId: number = REVIEWER_ID): Partial<PRState> => ({
+    reviews: approved,
+    reviewerCounters: { [String(reviewerId)]: { decisions: 1, comments: 0, inline } },
+  });
+  const mergeRead = (player: PlayerState, inline: number, size = 40) => {
+    const pr = mergedFacts({ stats: lines(size) });
+    return step(player, mergedEvent(pr), prStateFor(pr, read(inline)));
+  };
+
+  it('counts a merge that some reviewer read closely, whoever reviewed it', () => {
+    let player = playing(AUTHOR_ID, 'well-reviewed');
+    player = mergeRead(player, 2).player;
+    expect(player.pledges.progress).toEqual({});
+    player = mergeRead(player, 3).player;
+    expect(player.pledges.progress).toEqual({ 'well-reviewed': 1 });
+    const other = step(
+      player,
+      mergedEvent(mergedFacts()),
+      prStateFor(mergedFacts(), read(4, OTHER_REVIEWER_ID)),
+    );
+    expect(other.player.pledges.progress).toEqual({ 'well-reviewed': 2 });
+  });
+
+  it('pays +250 on the second, whatever the size: size earns nothing here', () => {
+    let player = playing(AUTHOR_ID, 'well-reviewed');
+    player = mergeRead(player, 5, 10).player;
+    const second = mergeRead(player, 5, 10);
+    expect(second.result.breakdown).toContainEqual({
+      label: 'Pledge: Well Reviewed',
+      value: 250,
+      kind: 'points',
+    });
+    // A huge PR that nobody read counts for nothing.
+    const unread = merge(playing(AUTHOR_ID, 'well-reviewed'), 5000);
+    expect(unread.player.pledges.progress).toEqual({});
+  });
+
+  it('ignores reviews', () => {
+    const next = step(
+      playing(REVIEWER_ID, 'well-reviewed'),
+      reviewEvent('APPROVED'),
+      prStateFor(facts(), read(9)),
+    );
+    expect(next.player.pledges.progress).toEqual({});
+  });
+});
+
+describe('the Pledges added in task 24 obey the incentive audit (game-design.md 8.3)', () => {
+  it('say nothing of night, closing, speed or volume', () => {
+    for (const id of ['fine-comb', 'well-reviewed'] as const) {
+      const text = pledgeDefinition(id)!.description;
+      expect(text, id).not.toMatch(/night|closed|close |fast|within|most/i);
+    }
   });
 });
 

@@ -31,7 +31,15 @@ import type {
  * merge or review; a completion bonus fires at most once per Pledge per week.
  */
 
-export type PledgeId = 'strike' | 'defend' | 'big-game-hunter' | 'mentor' | 'tidy' | 'pair-up';
+export type PledgeId =
+  | 'strike'
+  | 'defend'
+  | 'big-game-hunter'
+  | 'mentor'
+  | 'tidy'
+  | 'pair-up'
+  | 'fine-comb'
+  | 'well-reviewed';
 
 /** What a Pledge evaluator knows about a scored event. */
 export interface PledgeContext {
@@ -68,6 +76,16 @@ export interface PledgeDefinition {
 
 const isScoringReview = (ctx: PledgeContext): boolean =>
   ctx.event.kind === 'review_submitted' && ctx.event.state !== 'COMMENTED';
+
+/** A scoring review whose reviewer had already left at least `minInline` inline comments on the PR. */
+const isThoroughReview = (ctx: PledgeContext, minInline: number): boolean =>
+  ctx.event.kind === 'review_submitted' &&
+  ctx.event.state !== 'COMMENTED' &&
+  (ctx.pr.reviewerCounters[String(ctx.event.actor.id)]?.inline ?? 0) >= minInline;
+
+/** True when some reviewer has left at least `minInline` inline comments on the PR. */
+const wasRead = (ctx: PledgeContext, minInline: number): boolean =>
+  Object.values(ctx.pr.reviewerCounters).some((counters) => counters.inline >= minInline);
 
 export const PLEDGES: readonly PledgeDefinition[] = [
   {
@@ -144,6 +162,30 @@ export const PLEDGES: readonly PledgeDefinition[] = [
     goal: PLEDGE_RULES.pairUp.merges,
     counts: (ctx) => ctx.merge?.party === true,
     bonusPoints: PLEDGE_RULES.pairUp.bonusPoints,
+    completionMultiplier: 1,
+    powerBonus: 0,
+    powerOnReviewsOnly: false,
+  },
+  {
+    id: 'fine-comb',
+    name: 'Fine Comb',
+    upgraded: false,
+    description: `Submit ${PLEDGE_RULES.fineComb.reviews} scoring reviews, each after ${PLEDGE_RULES.fineComb.minInline} or more inline comments from you: +${PLEDGE_RULES.fineComb.powerBonus} Power on all reviews for the rest of the week.`,
+    goal: PLEDGE_RULES.fineComb.reviews,
+    counts: (ctx) => isThoroughReview(ctx, PLEDGE_RULES.fineComb.minInline),
+    bonusPoints: 0,
+    completionMultiplier: 1,
+    powerBonus: PLEDGE_RULES.fineComb.powerBonus,
+    powerOnReviewsOnly: true,
+  },
+  {
+    id: 'well-reviewed',
+    name: 'Well Reviewed',
+    upgraded: false,
+    description: `Merge ${PLEDGE_RULES.wellReviewed.merges} PRs that each drew ${PLEDGE_RULES.wellReviewed.minInline} or more inline comments from a reviewer: +${PLEDGE_RULES.wellReviewed.bonusPoints} points on the last.`,
+    goal: PLEDGE_RULES.wellReviewed.merges,
+    counts: (ctx) => ctx.merge !== null && wasRead(ctx, PLEDGE_RULES.wellReviewed.minInline),
+    bonusPoints: PLEDGE_RULES.wellReviewed.bonusPoints,
     completionMultiplier: 1,
     powerBonus: 0,
     powerOnReviewsOnly: false,

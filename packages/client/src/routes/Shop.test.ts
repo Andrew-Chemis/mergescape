@@ -312,12 +312,12 @@ describe('Shop: the free Raid pack and the Legendary offer', () => {
     const free = region('Free Pledge pack');
     const cards = within(free).getAllByRole('article');
     expect(cards.map((c) => within(c).getByRole('heading', { level: 3 }).textContent)).toEqual([
+      'Well Reviewed',
       'Defend',
       'Mentor',
-      'Pair Up',
     ]);
     expect(free.textContent).toContain('Keep exactly one');
-    await click('Keep Pair Up', free);
+    await click('Keep Mentor', free);
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Free Pledge pack' })).toBeNull(),
     );
@@ -326,7 +326,7 @@ describe('Shop: the free Raid pack and the Legendary offer', () => {
       index: -1,
       option: 2,
     });
-    expect(screen.getByText('Pair Up joins your deck.')).toBeTruthy();
+    expect(screen.getByText('Mentor joins your deck.')).toBeTruthy();
   });
 
   it('falls back to face-down cards if a free pack ever arrives without its options', async () => {

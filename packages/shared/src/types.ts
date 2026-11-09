@@ -1,6 +1,7 @@
 import type {
   ActId,
   Affix,
+  MONSTER_IDS,
   StationId,
   UpgradeId,
   ExpeditionHours,
@@ -48,16 +49,7 @@ export type MogulId =
   'rocket-man' | 'leather-jacket' | 'turtleneck' | 'hoodie' | 'founder' | 'two-pizza-boss';
 
 /** Bestiary ids; the Moguls are the Act III bosses. */
-export type MonsterId =
-  | 'merge-goblin'
-  | 'nitpick-imp'
-  | 'flaky-test-wraith'
-  | 'legacy-golem'
-  | 'rebase-hydra'
-  | 'scope-creep'
-  | 'release-dragon'
-  | 'silent-monolith'
-  | MogulId;
+export type MonsterId = (typeof MONSTER_IDS)[number] | MogulId;
 
 export interface Mogul {
   id: MogulId;

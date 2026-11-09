@@ -141,6 +141,13 @@ describe('constants match the spec tables', () => {
       greyBeardMerges: 50,
       jestersRiposteMultiplier: 4,
       loadedDicePower: 10,
+      whetstonePower: 0.5,
+      whetstoneInlineComments: 1,
+      familiarPathPower: 0.5,
+      familiarPathMerges: 10,
+      longLensPower: 1,
+      longLensMinLoc: 500,
+      longLensInlineComments: 3,
     });
   });
 
@@ -154,6 +161,8 @@ describe('constants match the spec tables', () => {
       mentor: { approvals: 2, powerBonus: 0.5 },
       tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
       pairUp: { merges: 3, bonusPoints: 600 },
+      fineComb: { reviews: 3, minInline: 3, powerBonus: 0.5 },
+      wellReviewed: { merges: 2, minInline: 3, bonusPoints: 250 },
     });
     expect(FREE_PLEDGE_PACK_ACT).toBe('raid');
   });

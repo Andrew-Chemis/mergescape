@@ -10,6 +10,7 @@ import type { Rarity } from './constants';
 import { utcDay } from './calendar';
 import { eventLines, hoursBetween } from './facts';
 import { tidy } from './math';
+import { lifetimeMerges } from './pledges';
 import { charmSlotCount } from './vouchers';
 import type {
   BreakdownLine,
@@ -19,10 +20,13 @@ import type {
   PowerContext,
   PRState,
   Result,
+  ReviewSubmittedEvent,
 } from './types';
 
 /**
- * The nine Charms (design.md 6.3 as audited in game-design.md 8.3). A definition carries:
+ * The twelve Charms (design.md 6.3 as audited in game-design.md 8.3). The last three, Whetstone, Familiar
+ * Path and Long Lens, came with the content pass of task 24 and obey the same audit: none rewards excess,
+ * the hour of day, a rubber stamp or a closed PR. A definition carries:
  * - `basePower`: Power the Charm always gives, per copy. 0 where the text only gives a conditional effect.
  * - `condition` and `conditionalPower`: extra Power per copy on events where the condition holds.
  * - the rule changes (Second Pair of Eyes, Jester's Rebase, Loaded Dice, Oracle), which are read where the
@@ -34,10 +38,13 @@ import type {
 export type CharmId =
   | 'rubber-duck'
   | 'lantern'
+  | 'whetstone'
   | 'small-hands'
   | 'second-pair-of-eyes'
+  | 'familiar-path'
   | 'hot-potato'
   | 'grey-beard'
+  | 'long-lens'
   | 'jesters-rebase'
   | 'loaded-dice'
   | 'oracle';
@@ -85,6 +92,29 @@ const hotPotatoCondition: CharmCondition = (event, _player, pr) =>
 const greyBeardCondition: CharmCondition = (event, player) =>
   'pr' in event && (player.repoMerges[String(event.pr.repoId)] ?? 0) >= CHARM_RULES.greyBeardMerges;
 
+/** How many inline comments the acting reviewer has left on the PR so far. */
+const inlineBy = (event: ReviewSubmittedEvent, pr: PRState): number =>
+  pr.reviewerCounters[String(event.actor.id)]?.inline ?? 0;
+
+/** A review that decides: an approval or a request for changes, never a bare comment. */
+const isDecision = (event: GameEvent): event is ReviewSubmittedEvent =>
+  event.kind === 'review_submitted' && event.state !== 'COMMENTED';
+
+const whetstoneCondition: CharmCondition = (event, player, pr) =>
+  event.kind === 'review_submitted' &&
+  event.state === 'APPROVED' &&
+  inlineBy(event, pr) >= CHARM_RULES.whetstoneInlineComments &&
+  (pr.authorMerges ?? 0) < lifetimeMerges(player);
+
+const familiarPathCondition: CharmCondition = (event, player) =>
+  'pr' in event &&
+  (player.repoMerges[String(event.pr.repoId)] ?? 0) >= CHARM_RULES.familiarPathMerges;
+
+const longLensCondition: CharmCondition = (event, _player, pr) =>
+  isDecision(event) &&
+  eventLines(event.pr, pr) >= CHARM_RULES.longLensMinLoc &&
+  inlineBy(event, pr) >= CHARM_RULES.longLensInlineComments;
+
 export const CHARMS: readonly CharmDefinition[] = [
   {
     id: 'rubber-duck',
@@ -107,6 +137,17 @@ export const CHARMS: readonly CharmDefinition[] = [
     condition: lanternCondition,
   },
   {
+    id: 'whetstone',
+    name: 'Whetstone',
+    rarity: 'common',
+    description:
+      '+0.5 Power on an approval, backed by at least one inline comment, of a PR from an author with fewer merges than you.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.whetstonePower,
+    conditionLabel: 'mentoring approval',
+    condition: whetstoneCondition,
+  },
+  {
     id: 'small-hands',
     name: 'Small Hands',
     rarity: 'uncommon',
@@ -124,6 +165,16 @@ export const CHARMS: readonly CharmDefinition[] = [
     basePower: 0,
     conditionalPower: 0,
     conditionLabel: '',
+  },
+  {
+    id: 'familiar-path',
+    name: 'Familiar Path',
+    rarity: 'uncommon',
+    description: '+0.5 Power on any PR in a repository where you have merged 10 times or more.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.familiarPathPower,
+    conditionLabel: `${CHARM_RULES.familiarPathMerges}+ merges in this repo`,
+    condition: familiarPathCondition,
   },
   {
     id: 'hot-potato',
@@ -144,6 +195,17 @@ export const CHARMS: readonly CharmDefinition[] = [
     conditionalPower: CHARM_RULES.greyBeardPower,
     conditionLabel: `${CHARM_RULES.greyBeardMerges}+ merges in this repo`,
     condition: greyBeardCondition,
+  },
+  {
+    id: 'long-lens',
+    name: 'Long Lens',
+    rarity: 'rare',
+    description:
+      '+1.0 Power on an approval or a request for changes on a PR of 500 lines or more, after at least 3 inline comments from you.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.longLensPower,
+    conditionLabel: `thorough review of ${CHARM_RULES.longLensMinLoc}+ lines`,
+    condition: longLensCondition,
   },
   {
     id: 'jesters-rebase',

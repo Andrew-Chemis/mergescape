@@ -76,15 +76,18 @@ function powerLines(result: ScoreResult): [string, number][] {
     .map((line) => [line.label, line.value]);
 }
 
-describe('the nine Charms (design.md 6.3 as audited)', () => {
-  it('are exactly these nine, with these rarities', () => {
+describe('the twelve Charms (design.md 6.3 as audited)', () => {
+  it('are exactly these twelve, with these rarities', () => {
     expect(CHARMS.map((entry) => [entry.id, entry.name, entry.rarity])).toEqual([
       ['rubber-duck', 'Rubber Duck', 'common'],
       ['lantern', 'Lantern', 'common'],
+      ['whetstone', 'Whetstone', 'common'],
       ['small-hands', 'Small Hands', 'uncommon'],
       ['second-pair-of-eyes', 'Second Pair of Eyes', 'uncommon'],
+      ['familiar-path', 'Familiar Path', 'uncommon'],
       ['hot-potato', 'Hot Potato', 'rare'],
       ['grey-beard', 'Grey Beard', 'rare'],
+      ['long-lens', 'Long Lens', 'rare'],
       ['jesters-rebase', "Jester's Rebase", 'legendary'],
       ['loaded-dice', 'Loaded Dice', 'legendary'],
       ['oracle', 'Oracle', 'legendary'],
@@ -106,6 +109,9 @@ describe('the nine Charms (design.md 6.3 as audited)', () => {
     expect(power('small-hands')).toEqual([0, 0.75]);
     expect(power('hot-potato')).toEqual([0, 1.5]);
     expect(power('grey-beard')).toEqual([0, 1]);
+    expect(power('whetstone')).toEqual([0, 0.5]);
+    expect(power('familiar-path')).toEqual([0, 0.5]);
+    expect(power('long-lens')).toEqual([0, 1]);
     for (const id of ['second-pair-of-eyes', 'jesters-rebase', 'loaded-dice', 'oracle'] as const) {
       expect(power(id)).toEqual([0, 0]);
     }
@@ -337,6 +343,162 @@ describe('Grey Beard: +1.0 on any PR in a repo with 50+ merges', () => {
     expect(merges.map((result) => result.power)).toEqual([1, 1, 2]);
     expect(player.repoMerges[repoKey]).toBe(51);
     expect(merges[0]!.counterUpdates.repoMerges).toEqual({ repoId: facts().repoId, count: 49 });
+  });
+});
+
+describe('Whetstone: +0.5 on an approval, backed by an inline comment, of a newer author', () => {
+  const veteran = (): PlayerState => ({
+    ...playerWith(REVIEWER_ID, held('whetstone')),
+    repoMerges: { '1001': 12 },
+  });
+  const approve = (
+    player: PlayerState,
+    inline: number,
+    authorMerges: number | undefined,
+    state: ReviewSubmittedEvent['state'] = 'APPROVED',
+  ) =>
+    run(
+      reviewEvent(state),
+      player,
+      prStateFor(facts(), {
+        ...(authorMerges === undefined ? {} : { authorMerges }),
+        reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline } },
+      }),
+    );
+
+  it('applies to an approval with an inline comment of an author with fewer merges', () => {
+    const result = approve(veteran(), 1, 11);
+    expect(result.power).toBe(1.5);
+    expect(powerLines(result)).toContainEqual(['Whetstone (mentoring approval)', 0.5]);
+  });
+
+  it('is never a stamp: no inline comment, no Power', () => {
+    expect(approve(veteran(), 0, 3).power).toBe(1);
+  });
+
+  it('needs an author with fewer merges than you, and treats an unknown count as a newcomer', () => {
+    expect(approve(veteran(), 3, 12).power).toBe(1);
+    expect(approve(veteran(), 3, 80).power).toBe(1);
+    expect(approve(veteran(), 3, undefined).power).toBe(1.5);
+    // A reviewer with no merges of their own mentors nobody.
+    expect(approve(playerWith(REVIEWER_ID, held('whetstone')), 3, undefined).power).toBe(1);
+  });
+
+  it('applies to approvals only, not requested changes, comments, merges or opens', () => {
+    expect(approve(veteran(), 3, 1, 'CHANGES_REQUESTED').power).toBe(1);
+    expect(approve(veteran(), 3, 1, 'COMMENTED').power).toBe(1);
+    const author = { ...playerWith(AUTHOR_ID, held('whetstone')), repoMerges: { '1001': 12 } };
+    expect(run(mergedEvent(), author).power).toBe(1);
+    expect(run(openedEvent(), author).power).toBe(1);
+  });
+
+  it('counts the reviewer who is acting, not another reviewer', () => {
+    const pr = prStateFor(facts(), {
+      authorMerges: 1,
+      reviewerCounters: { [String(OTHER_REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 9 } },
+    });
+    expect(run(reviewEvent('APPROVED'), veteran(), pr).power).toBe(1);
+  });
+});
+
+describe('Familiar Path: +0.5 on any PR in a repo with 10+ merges', () => {
+  const repoKey = String(facts().repoId);
+  const withMerges = (count: number, key: string = repoKey): PlayerState => ({
+    ...playerWith(AUTHOR_ID, held('familiar-path')),
+    repoMerges: { [key]: count },
+  });
+
+  it('applies from the 10th merge in that repository, to every event kind on it', () => {
+    expect(run(openedEvent(), withMerges(9)).power).toBe(1);
+    const ten = run(openedEvent(), withMerges(10));
+    expect(ten.power).toBe(1.5);
+    expect(powerLines(ten)).toContainEqual(['Familiar Path (10+ merges in this repo)', 0.5]);
+    expect(run(mergedEvent(), withMerges(30)).power).toBe(1.5);
+    expect(run(reviewEvent('APPROVED'), withMerges(10)).power).toBe(1.5);
+  });
+
+  it('is per repository, and never applies to the weekly streak', () => {
+    expect(run(openedEvent(), withMerges(500, '99999')).power).toBe(1);
+    const streak: GameEvent = { kind: 'weekly_streak', actor: human(AUTHOR_ID), qualified: true };
+    expect(run(streak, withMerges(500)).power).toBe(1);
+  });
+
+  it('stacks with Grey Beard in the same repository', () => {
+    const both: PlayerState = {
+      ...playerWith(AUTHOR_ID, held('familiar-path'), held('grey-beard')),
+      repoMerges: { [repoKey]: 60 },
+    };
+    expect(run(openedEvent(), both).power).toBe(2.5);
+  });
+});
+
+describe('Long Lens: +1.0 on a thorough review of a PR of 500+ lines', () => {
+  const player = playerWith(REVIEWER_ID, held('long-lens'));
+  const review = (
+    lines: number,
+    inline: number,
+    state: ReviewSubmittedEvent['state'] = 'APPROVED',
+  ) => {
+    const pr = facts({ stats: stats(lines, 0) });
+    const before = prStateFor(pr, {
+      reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline } },
+    });
+    return run(reviewEvent(state, human(REVIEWER_ID), pr), player, before);
+  };
+
+  it('applies to a decision on a big PR after 3 inline comments', () => {
+    const result = review(500, 3);
+    expect(result.power).toBe(2);
+    expect(powerLines(result)).toContainEqual(['Long Lens (thorough review of 500+ lines)', 1]);
+    expect(review(2000, 10, 'CHANGES_REQUESTED').power).toBe(2);
+  });
+
+  it('needs the size, the inline comments and a decision, so it cannot be farmed with stamps', () => {
+    expect(review(499, 3).power).toBe(1);
+    expect(review(5000, 2).power).toBe(1);
+    expect(review(5000, 0).power).toBe(1);
+    expect(review(5000, 9, 'COMMENTED').power).toBe(1);
+  });
+
+  it('reads the PR size from the stored state when the review payload carries none', () => {
+    const pr = facts({ stats: null });
+    const big = prStateFor(pr, {
+      additions: 900,
+      reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 3 } },
+    });
+    expect(run(reviewEvent('APPROVED', human(REVIEWER_ID), pr), player, big).power).toBe(2);
+  });
+
+  it('does not apply to merges', () => {
+    const author = playerWith(AUTHOR_ID, held('long-lens'));
+    expect(run(mergedEvent(mergedFacts({ stats: stats(900, 0) })), author).power).toBe(1);
+  });
+});
+
+describe('the Charms added in task 24 obey the incentive audit (game-design.md 8.3)', () => {
+  it('say nothing of night, closing, speed or volume', () => {
+    for (const id of ['whetstone', 'familiar-path', 'long-lens'] as const) {
+      const text = charmDefinition(id)!.description;
+      expect(text, id).not.toMatch(/night|closed|close |within|fast|quick|most/i);
+    }
+  });
+
+  it('do not look at the clock: the same event scores the same at any hour of the day', () => {
+    const player: PlayerState = {
+      ...playerWith(REVIEWER_ID, held('whetstone'), held('familiar-path'), held('long-lens')),
+      repoMerges: { '1001': 40 },
+    };
+    const big = facts({ stats: stats(900, 0) });
+    const pr = prStateFor(big, {
+      authorMerges: 2,
+      reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 4 } },
+    });
+    const approval = reviewEvent('APPROVED', human(REVIEWER_ID), big);
+    const powers = [0, 3, 12, 23].map(
+      (hour) => run(approval, player, pr, NOW + hour * 60 * 60 * 1000).power,
+    );
+    expect(new Set(powers).size).toBe(1);
+    expect(powers[0]).toBe(3);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCharm, charmDefinition, copiesOf, makeCharm } from './charms';
+import { addCharm, CHARMS, charmDefinition, copiesOf, makeCharm } from './charms';
 import type { CharmId } from './charms';
 import { CHARM_PRICE_BY_RARITY, DECK_CAP, RARITIES, RARITY_WEIGHTS } from './constants';
 import { MOGUL_COSMETICS } from './moguls';
@@ -127,7 +127,7 @@ describe('stock (Requirement 8.3 and 8.5)', () => {
     for (let seed = 1; seed <= 3000; seed += 1) {
       generateStock(player, seed, 1).charms.forEach((slot) => seen.add(slot.item.id));
     }
-    expect(seen.size).toBe(9);
+    expect(seen.size).toBe(CHARMS.length);
     expect(visitOf(makeRun({ clearedActs: ['scout', 'raid'] }))).toBe(2);
   });
 });

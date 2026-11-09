@@ -107,6 +107,18 @@ export const SIZE_TIER_LOC = [50, 300, 1000] as const;
 // Monsters (design.md 7.1)
 // ---------------------------------------------------------------------------------------------
 
+/** The eight mobs and elites of the Bestiary (the six Moguls are counted separately; see moguls.ts). */
+export const MONSTER_IDS = [
+  'merge-goblin',
+  'nitpick-imp',
+  'flaky-test-wraith',
+  'legacy-golem',
+  'rebase-hydra',
+  'scope-creep',
+  'release-dragon',
+  'silent-monolith',
+] as const;
+
 export const MONSTER_RULES = {
   /** Nitpick Imp: a reviewer has left at least this many inline comments on the PR. */
   nitpickInlineComments: 5,
@@ -183,6 +195,22 @@ export const CHARM_RULES = {
   jestersRiposteMultiplier: 4,
   /** Loaded Dice: once a week one event's Power is replaced by this (it may exceed the Power cap). */
   loadedDicePower: 10,
+  /**
+   * Whetstone: Power on an approval of a PR whose author has fewer merges than you, when you left at least
+   * this many inline comments on it (so a mentoring approval is a read, never a stamp).
+   */
+  whetstonePower: 0.5,
+  whetstoneInlineComments: 1,
+  /** Familiar Path: Power on any event in a repository where the player has this many merges. */
+  familiarPathPower: 0.5,
+  familiarPathMerges: 10,
+  /**
+   * Long Lens: Power on a scoring review of a PR of at least this many lines when the reviewer left at
+   * least this many inline comments on it: the thorough review of a big PR that nobody thanks you for.
+   */
+  longLensPower: 1.0,
+  longLensMinLoc: 500,
+  longLensInlineComments: 3,
 } as const;
 
 export const DECK_CAP = 20;
@@ -209,6 +237,16 @@ export const PLEDGE_RULES = {
   tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
   /** Pair Up (Strike+): merge this many PRs each with the party bonus, +600 points on the last. */
   pairUp: { merges: 3, bonusPoints: 600 },
+  /**
+   * Fine Comb: submit this many scoring reviews, each after leaving at least `minInline` inline comments
+   * on that PR, then +0.5 Power on all reviews for the rest of the week.
+   */
+  fineComb: { reviews: 3, minInline: 3, powerBonus: 0.5 },
+  /**
+   * Well Reviewed: merge this many PRs that each drew at least `minInline` inline comments from a
+   * reviewer, +250 points on the last: it rewards PRs that were read, not PRs that were large.
+   */
+  wellReviewed: { merges: 2, minInline: 3, bonusPoints: 250 },
 } as const;
 
 /** Mogul modifiers (design.md 6.2 as audited in game-design.md 8.3). "Under" and "over" are strict. */
