@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { RouteName } from '../../router';
 
   interface Props {
@@ -7,12 +8,16 @@
 
   let { current }: Props = $props();
 
+  // The daily loop first (Town, the trip out, the Forge), then who you are, then the weekly run and the log.
   const items = [
     { name: 'home', href: '#/', label: 'Town', glyph: 'T' },
-    { name: 'log', href: '#/log', label: 'Log', glyph: 'L' },
+    { name: 'expedition', href: '#/expedition', label: 'Expedition', glyph: 'E' },
+    { name: 'forge', href: '#/forge', label: 'Forge', glyph: 'F' },
     { name: 'character', href: '#/character', label: 'Character', glyph: 'C' },
+    { name: 'feats', href: '#/feats', label: 'Feats', glyph: '★' },
     { name: 'shop', href: '#/shop', label: 'Shop', glyph: '$' },
     { name: 'map', href: '#/map', label: 'Map', glyph: 'M' },
+    { name: 'log', href: '#/log', label: 'Log', glyph: 'L' },
     { name: 'bestiary', href: '#/bestiary', label: 'Bestiary', glyph: 'B' },
     { name: 'settings', href: '#/settings', label: 'Settings', glyph: 'S' },
   ] as const;
@@ -21,11 +26,24 @@
   const active = $derived(
     current === 'privacy' || current === 'terms' || current === 'cookies' ? 'settings' : current,
   );
+
+  // Ten tabs do not fit across a phone, so the bottom bar scrolls sideways. Keep the current tab in view.
+  let list: HTMLUListElement | undefined = $state();
+
+  $effect(() => {
+    void active;
+    void tick().then(() => {
+      const here = list?.querySelector<HTMLElement>('[aria-current="page"]')?.parentElement;
+      if (list && here && list.scrollWidth > list.clientWidth) {
+        list.scrollLeft = here.offsetLeft - (list.clientWidth - here.offsetWidth) / 2;
+      }
+    });
+  });
 </script>
 
-<!-- A left rail from 768px up, bottom tabs below (Requirement 10.1). -->
+<!-- A left rail from 768px up, bottom tabs below that scroll sideways (Requirement 10.1). -->
 <nav class="nav" aria-label="Main">
-  <ul>
+  <ul bind:this={list}>
     {#each items as item (item.name)}
       <li>
         <a href={item.href} aria-current={active === item.name ? 'page' : undefined}>
@@ -47,16 +65,36 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
+  /* The bottom tabs scroll sideways; a fade at the right edge says there are more. */
   ul {
     list-style: none;
     margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    padding: 0 28px 0 0;
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  ul::-webkit-scrollbar {
+    display: none;
   }
 
   li {
+    /* Five and a half tabs show at once, so the sixth peeks in. */
+    flex: 0 0 max(64px, calc((100vw - 28px) / 5.5));
     min-width: 0;
+    scroll-snap-align: start;
+  }
+
+  .nav::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 28px;
+    background: linear-gradient(to right, transparent, var(--rail));
+    pointer-events: none;
   }
 
   a {
@@ -118,21 +156,34 @@
       overflow-y: auto;
     }
 
+    .nav::after {
+      display: none;
+    }
+
     ul {
+      display: grid;
       grid-template-columns: 1fr;
-      gap: 8px;
+      gap: 4px;
+      padding: 0;
+      overflow: visible;
+      scroll-snap-type: none;
+    }
+
+    li {
+      flex: none;
     }
 
     a {
-      padding: 8px 4px;
+      padding: 6px 4px;
+      min-height: 0;
       font-size: 12px;
       border-top: 0;
       border-left: 3px solid transparent;
     }
 
     .glyph {
-      width: 30px;
-      height: 30px;
+      width: 28px;
+      height: 28px;
     }
 
     a[aria-current='page'] {

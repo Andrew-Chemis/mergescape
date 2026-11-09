@@ -428,19 +428,25 @@ describe('navigation and layout', () => {
     const links = within(nav).getAllByRole('link');
     expect(links.map((link) => link.textContent?.trim())).toEqual([
       'T Town',
-      'L Log',
+      'E Expedition',
+      'F Forge',
       'C Character',
+      '★ Feats',
       '$ Shop',
       'M Map',
+      'L Log',
       'B Bestiary',
       'S Settings',
     ]);
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '#/',
-      '#/log',
+      '#/expedition',
+      '#/forge',
       '#/character',
+      '#/feats',
       '#/shop',
       '#/map',
+      '#/log',
       '#/bestiary',
       '#/settings',
     ]);
@@ -483,6 +489,9 @@ describe('navigation and layout', () => {
       '#/shop',
       '#/map',
       '#/bestiary',
+      '#/expedition',
+      '#/forge',
+      '#/feats',
       '#/settings',
       '#/privacy',
       '#/terms',

@@ -1,6 +1,8 @@
 <script lang="ts">
   import {
+    GEAR_SLOTS,
     GEAR_TIER_LEVELS,
+    featDefinition,
     levelFor,
     progressWithinLevel,
     SKILL_LABELS,
@@ -8,7 +10,9 @@
     totalLevel,
     xpToNext,
   } from '@mergescape/shared';
+  import { featRewardText, heroLook, pieceDetail, pieceName, SLOT_LABELS } from '../lib/depth';
   import Frame from '../lib/components/Frame.svelte';
+  import GearSprite from '../lib/components/GearSprite.svelte';
   import Meter from '../lib/components/Meter.svelte';
   import Sprite from '../lib/components/Sprite.svelte';
   import { formatDecimal, formatInt } from '../lib/format';
@@ -35,14 +39,39 @@
     return Array.from({ length: count }, (_, index) => held[index] ?? null);
   });
   const charmPower = $derived((me?.charms ?? []).reduce((sum, charm) => sum + charm.power, 0));
+
+  // What is worn drives how the hero looks (Requirement 16.4): the highest tier's palette and the cape colour.
+  const look = $derived(me ? heroLook(me) : null);
+  const worn = $derived(me?.gear.equipped ?? {});
+  const wornTiers = $derived(new Set(Object.values(worn).map((piece) => piece.tier)));
+  const gearPower = $derived(
+    Object.values(worn).reduce((sum, piece) => sum + piece.power, 0) + (me?.gear.setBonus ?? 0),
+  );
+  const pinned = $derived(
+    (me?.pinnedFeats ?? [])
+      .map((id) => featDefinition(id))
+      .filter((feat): feat is NonNullable<typeof feat> => feat !== undefined),
+  );
 </script>
 
 <Frame title="Character">
   {#if me}
     <section class="row header" aria-labelledby="who-heading">
-      <Sprite name="hero" palette={tier.palette} scale={5} />
+      <Sprite
+        name="hero"
+        palette={look?.palette ?? tier.palette}
+        cape={look?.cape ?? null}
+        scale={5}
+      />
       <div class="grow">
         <h2 id="who-heading">{me.login} <span class="vocation">&middot; {me.vocation}</span></h2>
+        {#if me.titles.length > 0}
+          <ul class="titles" aria-label="Titles">
+            {#each me.titles as title (title)}
+              <li class="pill">{title}</li>
+            {/each}
+          </ul>
+        {/if}
         {#if progress && progress.xpSpan > 0}
           <p class="num xp-line dim">
             Level {level} &middot; {formatInt(me.xp)} / {formatInt(me.xp + xpToNext(me.xp))} XP
@@ -117,6 +146,54 @@
           No Charms yet. They arrive with the Shop, bought with gold your shipping earns.
         </p>
       {/if}
+    </section>
+
+    <section class="panel" aria-labelledby="worn-heading">
+      <h2 id="worn-heading">Equipped gear &middot; Power +{formatDecimal(gearPower)}</h2>
+      <ul class="worn">
+        {#each GEAR_SLOTS as slot (slot)}
+          {@const piece = worn[slot]}
+          <li class="worn-slot" class:empty={!piece}>
+            <span class="slot-name">{SLOT_LABELS[slot]}</span>
+            {#if piece}
+              <GearSprite {piece} scale={3} capeColor={look?.cape ?? null} />
+              <b class="pname">{pieceName(piece)}</b>
+              <span class="detail">{pieceDetail(piece)}</span>
+            {:else}
+              <span class="detail">Empty</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+      <p class="dim caption">
+        {#if me.gear.setBonus > 0 && wornTiers.size === 1}
+          A full set of one tier: +{formatDecimal(me.gear.setBonus)} Power.
+        {:else}
+          Wear all five slots in one tier for a +0.25 Power set bonus.
+        {/if}
+        Change gear at the <a href="#/forge">Forge</a>.
+      </p>
+    </section>
+
+    <section class="panel" aria-labelledby="pinned-heading">
+      <h2 id="pinned-heading">Pinned Feats &middot; {pinned.length} of 3</h2>
+      {#if pinned.length > 0}
+        <ul class="pinned">
+          {#each pinned as feat (feat.id)}
+            <li>
+              <b>{feat.name}</b>
+              <span class="detail">{feat.description}</span>
+              {#if featRewardText(feat.id)}<span class="detail">{featRewardText(feat.id)}</span
+                >{/if}
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="dim caption">No Feats pinned yet.</p>
+      {/if}
+      <p class="dim caption">
+        Choose up to three on the <a href="#/feats">Feats</a> screen. They show on your badge too.
+      </p>
     </section>
 
     <section class="panel" aria-labelledby="gear-heading">
@@ -252,6 +329,75 @@
   .caption {
     margin: 8px 0 0;
     font-size: 13px;
+  }
+
+  .titles {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .worn,
+  .pinned {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .worn {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr));
+    gap: 8px;
+  }
+
+  .worn-slot {
+    display: grid;
+    gap: 3px;
+    justify-items: start;
+    align-content: start;
+    min-width: 0;
+    padding: 8px;
+    background: var(--row);
+    border: 2px solid #000;
+  }
+
+  .worn-slot.empty {
+    border-style: dashed;
+    border-color: var(--wood);
+  }
+
+  .slot-name {
+    font: 600 10px/1.4 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .pname {
+    font: 700 13.5px var(--display);
+    color: var(--parch);
+  }
+
+  .detail {
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .pinned {
+    display: grid;
+    gap: 6px;
+  }
+
+  .pinned li {
+    display: grid;
+    gap: 2px;
+    padding: 6px 8px;
+    background: var(--row);
+    border: 2px solid #000;
+    border-left: 6px solid var(--gold);
   }
 
   .tiers {

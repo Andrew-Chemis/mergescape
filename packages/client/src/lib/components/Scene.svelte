@@ -1,6 +1,7 @@
 <script lang="ts">
   import { MONSTER_NAMES } from '../names';
   import { heroPaletteFor, MONSTER_SPRITE } from '../sprites';
+  import type { HeroPalette } from '../sprites';
   import type { MonsterId } from '@mergescape/shared';
   import Sprite from './Sprite.svelte';
 
@@ -15,9 +16,22 @@
     asleep?: boolean;
     /** A line in the character's voice, drawn in the scene. */
     line?: string;
+    /** The hero's palette when gear is worn (the highest tier); the level's tier palette when left out. */
+    palette?: HeroPalette | undefined;
+    /** The hero's cape colour (a hex string); no cape is drawn when left out. */
+    cape?: string | null | undefined;
   }
 
-  let { level, biome, renown, monster, asleep = false, line }: Props = $props();
+  let {
+    level,
+    biome,
+    renown,
+    monster,
+    asleep = false,
+    line,
+    palette,
+    cape = null,
+  }: Props = $props();
 
   const description = $derived(
     asleep
@@ -34,7 +48,12 @@
   <span class="torch right" aria-hidden="true"></span>
   <div class="cast" role="img" aria-label={description}>
     <span class="hero" class:asleep>
-      <Sprite name={asleep ? 'hero-asleep' : 'hero'} palette={heroPaletteFor(level)} scale={5} />
+      <Sprite
+        name={asleep ? 'hero-asleep' : 'hero'}
+        palette={palette ?? heroPaletteFor(level)}
+        {cape}
+        scale={5}
+      />
     </span>
     {#if asleep}
       <span class="zzz">z z z</span>

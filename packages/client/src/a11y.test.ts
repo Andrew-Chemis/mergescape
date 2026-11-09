@@ -63,6 +63,15 @@ const screens: {
   { name: 'Run Map, no run', hash: '#/map', variant: 'noevents' },
   { name: 'Bestiary', hash: '#/bestiary' },
   { name: 'Bestiary, new character', hash: '#/bestiary', variant: 'noevents' },
+  { name: 'Expedition, a trip back', hash: '#/expedition' },
+  { name: 'Expedition, a trip away (day 0)', hash: '#/expedition', variant: 'day0' },
+  { name: 'Expedition, brand-new character', hash: '#/expedition', variant: 'noevents' },
+  { name: 'Forge', hash: '#/forge' },
+  { name: 'Forge, brand-new character', hash: '#/forge', variant: 'noevents' },
+  { name: 'Feats', hash: '#/feats' },
+  { name: 'Feats, brand-new character', hash: '#/feats', variant: 'noevents' },
+  { name: 'Town, day 0', hash: '#/', variant: 'day0' },
+  { name: 'Character, day 0', hash: '#/character', variant: 'day0' },
   { name: 'Settings', hash: '#/settings' },
   { name: 'Settings, no installations', hash: '#/settings', variant: 'noinstall' },
   { name: 'Privacy', hash: '#/privacy' },
@@ -142,6 +151,87 @@ describe('axe-core finds no violations in the interactive states of the new scre
   it('Settings with the delete confirmation open, and after an export', async () => {
     await renderApp({ hash: '#/settings' });
     await fireEvent.click(screen.getByRole('button', { name: 'Delete everything…' }));
+    await expectAccessible();
+  });
+});
+
+describe('axe-core finds no violations in the interactive states of the depth screens', () => {
+  it('Expedition while the loot reveal plays, and after it settles', async () => {
+    await renderApp({ hash: '#/expedition' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Collect' }));
+    await screen.findByRole('heading', { name: 'The haul' });
+    expect(document.querySelector('.reveal')?.getAttribute('data-motion')).toBe('flip');
+    await expectAccessible();
+    await fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    await expectAccessible();
+  });
+
+  it('Expedition with a Charm pack open and a refusal beside it', async () => {
+    await renderApp({ hash: '#/expedition' });
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Open' })[0] as HTMLElement);
+    await screen.findByRole('heading', { name: 'Charm pack opened' });
+    await expectAccessible();
+  });
+
+  it('Expedition with a refused send beside its button', async () => {
+    const base = createFixtureApi({ now: Date.UTC(2026, 10, 11, 14, 5, 0), variant: 'noevents' });
+    await renderApp({
+      hash: '#/expedition',
+      variant: 'noevents',
+      api: {
+        ...base,
+        async expeditionSend() {
+          throw new ApiError(409, 'no', 'insufficient_provisions');
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /^Send to Koko Woods/ }));
+    await screen.findByRole('alert');
+    await expectAccessible();
+  });
+
+  it('Forge with the Dyes owned, a piece chosen for an affix and an order just collected', async () => {
+    await renderApp({
+      hash: '#/forge',
+      me: { forge: { upgrades: ['dyes', 'bellows', 'index'], stations: {} } },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Affix: Fernblade' }));
+    await fireEvent.click(screen.getByRole('radio', { name: 'Azure' }));
+    await screen.findByText('Your cape is Azure.');
+    await expectAccessible();
+  });
+
+  it('Forge after collecting and starting orders', async () => {
+    await renderApp({ hash: '#/forge' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Collect Iron Cape' }));
+    await screen.findByText('Iron Cape is in your inventory.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Start Leather Trinket' }));
+    await screen.findByText('Leather Trinket is on the Scriptorium.');
+    await expectAccessible();
+  });
+
+  it('Feats with a refused pin beside its Feat', async () => {
+    const base = createFixtureApi({ now: Date.UTC(2026, 10, 11, 14, 5, 0) });
+    await renderApp({
+      hash: '#/feats',
+      api: {
+        ...base,
+        async featPin() {
+          throw new ApiError(409, 'no', 'too_many_pinned');
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Pin Imp Whisperer' }));
+    await screen.findByRole('alert');
+    await expectAccessible();
+  });
+
+  it('Town with the Feat unlock banner and a Forge order ready', async () => {
+    await renderApp({ hash: '#/expedition' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Collect' }));
+    await screen.findByRole('heading', { name: 'The haul' });
+    window.location.hash = '#/';
+    await screen.findByRole('status', { name: 'Feat unlocked' });
     await expectAccessible();
   });
 });

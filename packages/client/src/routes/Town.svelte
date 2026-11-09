@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { recipeDefinition, regionDefinition, STATION_IDS } from '@mergescape/shared';
   import {
     BIOMES,
     levelFor,
@@ -8,10 +10,13 @@
     xpToNext,
   } from '@mergescape/shared';
   import { installUrl } from '../lib/api';
+  import { expeditionLine, heroLook, stationStatusOf, STATION_LABELS } from '../lib/depth';
   import ActBar from '../lib/components/ActBar.svelte';
+  import FeatBanner from '../lib/components/FeatBanner.svelte';
   import Frame from '../lib/components/Frame.svelte';
   import Meter from '../lib/components/Meter.svelte';
   import PledgeHand from '../lib/components/PledgeHand.svelte';
+  import Satchel from '../lib/components/Satchel.svelte';
   import ScoreTicker from '../lib/components/ScoreTicker.svelte';
   import { formatInt, monsterLabel, relativeTime, summarize, suppliesText } from '../lib/format';
   import { ACT_LABELS } from '../lib/names';
@@ -43,10 +48,37 @@
   const nextLevelXp = $derived(me ? me.xp + xpToNext(me.xp) : 0);
   const skillTotal = $derived(me ? totalLevel(me.skillXp) : 4);
   const currentAct = $derived(week?.act ?? null);
+
+  // The depth layer's glanceable parts: the look of the hero, the one timer, orders ready to collect.
+  const look = $derived(me ? heroLook(me) : null);
+  /** Coarse on purpose ("Returns in 9 h"), so a slow tick is enough. */
+  let now = $state(Date.now());
+  const trip = $derived(me ? expeditionLine(me.expedition, now) : null);
+  const tripRegion = $derived(me?.expedition ? regionDefinition(me.expedition.region).name : '');
+  const ready = $derived(
+    me
+      ? STATION_IDS.filter(
+          (station) => stationStatusOf(me.forge.stations[station], now) === 'ready',
+        )
+      : [],
+  );
+
+  onMount(() => {
+    // Feats can unlock on any scored event: read the list so the banner knows what is new.
+    void session.loadFeats();
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 30_000);
+    return () => clearInterval(timer);
+  });
 </script>
 
 <Frame title="Town">
   {#if me}
+    {#if session.pendingFeats.length > 0}
+      <FeatBanner ids={session.pendingFeats} onDismiss={() => session.dismissFeatBanner()} />
+    {/if}
+
     <Scene
       {level}
       {biome}
@@ -54,7 +86,46 @@
       monster={hasEvents ? (last?.monster ?? null) : null}
       asleep={installed && !hasEvents}
       line={installed && !hasEvents ? "Merge something. I'll wake up." : undefined}
+      palette={look?.palette}
+      cape={look?.cape ?? null}
     />
+
+    <div class="row panels">
+      <section class="panel grow trip" aria-labelledby="trip-heading">
+        <h2 id="trip-heading">Expedition</h2>
+        {#if trip}
+          <p class="trip-line {trip.status}">{trip.text}</p>
+        {/if}
+        {#if me.expedition && trip && trip.status !== 'none'}
+          <p class="dim trip-where">
+            {tripRegion} &middot; {me.expedition.forage ? 'Forage' : `${me.expedition.hours} h`}
+          </p>
+        {/if}
+        <p class="map-link">
+          {#if trip?.status === 'returned'}
+            <a class="btn small primary" href="#/expedition">Collect the loot</a>
+          {:else if trip?.status === 'away'}
+            <a href="#/expedition">Open the Expedition map</a>
+          {:else}
+            <a href="#/expedition">Send the character out</a>
+          {/if}
+        </p>
+      </section>
+
+      <section class="panel grow" aria-labelledby="satchel-heading">
+        <h2 id="satchel-heading">Satchel</h2>
+        <Satchel satchel={me.satchel} />
+      </section>
+    </div>
+
+    {#each ready as station (station)}
+      {@const job = me.forge.stations[station]}
+      <p class="note forge-ready" role="status">
+        Your {STATION_LABELS[station].name} order is ready{#if job}:
+          {recipeDefinition(job.recipe)?.name ?? job.recipe}{/if}.
+        <a href="#/forge">Open the Forge</a>
+      </p>
+    {/each}
 
     {#if !installed}
       <section class="panel cta" aria-labelledby="install-heading">
@@ -230,5 +301,20 @@
   .map-link {
     margin: 8px 0 0;
     font-size: 13px;
+  }
+
+  .trip-line {
+    margin: 0;
+    font: 700 18px var(--display);
+    color: var(--parch);
+  }
+
+  .trip-line.returned {
+    color: var(--gold);
+  }
+
+  .trip-where {
+    margin: 2px 0 0;
+    font-size: 12.5px;
   }
 </style>

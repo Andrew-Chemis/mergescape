@@ -8,6 +8,9 @@
   import Character from './routes/Character.svelte';
   import CombatLog from './routes/CombatLog.svelte';
   import Cookies from './routes/Cookies.svelte';
+  import Expedition from './routes/Expedition.svelte';
+  import Feats from './routes/Feats.svelte';
+  import Forge from './routes/Forge.svelte';
   import Landing from './routes/Landing.svelte';
   import NotFound from './routes/NotFound.svelte';
   import Privacy from './routes/Privacy.svelte';
@@ -138,6 +141,12 @@
           <RunMap {session} />
         {:else if route.name === 'bestiary'}
           <Bestiary {session} />
+        {:else if route.name === 'expedition'}
+          <Expedition {session} />
+        {:else if route.name === 'forge'}
+          <Forge {session} />
+        {:else if route.name === 'feats'}
+          <Feats {session} />
         {:else if route.name === 'settings'}
           <Settings {session} {onSignOut} />
         {:else if route.name === 'not-found'}

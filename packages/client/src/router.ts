@@ -1,4 +1,4 @@
-/** Routes the client knows about. Later tasks add Expedition, Forge and Feats. */
+/** Routes the client knows about. */
 export type Route =
   | { name: 'home' }
   | { name: 'log' }
@@ -6,6 +6,9 @@ export type Route =
   | { name: 'shop' }
   | { name: 'map' }
   | { name: 'bestiary' }
+  | { name: 'expedition' }
+  | { name: 'forge' }
+  | { name: 'feats' }
   | { name: 'settings' }
   | { name: 'privacy' }
   | { name: 'terms' }
@@ -43,6 +46,12 @@ export function parseHash(hash: string): Route {
       return { name: 'map' };
     case '/bestiary':
       return { name: 'bestiary' };
+    case '/expedition':
+      return { name: 'expedition' };
+    case '/forge':
+      return { name: 'forge' };
+    case '/feats':
+      return { name: 'feats' };
     case '/settings':
       return { name: 'settings' };
     case '/privacy':
@@ -66,6 +75,9 @@ export const ROUTE_TITLES: Readonly<Record<Exclude<RouteName, 'not-found'>, stri
   shop: 'Shop',
   map: 'Run Map',
   bestiary: 'Bestiary',
+  expedition: 'Expedition',
+  forge: 'Forge',
+  feats: 'Feats',
   settings: 'Settings',
   privacy: 'Privacy',
   terms: 'Terms',
