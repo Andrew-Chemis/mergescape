@@ -20,6 +20,7 @@ function scriptedApi(initial: { me: MeResponse; entries: LogEntry[]; pageSize?: 
     failLogCursor: null as ApiError | null,
   };
   const api: Api = {
+    ...createFixtureApi({ now: NOW }),
     async me() {
       if (state.fail) throw state.fail;
       return state.me;
@@ -80,6 +81,15 @@ describe('Session.load', () => {
     await session.load();
     expect(session.status).toBe('ready');
     expect(session.error).toBeNull();
+  });
+
+  it('explains a token with no character (404 no_profile) in words', async () => {
+    const { api, state } = scriptedApi({ me: fixtureMe(NOW), entries: [] });
+    state.fail = new ApiError(404, 'The server answered 404.', 'no_profile');
+    const session = new Session(api);
+    await session.load();
+    expect(session.status).toBe('error');
+    expect(session.error).toBe('This account has no character yet. Sign in again.');
   });
 
   it('treats a 401 as the end of the session and tells the caller once', async () => {
@@ -288,5 +298,310 @@ describe('Session.startPolling', () => {
     const stop = session.startPolling();
     expect(vi.getTimerCount()).toBe(0);
     stop();
+  });
+});
+
+describe('Session.loadSince', () => {
+  it('reads older pages until the oldest row is before the cut-off', async () => {
+    const session = new Session(createFixtureApi({ now: NOW }));
+    await session.load();
+    expect(session.entries).toHaveLength(8);
+    // Every fixture row is newer than a month ago, so asking for a year back reads the second page too.
+    await session.loadSince(NOW - 365 * 24 * 3_600_000);
+    expect(session.entries).toHaveLength(14);
+    expect(session.nextCursor).toBeNull();
+  });
+
+  it('stops at once when the loaded rows already reach back far enough', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const log = vi.fn(api.log);
+    const session = new Session({ ...api, log });
+    await session.load();
+    log.mockClear();
+    await session.loadSince(NOW - 60_000);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('gives up after maxPages', async () => {
+    const api = createFixtureApi({ now: NOW, pageSize: 2 });
+    const session = new Session(api);
+    await session.load();
+    await session.loadSince(0, 2);
+    expect(session.entries).toHaveLength(6);
+    expect(session.nextCursor).not.toBeNull();
+  });
+});
+
+describe('Session writes (shop, shrine, Pledges)', () => {
+  it('starts with the run from /me', async () => {
+    const session = new Session(createFixtureApi({ now: NOW }));
+    await session.load();
+    expect(session.week).toBe(session.me?.week);
+    expect(session.week?.shop?.charms).toHaveLength(2);
+  });
+
+  it('replaces me and week with the answer and does not re-fetch', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const me = vi.fn(api.me);
+    const getWeek = vi.fn(api.getWeek);
+    const session = new Session({ ...api, me, getWeek });
+    await session.load();
+    me.mockClear();
+
+    const result = await session.shopBuy('charm:1', { kind: 'charm', index: 1 });
+    expect(result).toEqual({ ok: true });
+    expect(session.me?.gold).toBe(2340 - 40);
+    expect(session.me?.charms.map((c) => c.id)).toContain('lantern');
+    expect(session.week?.shop?.charms[1]?.sold).toBe(true);
+    expect(session.me?.week).toBe(session.week);
+    expect(session.busy).toBeNull();
+    expect(me).not.toHaveBeenCalled();
+    expect(getWeek).not.toHaveBeenCalled();
+  });
+
+  it('returns a 409 as an inline result, leaves the state alone and re-reads the profile', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const me = vi.fn(api.me);
+    const session = new Session({ ...api, me });
+    await session.load();
+    await session.shopBuy('charm:1', { kind: 'charm', index: 1 });
+    me.mockClear();
+    const goldAfter = session.me?.gold;
+
+    const again = await session.shopBuy('charm:1', { kind: 'charm', index: 1 });
+    expect(again).toEqual({
+      ok: false,
+      status: 409,
+      code: 'sold_out',
+      message: 'That one is already sold.',
+    });
+    expect(session.me?.gold).toBe(goldAfter);
+    expect(session.busy).toBeNull();
+    await vi.waitFor(() => expect(me).toHaveBeenCalledTimes(1));
+    expect(session.status).toBe('ready');
+  });
+
+  it('says not enough gold, from the 409 code', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const stub: Api = {
+      ...api,
+      shopBuy: async () => {
+        throw new ApiError(409, 'no', 'insufficient_gold');
+      },
+    };
+    const broke = new Session(stub);
+    await broke.load();
+    expect(await broke.shopBuy('charm:0', { kind: 'charm', index: 0 })).toMatchObject({
+      ok: false,
+      code: 'insufficient_gold',
+      message: 'Not enough gold.',
+    });
+  });
+
+  it('allows one write at a time', async () => {
+    const api = createFixtureApi({ now: NOW });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = new Session({
+      ...api,
+      shopReroll: async (options) => {
+        await gate;
+        return api.shopReroll(options);
+      },
+    });
+    await session.load();
+    const first = session.shopReroll();
+    expect(session.busy).toBe('reroll');
+    expect(await session.shopSell('sell:hot-potato', 'hot-potato')).toMatchObject({
+      ok: false,
+      code: 'busy',
+    });
+    release();
+    expect(await first).toEqual({ ok: true });
+    expect(session.busy).toBeNull();
+  });
+
+  it('replays the same request id when the same action is tried again after a network failure', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const seen: (string | undefined)[] = [];
+    let failures = 1;
+    const session = new Session({
+      ...api,
+      shopBuy: async (input, options) => {
+        seen.push(options?.requestId);
+        if (failures-- > 0) {
+          throw new ApiError(0, 'Could not reach the server.', null, 'req-lost');
+        }
+        return api.shopBuy(input, options);
+      },
+    });
+    await session.load();
+
+    const first = await session.shopBuy('charm:0', { kind: 'charm', index: 0 });
+    expect(first).toMatchObject({
+      ok: false,
+      status: 0,
+      message: 'Could not reach the server. Try again.',
+    });
+    expect((await session.shopBuy('charm:0', { kind: 'charm', index: 0 })).ok).toBe(true);
+    expect(seen).toEqual([undefined, 'req-lost']);
+
+    // A different control starts a fresh attempt, and success clears what was remembered.
+    failures = 1;
+    await session.shopBuy('charm:1', { kind: 'charm', index: 1 });
+    await session.shopBuy('pack:1', { kind: 'pack', index: 1 });
+    expect(seen.slice(2)).toEqual([undefined, undefined]);
+  });
+
+  it('forgets a failed attempt once the server gives a real answer', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const seen: (string | undefined)[] = [];
+    const answers = [
+      new ApiError(0, 'offline', null, 'req-a'),
+      new ApiError(409, 'no', 'sold_out'),
+      null,
+    ];
+    const session = new Session({
+      ...api,
+      shopReroll: async (options) => {
+        seen.push(options?.requestId);
+        const next = answers.shift();
+        if (next) {
+          throw next;
+        }
+        return api.shopReroll(options);
+      },
+    });
+    await session.load();
+    await session.shopReroll();
+    await session.shopReroll();
+    await session.shopReroll();
+    expect(seen).toEqual([undefined, 'req-a', undefined]);
+  });
+
+  it('discards a refresh that was in flight when a write started', async () => {
+    const api = createFixtureApi({ now: NOW });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let slow = false;
+    const session = new Session({
+      ...api,
+      me: async () => {
+        const old = await api.me();
+        if (slow) {
+          await gate;
+        }
+        return old;
+      },
+    });
+    await session.load();
+    slow = true;
+    const refreshing = session.refresh();
+    await session.shopBuy('charm:1', { kind: 'charm', index: 1 });
+    expect(session.me?.gold).toBe(2300);
+    release();
+    await refreshing;
+    // The older answer (gold 2340, shop unsold) did not win.
+    expect(session.me?.gold).toBe(2300);
+    expect(session.week?.shop?.charms[1]?.sold).toBe(true);
+  });
+
+  it('ends the session when a write is rejected with a 401', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const onUnauthorized = vi.fn();
+    const session = new Session(
+      {
+        ...api,
+        pledgePlay: async () => {
+          throw new ApiError(401, 'expired');
+        },
+      },
+      { onUnauthorized },
+    );
+    await session.load();
+    await session.pledgePlay('pledge:strike', 'strike');
+    expect(session.status).toBe('signed-out');
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshWeek adopts a newer run into me.week, and keeps the old one when it fails', async () => {
+    const api = createFixtureApi({ now: NOW });
+    let week = await api.getWeek();
+    let fail = false;
+    const session = new Session({
+      ...api,
+      getWeek: async () => {
+        if (fail) {
+          throw new ApiError(0, 'offline');
+        }
+        return week;
+      },
+    });
+    await session.load();
+    week = { ...week, weeklyXp: week.weeklyXp + 5, shop: null };
+    await session.refreshWeek();
+    expect(session.week?.shop).toBeNull();
+    expect(session.me?.week?.weeklyXp).toBe(week.weeklyXp);
+
+    fail = true;
+    await session.refreshWeek();
+    expect(session.week?.shop).toBeNull();
+    expect(session.status).toBe('ready');
+  });
+
+  it('export and delete are reported, not thrown', async () => {
+    const api = createFixtureApi({ now: NOW });
+    const session = new Session(api);
+    await session.load();
+    const exported = await session.exportData();
+    expect(exported.ok).toBe(true);
+    expect(Object.keys(exported.data ?? {}).sort()).toEqual([
+      'events',
+      'expeditions',
+      'exportedAt',
+      'feats',
+      'jobs',
+      'profile',
+      'weeks',
+    ]);
+    expect(await session.deleteEverything('somebody-else')).toMatchObject({
+      ok: false,
+      status: 400,
+      code: 'confirm_mismatch',
+      message: 'That is not your GitHub login. Nothing was deleted.',
+    });
+    expect(await session.deleteEverything('OCTO-DEV')).toEqual({ ok: true });
+
+    const missing = new Session({
+      ...api,
+      exportData: async () => {
+        throw new ApiError(404, 'The server answered 404.');
+      },
+      deleteAccount: async () => {
+        throw new ApiError(404, 'The server answered 404.');
+      },
+    });
+    await missing.load();
+    expect(await missing.exportData()).toMatchObject({
+      ok: false,
+      message: 'This server does not offer that yet.',
+    });
+    expect(await missing.deleteEverything('octo-dev')).toMatchObject({
+      ok: false,
+      message: 'This server does not offer that yet.',
+    });
+  });
+
+  it('does nothing without an api', async () => {
+    const session = new Session(null);
+    expect(await session.shopReroll()).toMatchObject({ ok: false });
+    expect(await session.exportData()).toMatchObject({ ok: false });
+    expect(await session.deleteEverything('x')).toMatchObject({ ok: false });
+    await session.refreshWeek();
+    expect(session.week).toBeNull();
   });
 });

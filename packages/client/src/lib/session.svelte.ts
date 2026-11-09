@@ -1,7 +1,12 @@
 /**
- * The signed-in session: the three reads (`/me`, `/log`, `/installations`), pagination, and the small
+ * The signed-in session: the reads (`/me`, `/log`, `/installations`, `/week`), pagination, the small
  * amount of "something just happened" state the moment loop needs (a fresh Combat Log row for the score
- * ticker, a level-up for the flash). Reads only; the client has no write calls in task 9.
+ * ticker, a level-up for the flash), and the player's few writes (shop, shrine, Pledge plays, export,
+ * delete).
+ *
+ * A write answers with the new profile and run (docs/api-contract.md), which replace `me` and `week`
+ * here; nothing is re-fetched. A read that was already in flight when a write started is discarded when
+ * it lands, so an older answer can never overwrite a newer one.
  *
  * Polling: while the tab is visible the first log page and the profile are re-read every `pollMs`, and
  * once more whenever the tab becomes visible again. That is how a real merge shows up within seconds
@@ -10,11 +15,19 @@
 import { levelFor } from '@mergescape/shared';
 import type { Skill } from '@mergescape/shared';
 import { ApiError } from './api';
+import { describeError } from './errors';
+import type { ActionResult } from './errors';
 import { unseenEntries } from './log';
-import type { Api } from './api';
+import type { Api, MutationOptions, ShopBuyInput, ShopPickInput } from './api';
 import { gearTierFor } from './sprites';
 import type { GearTierName } from './sprites';
-import type { InstallationSummary, LogEntry, MeResponse } from './types';
+import type {
+  InstallationSummary,
+  LogEntry,
+  MeResponse,
+  MutationResponse,
+  WeekSummary,
+} from './types';
 
 export type SessionStatus = 'loading' | 'ready' | 'signed-out' | 'error';
 
@@ -45,6 +58,10 @@ export class Session {
   /** True when the api rejected a stored token: Landing says the session ended. */
   expired = $state(false);
   me = $state.raw<MeResponse | null>(null);
+  /** The current run. Always the same object as `me.week` unless a newer `GET /week` has landed. */
+  week = $state.raw<WeekSummary | null>(null);
+  /** The scope of the write in flight (`charm:0`, `reroll`, `pledge:strike`, ...), or null. */
+  busy = $state<string | null>(null);
   installations = $state.raw<InstallationSummary[]>([]);
   /** Combat Log rows loaded so far, newest first. */
   entries = $state.raw<LogEntry[]>([]);
@@ -63,6 +80,11 @@ export class Session {
   readonly #options: SessionOptions;
   #refreshing = false;
   #levelUpCount = 0;
+  /** Bumped whenever a write starts or ends: a read that began under another epoch is stale. */
+  #epoch = 0;
+  #writes = 0;
+  /** Request ids of writes that ended in a network failure, by scope, to replay on the next try. */
+  #pending: Record<string, string> = {};
 
   /** `api` null means there is no token: the session starts (and stays) signed out. */
   constructor(api: Api | null, options: SessionOptions = {}) {
@@ -90,6 +112,7 @@ export class Session {
         api.installations(),
       ]);
       this.me = me;
+      this.week = me.week ?? null;
       this.entries = log.entries;
       this.nextCursor = log.nextCursor;
       this.installations = installations.installations;
@@ -108,6 +131,7 @@ export class Session {
       return;
     }
     this.#refreshing = true;
+    const epoch = this.#epoch;
     try {
       const needInstallations = this.installations.length === 0;
       const [me, log, installations] = await Promise.all([
@@ -116,8 +140,13 @@ export class Session {
         needInstallations ? api.installations() : Promise.resolve(null),
       ]);
       const arrived = unseenEntries(this.entries, log.entries);
+      // A write that started or finished while this read was in the air has newer state than it.
+      const stale = epoch !== this.#epoch || this.#writes > 0;
       const before = this.me ? levelFor(this.me.xp) : levelFor(me.xp);
-      this.me = me;
+      if (!stale) {
+        this.me = me;
+        this.week = me.week ?? null;
+      }
       if (installations) {
         this.installations = installations.installations;
       }
@@ -125,7 +154,7 @@ export class Session {
         this.entries = [...arrived, ...this.entries];
         this.fresh = arrived[0] ?? null;
       }
-      const after = levelFor(me.xp);
+      const after = stale ? before : levelFor(me.xp);
       if (after > before) {
         this.levelUp = {
           id: ++this.#levelUpCount,
@@ -170,8 +199,201 @@ export class Session {
     }
   }
 
+  /**
+   * Load older Combat Log pages until the oldest row loaded is before `sinceMs` (or the log runs out, or
+   * `maxPages` pages were read). The Run Map uses it to find every kill since Monday.
+   */
+  async loadSince(sinceMs: number, maxPages = 10): Promise<void> {
+    for (let pages = 0; pages < maxPages; pages += 1) {
+      const oldest = this.entries[this.entries.length - 1];
+      if (this.nextCursor === null || (oldest && Date.parse(oldest.at) < sinceMs)) {
+        return;
+      }
+      await this.loadMore();
+      if (this.loadMoreError) {
+        return;
+      }
+    }
+  }
+
   dismissLevelUp(): void {
     this.levelUp = null;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The run: re-reads and writes
+  // -------------------------------------------------------------------------------------------
+
+  /** `GET /week`: the Shop and the Run Map call it when they open, so a shop that just opened shows. */
+  async refreshWeek(): Promise<void> {
+    const api = this.#api;
+    if (!api || this.status !== 'ready') {
+      return;
+    }
+    const epoch = this.#epoch;
+    try {
+      const week = await api.getWeek();
+      if (epoch !== this.#epoch || this.#writes > 0) {
+        return;
+      }
+      this.#adopt(week);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        this.#fail(error);
+      }
+      // Any other failure keeps the run already on screen.
+    }
+  }
+
+  /** `POST /shop/buy`. `scope` names the control, e.g. `charm:0`, for its inline error. */
+  shopBuy(scope: string, input: ShopBuyInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.shopBuy(input, options));
+  }
+
+  /** `POST /shop/pick`; index -1 is the free Raid pack. */
+  shopPick(scope: string, input: ShopPickInput): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.shopPick(input, options));
+  }
+
+  shopReroll(scope = 'reroll'): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.shopReroll(options));
+  }
+
+  shopSell(scope: string, charmId: string): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.shopSell(charmId, options));
+  }
+
+  shrineRemove(scope: string, pledgeId: string): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.shrineRemove(pledgeId, options));
+  }
+
+  pledgePlay(scope: string, pledgeId: string): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.pledgePlay(pledgeId, options));
+  }
+
+  /** `GET /export`: the player's data as parsed JSON. */
+  async exportData(): Promise<ActionResult & { data?: Record<string, unknown> }> {
+    const api = this.#api;
+    if (!api) {
+      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+    }
+    try {
+      return { ok: true, data: await api.exportData() };
+    } catch (error) {
+      return this.#failure(error);
+    }
+  }
+
+  /** `POST /delete`. Resolves ok on 204; a wrong login comes back as `confirm_mismatch` (400). */
+  async deleteEverything(confirmLogin: string): Promise<ActionResult> {
+    const scope = 'delete';
+    const api = this.#api;
+    if (!api) {
+      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+    }
+    this.busy = scope;
+    try {
+      await api.deleteAccount(confirmLogin, this.#replay(scope));
+      this.#pending = {};
+      return { ok: true };
+    } catch (error) {
+      this.#remember(scope, error);
+      return this.#failure(error);
+    } finally {
+      this.busy = null;
+    }
+  }
+
+  /** Run one write: one at a time, replay a failed attempt's request id, adopt the answer. */
+  async #write(
+    scope: string,
+    call: (api: Api, options: MutationOptions) => Promise<MutationResponse>,
+  ): Promise<ActionResult> {
+    const api = this.#api;
+    if (!api) {
+      return { ok: false, status: 0, code: null, message: 'You are signed out.' };
+    }
+    if (this.busy !== null) {
+      return { ok: false, status: 0, code: 'busy', message: 'One moment, still working.' };
+    }
+    this.busy = scope;
+    this.#writes += 1;
+    this.#epoch += 1;
+    let result: ActionResult;
+    try {
+      const answer = await call(api, this.#replay(scope));
+      this.#pending = {};
+      this.me = { ...answer.me, week: answer.week };
+      this.week = answer.week;
+      this.now = Date.now();
+      result = { ok: true };
+    } catch (error) {
+      this.#remember(scope, error);
+      result = this.#failure(error);
+    } finally {
+      this.#writes -= 1;
+      this.#epoch += 1;
+      this.busy = null;
+    }
+    if (!result.ok && result.status === 409) {
+      // The shop or the hand changed under the player: bring the screen up to date, keep the message.
+      void this.#resync();
+    }
+    return result;
+  }
+
+  /** The request id of an earlier attempt at this same action that died on the network, if any. */
+  #replay(scope: string): MutationOptions {
+    const requestId = this.#pending[scope];
+    return requestId === undefined ? {} : { requestId };
+  }
+
+  #remember(scope: string, error: unknown): void {
+    if (error instanceof ApiError && error.status === 0 && error.requestId) {
+      this.#pending[scope] = error.requestId;
+    } else {
+      delete this.#pending[scope];
+    }
+  }
+
+  #failure(error: unknown): ActionResult & { ok: false } {
+    if (error instanceof ApiError && error.status === 401) {
+      this.#fail(error);
+    }
+    return {
+      ok: false,
+      status: error instanceof ApiError ? error.status : 0,
+      code: error instanceof ApiError ? error.code : null,
+      message: describeError(error),
+    };
+  }
+
+  /** Re-read the profile (it carries the run) after a 409. */
+  async #resync(): Promise<void> {
+    const api = this.#api;
+    if (!api) {
+      return;
+    }
+    const epoch = this.#epoch;
+    try {
+      const me = await api.me();
+      if (epoch !== this.#epoch || this.#writes > 0) {
+        return;
+      }
+      this.me = me;
+      this.week = me.week ?? null;
+      this.now = Date.now();
+    } catch {
+      // The message already on screen stands; the next poll catches up.
+    }
+  }
+
+  /** Take a fresher run: it replaces `week`, and `me.week` follows so Town and the Shop agree. */
+  #adopt(week: WeekSummary): void {
+    this.week = week;
+    if (this.me) {
+      this.me = { ...this.me, week };
+    }
   }
 
   /**
@@ -203,7 +425,12 @@ export class Session {
       this.#options.onUnauthorized?.();
       return;
     }
-    this.error = error instanceof Error ? error.message : 'Something went wrong.';
+    if (error instanceof ApiError && error.code === 'no_profile') {
+      // A valid token whose character is gone (deleted): say so, in words.
+      this.error = describeError(error);
+    } else {
+      this.error = error instanceof Error ? error.message : 'Something went wrong.';
+    }
     this.status = 'error';
   }
 }

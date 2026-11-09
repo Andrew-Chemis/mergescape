@@ -1,12 +1,21 @@
-/** Routes the client knows about. Later tasks add Shop, Run Map, Bestiary and the rest. */
+/** Routes the client knows about. Later tasks add Expedition, Forge and Feats. */
 export type Route =
   | { name: 'home' }
   | { name: 'log' }
   | { name: 'character' }
+  | { name: 'shop' }
+  | { name: 'map' }
+  | { name: 'bestiary' }
+  | { name: 'settings' }
+  | { name: 'privacy' }
+  | { name: 'terms' }
   | { name: 'welcome' }
   | { name: 'not-found'; path: string };
 
 export type RouteName = Route['name'];
+
+/** The routes that are plain text and open without signing in (Landing links to them). */
+export const PUBLIC_ROUTES: readonly RouteName[] = ['privacy', 'terms'];
 
 /** Normalises a location hash such as `#/log/?page=2` to a path such as `/log`. */
 export function normalizePath(hash: string): string {
@@ -27,6 +36,18 @@ export function parseHash(hash: string): Route {
       return { name: 'log' };
     case '/character':
       return { name: 'character' };
+    case '/shop':
+      return { name: 'shop' };
+    case '/map':
+      return { name: 'map' };
+    case '/bestiary':
+      return { name: 'bestiary' };
+    case '/settings':
+      return { name: 'settings' };
+    case '/privacy':
+      return { name: 'privacy' };
+    case '/terms':
+      return { name: 'terms' };
     case '/welcome':
       return { name: 'welcome' };
     default:
@@ -39,5 +60,11 @@ export const ROUTE_TITLES: Readonly<Record<Exclude<RouteName, 'not-found'>, stri
   home: 'Town',
   log: 'Combat Log',
   character: 'Character',
+  shop: 'Shop',
+  map: 'Run Map',
+  bestiary: 'Bestiary',
+  settings: 'Settings',
+  privacy: 'Privacy',
+  terms: 'Terms',
   welcome: 'Welcome',
 };

@@ -88,6 +88,7 @@ describe('Landing', () => {
 
   it('says so when a stored session was rejected', async () => {
     const rejecting: Api = {
+      ...createFixtureApi({ now: NOW }),
       async me() {
         throw new ApiError(401, 'no');
       },
@@ -475,6 +476,7 @@ describe('loading and error states', () => {
   it('says the dungeon is waking while the first reads are in flight', async () => {
     const pending = new Promise<never>(() => {});
     const api: Api = {
+      ...createFixtureApi({ now: NOW }),
       me: () => pending,
       log: () => pending,
       installations: () => pending,

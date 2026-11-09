@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizePath, parseHash } from './router';
+import { normalizePath, parseHash, PUBLIC_ROUTES, ROUTE_TITLES } from './router';
 
 describe('normalizePath', () => {
   it.each([
@@ -25,6 +25,12 @@ describe('parseHash', () => {
   it.each([
     ['#/log', 'log'],
     ['#/character', 'character'],
+    ['#/shop', 'shop'],
+    ['#/map', 'map'],
+    ['#/bestiary', 'bestiary'],
+    ['#/settings', 'settings'],
+    ['#/privacy', 'privacy'],
+    ['#/terms', 'terms'],
     ['#/welcome', 'welcome'],
   ])('routes %s to %s', (hash, name) => {
     expect(parseHash(hash)).toEqual({ name });
@@ -32,5 +38,22 @@ describe('parseHash', () => {
 
   it('routes unknown paths to not-found with the normalised path', () => {
     expect(parseHash('#/nope/')).toEqual({ name: 'not-found', path: '/nope' });
+  });
+});
+
+describe('route titles and public routes', () => {
+  it('titles every screen', () => {
+    expect(ROUTE_TITLES).toMatchObject({
+      shop: 'Shop',
+      map: 'Run Map',
+      bestiary: 'Bestiary',
+      settings: 'Settings',
+      privacy: 'Privacy',
+      terms: 'Terms',
+    });
+  });
+
+  it('opens only Privacy and Terms without signing in', () => {
+    expect(PUBLIC_ROUTES).toEqual(['privacy', 'terms']);
   });
 });

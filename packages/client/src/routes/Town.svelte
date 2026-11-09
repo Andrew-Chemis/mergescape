@@ -11,6 +11,7 @@
   import ActBar from '../lib/components/ActBar.svelte';
   import Frame from '../lib/components/Frame.svelte';
   import Meter from '../lib/components/Meter.svelte';
+  import PledgeHand from '../lib/components/PledgeHand.svelte';
   import ScoreTicker from '../lib/components/ScoreTicker.svelte';
   import { formatInt, monsterLabel, relativeTime, summarize, suppliesText } from '../lib/format';
   import { ACT_LABELS } from '../lib/names';
@@ -33,7 +34,7 @@
   );
   const installed = $derived(session.installations.length > 0);
   const hasEvents = $derived(last !== null);
-  const week = $derived(me?.week ?? null);
+  const week = $derived(session.week);
 
   // The ticker rolls for a row that arrived while the tab was open, and again on request.
   let replays = $state(0);
@@ -84,6 +85,7 @@
           This week's Run{#if currentAct}&nbsp;&middot; Act {ACT_LABELS[currentAct].numeral}{/if}
         </h2>
         <ActBar {week} />
+        <p class="map-link"><a href="#/map">Open the Run Map</a></p>
       </section>
 
       <section class="panel grow level" aria-labelledby="level-heading">
@@ -136,41 +138,24 @@
       </section>
 
       <div class="stack grow">
-        <section class="panel" aria-labelledby="pledge-heading">
-          <h2 id="pledge-heading">
-            Pledges in play{#if week}&nbsp;&middot; {week.played.length} of 3{/if}
-          </h2>
-          {#if week && week.played.length > 0}
-            <ul class="pledges">
-              {#each week.played as pledge (pledge.id)}
-                <li class="card pledge">
-                  <span class="rar">Pledge</span>
-                  <span class="name">{pledge.name}{pledge.upgraded ? '+' : ''}</span>
-                </li>
-              {/each}
-            </ul>
-            {@const inHand = week.hand.filter((card) => !week.played.some((p) => p.id === card.id))}
-            {#if inHand.length > 0}
-              <p class="dim small">In hand: {inHand.map((card) => card.name).join(', ')}</p>
-            {/if}
-          {:else}
-            <p class="dim">
-              A hand of five Pledges is drawn every Monday, and you may play up to three. They
-              appear here once the weekly run begins.
-            </p>
-          {/if}
-        </section>
+        <PledgeHand {session} />
 
         <p class="note shop">
-          {#if week?.shopOpen}
+          {#if week?.shop}
             The Grizzled Reviewer's shop is open{#if currentAct}&nbsp;until {ACT_LABELS[currentAct]
                 .name}
               clears{/if}
-            &middot; {formatInt(me.gold)} gold
+            &middot; {formatInt(me.gold)} gold &middot; <a href="#/shop">Open the shop</a>
           {:else}
             The Grizzled Reviewer's shop opens when you clear your first act &middot; {formatInt(
               me.gold,
             )} gold
+          {/if}
+          {#if week?.freePack}
+            <br />A free Pledge pack is waiting. <a href="#/shop">Open it in the shop</a>
+          {/if}
+          {#if week?.legendaryOffer}
+            <br />A Legendary Charm is on offer. <a href="#/shop">Take it in the shop</a>
           {/if}
         </p>
       </div>
@@ -242,42 +227,8 @@
     align-content: start;
   }
 
-  .pledges {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: 8px;
-  }
-
-  .card {
-    display: grid;
-    gap: 2px;
-    padding: 8px;
-    border: 3px solid #000;
-    box-shadow: 2px 2px 0 #000;
-  }
-
-  .card.pledge {
-    border-color: var(--chips);
-    background: var(--pledge);
-  }
-
-  .rar {
-    font: 600 10px var(--mono);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--chips);
-  }
-
-  .name {
-    font: 700 14px var(--display);
-    color: var(--parch);
-  }
-
-  .small {
+  .map-link {
     margin: 8px 0 0;
-    font-size: 12px;
+    font-size: 13px;
   }
 </style>

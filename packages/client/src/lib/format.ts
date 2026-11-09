@@ -88,6 +88,8 @@ export function summarize(entry: LogEntry): string {
       return `Inline comment on ${target}`;
     case 'verified_kill':
       return `Verified kill: ${target} merged`;
+    case 'riposte_credit':
+      return `Riposte: ${target} merged after your changes`;
     case 'weekly_streak':
       return 'Weekly streak';
   }

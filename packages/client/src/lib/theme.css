@@ -67,6 +67,14 @@
   --t-xp: var(--xp);
   --t-dim: var(--fg-dim);
 
+  /* rarity accents: text on a card, and the card border (decorative) */
+  --rar-common: #b4b4b4;
+  --rar-uncommon: #5fcf8d;
+  --rar-rare: #7fb0ff;
+  --rar-common-b: #8a8a8a;
+  --rar-uncommon-b: #3fa06a;
+  --rar-rare-b: #4b8ef0;
+
   --focus: #ffffff;
 
   --display: 'Pixelify Sans', 'Trebuchet MS', 'Segoe UI', sans-serif;
@@ -454,6 +462,164 @@ button {
   min-height: 32px;
   padding: 4px 10px;
   font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Cards: Charms, Pledges, Vouchers and packs (Shop, Run Map, Town), the mock's .card
+   --------------------------------------------------------------------------------------------- */
+
+.card {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+  padding: 10px;
+  border: 3px solid #000;
+  background: linear-gradient(var(--stone), var(--bg2));
+  box-shadow: 4px 4px 0 #000;
+}
+
+.card .rar {
+  font: 600 10px/1.4 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.card .name {
+  margin: 0;
+  font: 700 15px var(--display);
+  color: var(--parch);
+}
+
+.card .desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-dim);
+}
+
+.card .m {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 5px;
+  background: #000;
+  font: 700 13px var(--mono);
+  color: var(--mult);
+}
+
+.card.common {
+  border-color: var(--rar-common-b);
+}
+
+.card.common .rar {
+  color: var(--rar-common);
+}
+
+.card.uncommon {
+  border-color: var(--rar-uncommon-b);
+}
+
+.card.uncommon .rar {
+  color: var(--rar-uncommon);
+}
+
+.card.rare {
+  border-color: var(--rar-rare-b);
+}
+
+.card.rare .rar {
+  color: var(--rar-rare);
+}
+
+.card.legendary,
+.card.voucher {
+  border-color: var(--gold);
+  background: linear-gradient(var(--act-now), var(--bg2));
+}
+
+.card.legendary .rar,
+.card.voucher .rar {
+  color: var(--gold);
+}
+
+.card.pledge {
+  border-color: var(--chips);
+  background: var(--pledge);
+}
+
+.card.pledge .rar {
+  color: var(--chips);
+}
+
+.card.pack {
+  border-color: var(--purple);
+}
+
+.card.pack .rar {
+  color: var(--purple);
+}
+
+/* the number in the corner of a Pledge: how many qualifying events it asks for */
+.card .cost {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid #000;
+  background: var(--chips);
+  color: #000;
+  font: 700 13px var(--mono);
+}
+
+.card.sold {
+  border-style: dashed;
+}
+
+.card .icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.initial {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #000;
+  background: var(--slot);
+  font: 700 18px var(--display);
+  color: var(--parch);
+}
+
+/* a row of cards that wraps to whatever width there is */
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+  gap: 14px 12px;
+}
+
+/* a message beside the control that caused it (a 409 is never a modal) */
+.error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--mult);
+}
+
+.ok {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--xp);
 }
 
 /* ---------------------------------------------------------------------------------------------

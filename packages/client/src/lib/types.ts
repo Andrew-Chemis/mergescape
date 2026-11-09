@@ -1,7 +1,8 @@
 /**
  * Response shapes the client expects from the api service (design.md section 9.1: the `PROFILE` and
  * `EVT#` rows, the `WEEK#` row, `INSTALL#` rows). They are deliberately minimal and named for what
- * they are, so the backend's real handlers can be reconciled against this one file.
+ * they are, so the backend's real handlers can be reconciled against this one file. The binding
+ * description is docs/api-contract.md; where this file and that one differ, that one wins.
  *
  * Reuse of `@mergescape/shared`: skill XP, Charms, Pledges, supplies, breakdown lines and the
  * Bestiary ids come from the shared package, so a rename there is a compile error here.
@@ -15,13 +16,54 @@ import type {
   ReviewState,
   ScoreResult,
   SkillXp,
+  VoucherId,
 } from '@mergescape/shared';
 
 export type Vocation = 'Journeyman' | 'Smith' | 'Warden' | 'Herald' | 'Pilgrim';
 
-/** The `WEEK#` row, trimmed to what Town draws. Optional until the run layer ships (task 15). */
+/** What a pack holds once it is bought: three of these, and the player keeps one. */
+export type ShopOption =
+  | { kind: 'charm'; charm: Charm }
+  | { kind: 'pledge'; pledge: Pledge }
+  | { kind: 'cosmetic'; id: string; name: string };
+
+/** The kinds of pack on the shelf. (`shared` calls the cosmetic pack `mogul`; the api says `cosmetic`.) */
+export type PackKind = 'pledge' | 'charm' | 'cosmetic';
+
+/** The open shop: one visit, from an act clear until the next act clears (Requirement 8.8). */
+export interface ShopView {
+  /** 1-based shop visit within the week. */
+  visit: number;
+  /** Two Charms; `index` is what `POST /shop/buy` takes. */
+  charms: { index: number; charm: Charm; price: number; sold: boolean }[];
+  /** Two packs. `options` is present once a pack is bought, until one option is picked. */
+  packs: {
+    index: number;
+    kind: PackKind;
+    price: number;
+    bought: boolean;
+    picked: boolean;
+    options: ShopOption[] | null;
+  }[];
+  voucher: { id: VoucherId; price: number; sold: boolean } | null;
+  rerollCost: number;
+  shrineCost: number;
+  /** Charm id to the gold paid when it is sold. */
+  sellPrices: Record<string, number>;
+  /** Gold the next act clear would pay as interest. */
+  interestPreview: number;
+}
+
+/** How far one played Pledge has got; `WeekSummary.pledgeProgress` is keyed by Pledge id. */
+export interface PledgeProgress {
+  progress: number;
+  target: number;
+  completed: boolean;
+}
+
+/** `GET /week`: the `WEEK#` row as the client draws it. */
 export interface WeekSummary {
-  /** ISO week key, `yyyy-ww`. */
+  /** ISO week key (`2026-46`; the contract's example spells it `2026-W46`, and both are read). */
   weekKey: string;
   /** The act being played, or null once the Boss act has cleared. */
   act: ActId | null;
@@ -30,13 +72,25 @@ export interface WeekSummary {
   weeklyXp: number;
   /** XP targets per act. */
   targets: Record<ActId, number>;
-  /** This week's Mogul, from Monday. */
-  mogul: MogulId | null;
+  /** This week's Boss, always revealed. */
+  mogul: MogulId;
+  /** Next week's Boss; set only when the Oracle Charm or Scout's Eye allows it. */
+  nextMogul: MogulId | null;
   /** Pledges drawn on Monday, and the ones played (up to 3). */
   hand: Pledge[];
   played: Pledge[];
-  /** True from an act clear until the next act clears or the run ends. */
-  shopOpen: boolean;
+  /** True until Tuesday 23:59 UTC. */
+  pledgeWindowOpen: boolean;
+  /** Keyed by Pledge id; an entry exists for each played Pledge. */
+  pledgeProgress: Record<string, PledgeProgress>;
+  /** The open shop, or null when none is open. */
+  shop: ShopView | null;
+  /** A free Pledge pack granted after Raid; taken with `POST /shop/pick` and index -1. */
+  freePack: 'pledge' | null;
+  /** The 3 options of the free Raid pack, present whenever `freePack` is set. */
+  freePackOptions: ShopOption[] | null;
+  /** A Legendary Charm offered on every 4th Renown; taken with `POST /shop/buy` kind `legendary`. */
+  legendaryOffer: Charm | null;
 }
 
 /** `GET /me`: the `USER#<id>` / `PROFILE` row. */
@@ -50,14 +104,31 @@ export interface MeResponse {
   xp: number;
   skillXp: SkillXp;
   gold: number;
+  /** Lifetime Moguls beaten. */
   renown: number;
   vocation: Vocation;
   /** Charms held; at most `charmSlots`. */
   charms: Charm[];
   /** 5, or 6 with the Charm Belt voucher. */
   charmSlots: number;
-  /** The current run; null or absent before the first rollover. */
-  week?: WeekSummary | null;
+  /** Vouchers bought; each once. */
+  vouchers: VoucherId[];
+  /** The Pledge deck (cap 20). */
+  deck: Pledge[];
+  /** The biome Town shows, from Renown. */
+  biome: string;
+  /** Lifetime kills per Bestiary id. A monster never killed is absent. */
+  kills: Partial<Record<MonsterId, number>>;
+  /** ISO timestamp of the first kill per Bestiary id. */
+  firstSeen: Partial<Record<MonsterId, string>>;
+  /** The current run; null before the first rollover. */
+  week: WeekSummary | null;
+}
+
+/** Every mutation answers with the whole new profile and run, so the client never re-fetches. */
+export interface MutationResponse {
+  me: MeResponse;
+  week: WeekSummary;
 }
 
 /** The kinds of event that produce a Combat Log row (the scoring subset of `GameEvent['kind']`). */
@@ -67,6 +138,7 @@ export type LogEventKind =
   | 'review_submitted'
   | 'review_comment_created'
   | 'verified_kill'
+  | 'riposte_credit'
   | 'weekly_streak';
 
 /** What the scorer returned for the event, stored with the row so the log never re-computes. */
