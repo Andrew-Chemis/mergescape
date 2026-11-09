@@ -4,7 +4,7 @@
 
 Mergescape is a browser idle RPG in which a character gains experience only from the player's real pull-request activity on GitHub: opening, reviewing and merging. A read-only GitHub App delivers webhooks to a small AWS backend; a static client renders the character, a Combat Log that explains every XP grant, a weekly three-act run, a shop, and parody "Mogul" bosses. Levelling uses the Diablo II experience table. Scoring is `Points × Power × Zone`. The game is single-player, private by default, stores metadata only, and runs on free-tier AWS plus GitHub Pages.
 
-Companion documents in this folder: `design.md` (architecture, data model, game rules in full), `research.md` (sources, benchmarks, pacing simulation, decisions), `tasks.md` (implementation plan).
+Companion documents in this folder: `game-design.md` (pillars, kinds of fun, loops, Expeditions, Forge, Feats; wins on any conflict), `design.md` (architecture, data model, game rules in full), `research.md` (sources, benchmarks, pacing simulation, decisions), `tasks.md` (implementation plan).
 
 Out of scope for this spec: leaderboards, guilds, notifications or email, mobile apps, backfill of history, issue-comment scoring, any write access to GitHub, any real-money purchase.
 
@@ -65,12 +65,13 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 2. THE scorer SHALL award Points per event exactly as design.md §4.2: opened 10 (max 5 per UTC day), merged 90, size `round(40·log2(1+(additions+deletions)/50))` capped at 120, party bonus 30, approve or changes-requested review 40 (max 2 per PR per reviewer), comment-only review 15 (max 1 per PR per reviewer), inline comment 5 (max 10 per PR per reviewer), verified kill 25, riposte 15, daily first event 20, weekly streak 50 × consecutive weeks capped at 10.
 3. IF a merged PR has `merged_by_id == author_id` and no reviews by other humans THEN the scorer SHALL halve the merge, size and party points.
 4. IF a PR's base ref is not the repository default branch THEN the scorer SHALL halve all its points.
-5. THE scorer SHALL compute `Power = 1 + Σ(active Charm powers) + active Pledge bonus`, capped at 8, starting at 1 for a new character.
+5. THE scorer SHALL compute `Power = 1 + Σ(active Charm powers) + Σ(equipped gear power, incl. set bonus) + active Pledge bonus + Feat bonus`, capped at 9, starting at 1 for a new character.
 6. THE scorer SHALL compute `Zone = (L+1)^e` where L is the character level at scoring time and e is 1.6, or 1.65 when the Overclock voucher is owned.
 7. THE scorer SHALL compute `XP = floor(Points × Power × Zone)` and SHALL credit it to both character XP and the skill named in design.md §4.2.
 8. THE ScoreResult SHALL include an ordered breakdown of every contributing term (label, value) sufficient to render the Combat Log expansion.
 9. WHEN the worked examples in design.md §4.5 are run THEN the scorer SHALL reproduce them exactly.
 10. THE shared package SHALL have ≥95% line coverage and 100% branch coverage on the scorer.
+11. WHEN an event is scored THEN the scorer SHALL also emit the supplies drop for that event per game-design.md §6.1, independent of Power.
 
 ### Requirement 5: Levelling
 
@@ -144,9 +145,9 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 #### Acceptance Criteria
 
-1. THE client SHALL provide the screens Landing, Town, Shop, Combat Log, Character, Run Map, Bestiary, Settings, Privacy and Terms, with a left rail at ≥768px and bottom tabs below.
+1. THE client SHALL provide the screens Landing, Town, Shop, Combat Log, Character, Run Map, Bestiary, Expedition, Forge, Feats, Settings, Privacy and Terms, with a left rail at ≥768px and bottom tabs below.
 2. THE Combat Log SHALL render each XP grant as one row (monster sprite, repository shown to the owner only, one-line summary, XP) that expands to the full Points × Power × Zone breakdown from the ScoreResult.
-3. THE client SHALL require no player action for progression; the only write operations SHALL be shop purchases, pack picks, Pledge plays, Charm sells, export and delete.
+3. THE client SHALL require no player action for XP progression; the only write operations SHALL be shop purchases, pack picks, Pledge plays, Charm sells, expedition send/collect, Forge job start/collect, gear equip, Feat display selection, export and delete.
 4. THE client SHALL render sprites from 16×16 palette-indexed definitions at integer scales with crisp edges, palette-swapping the hero per gear tier.
 5. THE client SHALL use real text for all copy, show visible focus states, honour `prefers-reduced-motion`, and keep body text contrast ≥4.5:1.
 6. WHEN the player has no installations THEN Town SHALL show the install call to action; WHEN the player has installations but no events THEN Town SHALL show the sleeping character with the line "Merge something. I'll wake up."
@@ -186,7 +187,49 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 2. WHEN the player confirms deletion THEN the api service SHALL delete every `USER#` item and any `PR#` item whose only referenced actor is that user, and the next login SHALL create a fresh level-1 character.
 3. THE Privacy page SHALL state in plain language: no code is read; counts and timestamps only; export and delete are available; activity from people who have not signed in is discarded; the game is not a performance-review tool.
 
-### Requirement 14: Quality and repository
+### Requirement 15: Supplies and Expeditions
+
+**User Story:** As a player, I want my work to produce supplies that I spend sending my character on timed expeditions, so that there is something happening while I'm away and a reason to come back tomorrow.
+
+#### Acceptance Criteria
+
+1. WHEN an event is scored THEN the system SHALL bank supplies per game-design.md §6.1 (Ore, Timber, Lore, Ink, Provisions, Flux) with no cap and no decay.
+2. THE system SHALL allow the player to send the character on one expedition at a time to an unlocked region for 4, 12, 24 or 48 hours, paying Provisions 1/2/4/6; the 4-hour Forage SHALL always be available free.
+3. THE system SHALL unlock regions by Renown per game-design.md §6.2 (Koko Woods 0, Crossroads of Wix 2, Orrl Falls 8, Silverhall 16, Koko Deep Woods 24, Mazu Deep 32, Quu Spire 48, The Garbage Collector 64).
+4. WHEN an expedition is sent THEN the api service SHALL store a seed on the `EXPEDITION#` item and SHALL roll loot from that seed on collection, so repeated requests return identical loot.
+5. WHEN an expedition's return time passes THEN the character SHALL be shown as returned with uncollected loot; collection SHALL be an explicit player action and SHALL never expire.
+6. THE system SHALL NOT auto-send expeditions, except the single onboarding expedition to Koko Woods after the first scored event.
+7. THE loot tables SHALL yield per expedition 3 to 6 items from materials, gear for the region's lean slot, Charm packs, pets (rare) and region uniques (very rare), with longer durations yielding more items at diminishing rates per Provision.
+8. AN expedition in progress SHALL NOT block or alter scoring of real events.
+
+### Requirement 16: Forge, gear and pets
+
+**User Story:** As a player, I want to turn supplies into gear that changes how my character looks and slightly how it scores, so that my build is visible.
+
+#### Acceptance Criteria
+
+1. THE system SHALL provide five gear slots (Weapon, Body, Cape, Trinket, Pet) with tiers and Power contributions per game-design.md §7.1, a full-set bonus of +0.25, and one optional affix per piece from Keen, Stout, Quick, Lucky, Hoarder.
+2. THE system SHALL provide three Town stations (Forge, Loom, Scriptorium) that each run one job at a time with the durations and inputs in game-design.md §7.2; finished jobs SHALL wait for collection without loss.
+3. THE Scriptorium SHALL apply affixes using Flux and SHALL name Reclaimed uniques with a generated "former owner" string drawn from a curated list, never from real GitHub logins.
+4. WHEN gear is equipped THEN the character sprite SHALL reflect the highest equipped tier and the equipped cape colour, and the scorer SHALL include its Power contribution for subsequent events only.
+5. THE system SHALL implement at least six pets with one small passive each per game-design.md §7.3; pet passives SHALL never grant XP or gold directly.
+6. THE station upgrades (Bellows, Dyes, Index) SHALL be purchasable once each with the listed supplies.
+
+### Requirement 17: Feats
+
+**User Story:** As a player, I want achievements that measure the scale and craft of my real work and reward me with gear and titles I can show, so that the game reflects what I am proud of.
+
+#### Acceptance Criteria
+
+1. THE system SHALL implement the Feats in game-design.md §8.2 (at least the 40 marked for v1 in tasks.md) as `{id, name, hidden, hint, condition, reward}` evaluated on every scored event against rolling counters (30-day window, lifetime, per-repo first-merge dates, local-time buckets).
+2. THE Scale Feats SHALL count only merged PRs that received at least one approval from a different human account.
+3. THE Feat rewards SHALL be titles, unique gear or pets, and for designated Feats a +0.1 Power Feat bonus capped at +0.5 in total; Feats SHALL never grant gold or XP.
+4. WHEN a Feat unlocks THEN the system SHALL write a `FEAT#` item recording the unlocking event id, and the client SHALL show a persistent banner until dismissed.
+5. THE client SHALL show visible Feats with progress bars, hidden Feats as "???" with their hint, and SHALL allow the player to pin up to three Feats to the character sheet and badge.
+6. THE Feats SHALL count only activity after character creation; backfilled history SHALL never unlock a Feat.
+7. THE badge (Requirement 11) SHALL additionally render the pinned Feats' icons.
+
+### Requirement 18: Quality and repository
 
 **User Story:** As the operator, I want the project public and verifiable, so that colleagues can audit the scorer and the App's permissions.
 

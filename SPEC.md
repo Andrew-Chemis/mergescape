@@ -1,5 +1,5 @@
 # Mergescape — an idle RPG powered by your real code review work
-n> Canonical location for the implementer: `.kiro/specs/mergescape/` (requirements.md, research.md, design.md, tasks.md). This file is the same content as design.md.
+n> Canonical location for the implementer: `.kiro/specs/mergescape/` (requirements.md, game-design.md, research.md, design.md, tasks.md). This file is the same content as design.md.
 
 *Spec v0.1 · 2026-11-06 · decisions made deliberately; change any of them, but each has a reason.*
 
@@ -132,7 +132,7 @@ Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `B
 
 ### 4.3 Power
 
-`Power = 1 + Σ(active Charm powers) + Pledge bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms for Power ≈ 2.5–3.5. Charms are collected via weekly rewards (section 6). Power is capped at 8.
+`Power = 1 + Σ(active Charm powers) + Σ(equipped gear power incl. set bonus) + Pledge bonus + Feat bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms and a Silver or Mithril set for Power ≈ 3–4.5. Budget: Charms up to +4, gear up to +2.25, Pledges +1, Feats +0.5. Power is capped at 9. See game-design.md §7.1.
 
 ### 4.4 Zone multiplier (Diablo scaling)
 
@@ -279,6 +279,18 @@ Design notes:
 * Prices are tuned so a power user (≈1,200 gold/week) can afford one Rare or two Uncommons per week; a casual player (≈300/week) buys a Common or saves for a voucher. Balatro's tension (buy now vs. earn interest) is intact.
 * Everything in the shop is bought with earned gold. There is no real-money store in any version of this design.
 
+### 6.6 Supplies and Expeditions (summary; full rules in game-design.md §6)
+
+Every scored event also drops **supplies** (Ore, Timber, Lore, Ink, Provisions, Flux), independent of Power, banked without cap. The player spends Provisions to send the character on an **expedition** to a region for 4/12/24/48 real hours; on return a seeded loot roll yields materials, gear, Charm packs, rarely pets and uniques. Regions unlock by Renown: Koko Woods (0), Crossroads of Wix (2), Orrl Falls (8), Silverhall (16), Koko Deep Woods (24), Mazu Deep (32), Quu Spire (48), The Garbage Collector (64). Expeditions are the game's only timer and never block scoring.
+
+### 6.7 The Forge and gear (summary; full rules in game-design.md §7)
+
+Five gear slots (Weapon, Body, Cape, Trinket, Pet) in tiers Leather → Iron → Silver → Mithril → Rune → Dragon, each adding +0.05 to +0.40 Power, +0.25 for a full set, one affix per piece (Keen, Stout, Quick, Lucky, Hoarder). Three Town stations (Forge, Loom, Scriptorium) turn supplies into gear over 2 to 24 hours, one job each, collected whenever. Pets are cosmetic with one small passive.
+
+### 6.8 Feats (summary; full list in game-design.md §8)
+
+Measurement achievements over real work: Scale (a PR touching ≥1,000 files, 1M lines added in 30 days, −100k net lines lifetime), Craft (50 sub-50-line approved merges, 100 Ripostes), Endurance, World, and hidden humour entries. Scale Feats count only PRs approved by another human. Rewards are titles, unique gear or pets, and for a few a +0.1 Power bonus capped at +0.5 total. Never gold or XP. Three Feats can be pinned to the character and badge.
+
 ---
 
 ## 7. Enemies, characters, world
@@ -330,6 +342,9 @@ A 32×32 pixel sprite in OSRS proportions. Starts in a brown tunic. Visual tiers
 | 1 | **Landing** | Explain + sign in | Hero sprite, 3-step "Sign in → Install → Merge", privacy promise, sample log |
 | 2 | **Town** (home) | Daily glance | Character + biome, act progress bar (Scout / Raid / Boss), "Last kill" card, Shop-open banner, Pledge hand |
 | 2b | **Shop** | Spend gold | Balatro layout: 2 Charms, 2 Packs, 1 Voucher, Re-roll, Sell; gold and interest shown top-right |
+| 2c | **Expedition** | Send and collect | Region map gated by Renown, duration picker with Provisions cost, return timer, loot reveal |
+| 2d | **Forge** | Craft | Three stations with job slots, recipes from satchel, gear inventory and equip, affix application |
+| 2e | **Feats** | Collection | Visible Feats with progress, hidden as ???, pin up to three |
 | 3 | **Combat Log** | Verify the math | Reverse-chron list; each row = monster icon, repo (owner only), points × power × zone, XP; filter by skill/repo/week |
 | 4 | **Character** | Progress | D2-style XP bar with exact numbers, 4 skill panels OSRS-style, Vocation, equipped Charms (5 slots), gear tier preview |
 | 5 | **Run Map** | The week | 3-act node map (StS), current node pulsing, boss modifier card, Pledges in play |
@@ -388,6 +403,9 @@ Scheduled work (weekly run roll-over, auto-picks) runs as an EventBridge rule �
 | `USER#<gh_id>` | `PROFILE` | login, created, level cache, skill xp, charms[], deck[], gold, renown, settings |
 | `USER#<gh_id>` | `EVT#<iso_ts>#<delivery_id>` | one scored event (the Combat Log row) |
 | `USER#<gh_id>` | `WEEK#<yyyy-ww>` | run state: act, xp this week, act targets, mogul, pledges, shop stock + re-roll count |
+| `USER#<gh_id>` | `EXPEDITION#<iso_ts>` | region, duration, sent_at, returns_at, seed, collected(bool), loot[] once rolled |
+| `USER#<gh_id>` | `JOB#<station>` | current station job: recipe, started_at, done_at, collected(bool) |
+| `USER#<gh_id>` | `FEAT#<feat_id>` | unlocked_at, unlocking event key, pinned(bool) |
 | `PR#<repo_id>#<number>` | `META` | PR metadata from 3.4 (shared across users) |
 | `INSTALL#<installation_id>` | `META` | account id, repo ids, suspended flag |
 | `DELIVERY#<X-GitHub-Delivery>` | — | TTL 7 days, idempotency guard |

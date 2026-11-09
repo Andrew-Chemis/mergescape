@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Read `requirements.md`, `design.md` and `research.md` in this folder before starting. Tasks are ordered by dependency; each cites the requirements it satisfies. Check a box only when its verification line passes. Tasks marked **[v0]** form the first milestone: a working ingest → score → Combat Log loop on the owner's own repos. Everything else is **[v1]**.
+Read `requirements.md`, `game-design.md`, `design.md` and `research.md` in this folder before starting. Tasks are ordered by dependency; each cites the requirements it satisfies. Check a box only when its verification line passes. Tasks marked **[v0]** form the first milestone: a working ingest → score → Combat Log loop on the owner's own repos. Everything else is **[v1]**. Tasks 20 to 24 are **[v1.5]**, the depth layers from game-design.md, required before any public release.
 
 Conventions for the implementer:
 - TypeScript strict, pnpm workspace, vitest. No `any`. No new runtime dependency without a one-line justification in the PR.
@@ -17,7 +17,7 @@ Conventions for the implementer:
   - TypeScript 5.x strict base config; Node 22 target for backend; ES2022 for client.
   - Choose the client framework (Svelte 5 + Vite recommended, see research.md §8) and scaffold an empty app with a router.
   - Add MIT `LICENSE`, `README.md` skeleton, `.github/workflows/ci.yml` running lint, test, build on PRs.
-  - _Requirements: 14.1, 14.2, 14.4_
+  - _Requirements: 18.1, 18.2, 18.4_
   - Verify: `pnpm install && pnpm lint && pnpm test && pnpm build` succeed on a clean clone; CI is green.
 
 - [ ] 2. **[v0]** Shared package: tables, types, constants
@@ -145,8 +145,45 @@ Conventions for the implementer:
   - Schema-guard coverage of every write path; dependency audit; `checkov` on the template; CSP verified in the deployed client; budget alarms confirmed by a test notification.
   - README: permissions list, scorer link, Privacy/Terms links, one-page self-hosting guide.
   - Public App listing with the permission set visible.
-  - _Requirements: 12.6, 14.2, 14.4, 3.6_
+  - _Requirements: 12.6, 18.2, 18.4, 3.6_
   - Verify: fresh-account deploy from README only; coverage thresholds enforced in CI; owner sign-off.
+
+---
+
+- [ ] 20. **[v1.5]** Shared: supplies, expeditions, loot tables
+  - `supplies.ts`: drop table per event (game-design.md §6.1) emitted by `score()` alongside XP; satchel model on the profile.
+  - `expeditions.ts`: region definitions with Renown gates and loot leans, duration/cost table, diminishing yield curve, seeded loot roll (mulberry32 over the stored seed), item count 3 to 6, rarity bands for gear, Charm packs, pets, uniques; Reclaimed unique naming from a curated list of invented former owners.
+  - _Requirements: 4.11, 15.1, 15.2, 15.3, 15.4, 15.7_
+  - Verify: same seed yields identical loot; yield per Provision strictly decreasing across 4/12/24/48 h; every region's table sums to 100%.
+
+- [ ] 21. **[v1.5]** Shared: gear, Forge recipes, pets, Feats
+  - `gear.ts`: slots, tiers, Power per piece, set bonus, affixes, equip validation; wire into `score()` Power with the cap raised to 9.
+  - `forge.ts`: station recipes (inputs, duration, output), upgrades (Bellows, Dyes, Index), job state machine.
+  - `pets.ts`: six pets with passives (passives may only touch supplies, expedition duration or pack odds).
+  - `feats.ts`: the 40 v1 Feats from game-design.md §8.2 (all Scale, Craft, Endurance, World rows plus Merge Conflict, Friday Deploy, Rubber Stamp, Self Merge), rolling counters (30-day window, lifetime, per-repo first merge, local-time buckets), evaluation on every scored event, Feat bonus cap +0.5.
+  - _Requirements: 4.5, 16.1, 16.2, 16.3, 16.5, 16.6, 17.1, 17.2, 17.3, 17.6_
+  - Verify: Power cap test at 9; one test per Feat condition including the other-human-approval gate on Scale Feats; a Feat never fires on backfill-flagged events.
+
+- [ ] 22. **[v1.5]** Backend: expedition, Forge and Feat endpoints
+  - Routes: `POST /expedition/send`, `POST /expedition/collect`, `GET /expedition`, `POST /forge/start`, `POST /forge/collect`, `POST /forge/upgrade`, `POST /gear/equip`, `GET /feats`, `POST /feats/pin`. All conditional writes; collect is idempotent.
+  - Ingest: after scoring, bank supplies, evaluate Feats, write `FEAT#` on unlock, update rolling counters.
+  - Onboarding: first scored event auto-sends the Koko Woods 4 h expedition once.
+  - Badge: render pinned Feat icons.
+  - _Requirements: 15.4, 15.5, 15.6, 15.8, 16.4, 17.4, 17.7_
+  - Verify: integration test sends, advances an injected clock, collects twice and asserts one loot roll; Feat unlock written exactly once under concurrent events.
+
+- [ ] 23. **[v1.5]** Client: Expedition, Forge, Feats screens and Town integration
+  - Expedition screen (region map with Renown gates, duration picker, timer, loot reveal animation), Forge screen (three stations, recipes, inventory, equip, affix), Feats screen (progress bars, hidden entries, pin), satchel on Town, character sprite reflecting equipped tier and cape colour, Feat unlock banner.
+  - Sprites for 30 gear pieces and 6 pets (16×16, palette-indexed).
+  - _Requirements: 10.1, 10.3, 16.4, 17.5_
+  - Verify: fixture render tests; manual pass of the onboarding sequence in game-design.md §10 on a fresh character.
+
+- [ ] 24. **[v1.5]** Feel and content pass
+  - Implement the five polished moments in game-design.md §9 with reduced-motion fallbacks and opt-in sound (nine samples, generated or CC0, attributed in `docs/credits.md`).
+  - Content check against the v1 column of game-design.md §11; copy pass for in-world terms; verify no real names anywhere.
+  - Tune onboarding so a normal first week reaches the Boss act (game-design.md §10) using fixture weeks.
+  - _Requirements: 10.5, 7.5_
+  - Verify: owner walkthrough of day 0 to week 2 on fixture data; axe clean; reduced-motion run shows no animation.
 
 ---
 
