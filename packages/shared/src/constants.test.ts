@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACT_CLEAR_GOLD,
+  AFFIX_RULES,
+  AFFIXES,
+  EXPEDITION_HOURS,
+  EXPEDITION_PLANS,
+  EXPEDITION_RULES,
+  FEAT_PET_IDS,
+  FORAGE_PLAN,
+  GEAR_SET_BONUS,
+  GEAR_TIER_RULES,
+  GEAR_TIERS,
+  MATERIAL_KINDS,
+  PET_IDS,
+  REGION_IDS,
+  SIZE_TIER_LOC,
+  SUPPLY_DROPS,
+  SUPPLY_KINDS,
   ACT_IDS,
   ACT_TARGET_FRACTION,
   ACT_WINDOW_UTC_DAYS,
@@ -161,5 +177,64 @@ describe('constants match the spec tables', () => {
       soloMultiplier: 0.25,
       partyMultiplier: 3,
     });
+  });
+});
+
+describe('constants of the depth layers (game-design.md 6.1, 6.2, 7.1)', () => {
+  it('supplies drops and size tiers', () => {
+    expect(SUPPLY_DROPS).toEqual({
+      mergeOreBase: 1,
+      mergeTimber: 1,
+      reviewDecisionLore: 2,
+      reviewCommentLore: 1,
+      inlineInk: 1,
+      inkCapPerPr: 5,
+      partyProvisions: 2,
+      dailyFirstProvisions: 1,
+      riposteFlux: 1,
+    });
+    expect(SIZE_TIER_LOC).toEqual([50, 300, 1000]);
+    expect(SUPPLY_KINDS).toEqual(['ore', 'timber', 'lore', 'ink', 'provisions', 'flux']);
+    expect(MATERIAL_KINDS).toHaveLength(10);
+  });
+
+  it('gear tiers: Power per piece and unlocks', () => {
+    expect(GEAR_TIERS.map((tier) => GEAR_TIER_RULES[tier])).toEqual([
+      { power: 0.05, unlockLevel: 1, unlockRenown: null },
+      { power: 0.1, unlockLevel: 10, unlockRenown: null },
+      { power: 0.15, unlockLevel: 30, unlockRenown: 16 },
+      { power: 0.2, unlockLevel: 50, unlockRenown: null },
+      { power: 0.3, unlockLevel: 70, unlockRenown: null },
+      { power: 0.4, unlockLevel: 90, unlockRenown: 64 },
+    ]);
+    // Five Dragon pieces plus the set bonus make the +2.25 gear budget.
+    expect(5 * GEAR_TIER_RULES.dragon.power + GEAR_SET_BONUS).toBeCloseTo(2.25, 10);
+  });
+
+  it('affixes', () => {
+    expect(AFFIXES).toEqual(['keen', 'stout', 'quick', 'lucky', 'hoarder']);
+    expect(AFFIX_RULES).toEqual({
+      keenPower: 0.1,
+      stoutPower: 0.1,
+      quickReduction: 0.1,
+      luckyPackPoints: 5,
+      hoarderSupplies: 1,
+    });
+  });
+
+  it('expeditions: durations, costs, the free Forage and the 8 regions', () => {
+    expect(EXPEDITION_HOURS).toEqual([4, 12, 24, 48]);
+    expect(EXPEDITION_HOURS.map((hours) => EXPEDITION_PLANS[hours].provisions)).toEqual([
+      1, 2, 4, 6,
+    ]);
+    expect(FORAGE_PLAN).toEqual({ hours: 4, provisions: 0, items: 3 });
+    expect(REGION_IDS).toHaveLength(8);
+    expect(EXPEDITION_RULES.oldCoinYear).toBe(7960);
+    expect(EXPEDITION_RULES.oldCoinPerMille).toBe(1);
+  });
+
+  it('pets: six v1 pets and five cosmetic Feat pets', () => {
+    expect(PET_IDS).toHaveLength(6);
+    expect(FEAT_PET_IDS).toHaveLength(5);
   });
 });

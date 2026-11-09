@@ -18,3 +18,51 @@ export function productionSources(): [string, string][] {
     ([file]) => !file.endsWith('.test.ts') && !file.startsWith('./test-'),
   );
 }
+
+/**
+ * Obvious real names and brands that must not appear in the code or the copy (Requirement 7.5, 16.3).
+ * Matched as whole words, case-insensitive. Shared by the Mogul copy review and the review of the
+ * expedition, gear, pet and Feat content.
+ */
+export const NAME_DENYLIST: readonly string[] = [
+  'elon',
+  'musk',
+  'tesla',
+  'spacex',
+  'jensen',
+  'huang',
+  'nvidia',
+  'zuckerberg',
+  'zuck',
+  'facebook',
+  'instagram',
+  'meta',
+  'steve jobs',
+  'jobs',
+  'apple',
+  'bezos',
+  'amazon',
+  'gates',
+  'microsoft',
+  'altman',
+  'openai',
+  'anthropic',
+  'sam altman',
+  'google',
+  'alphabet',
+  'pichai',
+  'nadella',
+  'twitter',
+  'oracle',
+  'netflix',
+  'uber',
+  'ellison',
+  'dorsey',
+  'cook',
+];
+
+/** A whole-word, case-insensitive pattern for the denylist, leaving out any names in `except`. */
+export function namesPattern(except: readonly string[] = []): RegExp {
+  const names = NAME_DENYLIST.filter((name) => !except.includes(name));
+  return new RegExp(`\\b(${names.join('|')})\\b`, 'i');
+}

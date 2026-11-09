@@ -4,9 +4,7 @@ import {
   NON_DEFAULT_BRANCH_MULTIPLIER,
   POINTS,
   SIZE_POINTS,
-  SIZE_TIER_LOC,
   SOLO_KILL_MULTIPLIER,
-  SUPPLY_DROPS,
 } from './constants';
 import { actWindow, DAY_MS, utcDay } from './calendar';
 import { hasCharm, partyBonusPoints, riposteMultiplier } from './charms';
@@ -17,6 +15,14 @@ import { evaluatePledges } from './pledges';
 import { computePower, powerBreakdown, powerContext, powerOf } from './power';
 import { stateUpdates } from './progress';
 import { emptySkillXp, SKILL_LABELS, SKILLS } from './skills';
+import {
+  dailyFirstDrop,
+  emptySupplies,
+  inlineDrop,
+  mergeDrop,
+  reviewDrop,
+  sumSupplies,
+} from './supplies';
 import type {
   BreakdownLine,
   CounterUpdates,
@@ -50,11 +56,6 @@ export function sizePoints(linesChanged: number): number {
     SIZE_POINTS.max,
     Math.round(SIZE_POINTS.scale * Math.log2(1 + linesChanged / SIZE_POINTS.divisor)),
   );
-}
-
-/** Size tier 0 to 3 for the Ore drop. */
-export function sizeTier(linesChanged: number): number {
-  return SIZE_TIER_LOC.filter((threshold) => linesChanged >= threshold).length;
 }
 
 /** Zone multiplier `(level + 1) ^ exponent`. */
@@ -103,10 +104,6 @@ function noUpdates(): CounterUpdates {
 
 function skipped(skip: SkipReason, counters: CounterUpdates = noUpdates()): Skipped {
   return { skip, counters };
-}
-
-function zeroSupplies(): Supplies {
-  return { ore: 0, timber: 0, lore: 0, ink: 0, provisions: 0, flux: 0 };
 }
 
 function reviewerCountersFor(pr: PRState, reviewerId: number): ReviewerCounters {
@@ -220,10 +217,6 @@ function scoreMerged(
       : `Size (log-scaled, ${sized.lines} lines)`;
     terms.push({ label, points: size, solo: true });
   }
-  const supplies: Partial<Supplies> = {
-    ore: SUPPLY_DROPS.mergeOreBase + sizeTier(facts.lines),
-    timber: SUPPLY_DROPS.mergeTimber,
-  };
   if (facts.party) {
     const partyPoints = partyBonusPoints(player);
     terms.push({
@@ -235,7 +228,6 @@ function scoreMerged(
       solo: true,
       party: true,
     });
-    supplies.provisions = SUPPLY_DROPS.partyProvisions;
   }
   if (facts.riposte) {
     const multiplier = riposteMultiplier(player);
@@ -246,13 +238,12 @@ function scoreMerged(
           : 'Riposte (feedback addressed)',
       points: POINTS.riposte * multiplier,
     });
-    supplies.flux = SUPPLY_DROPS.riposteFlux;
   }
   return {
     skill: 'smithing',
     terms,
     soloKill: facts.soloKill,
-    supplies,
+    supplies: mergeDrop({ lines: facts.lines, party: facts.party, riposte: facts.riposte }),
     counters: noUpdates(),
     monster: chooseMonster(
       monsterContext(pr, {
@@ -309,9 +300,7 @@ function scoreReview(
       },
     ],
     soloKill: false,
-    supplies: {
-      lore: decision ? SUPPLY_DROPS.reviewDecisionLore : SUPPLY_DROPS.reviewCommentLore,
-    },
+    supplies: reviewDrop(decision),
     counters,
     monster: chooseMonster(
       monsterContext(pr, { inlineAfter: current.inline, reviewRounds }),
@@ -337,7 +326,7 @@ function scoreInlineComment(
     skill: 'oratory',
     terms: [{ label: 'Inline comment', points: POINTS.inlineComment }],
     soloKill: false,
-    supplies: current.inline < SUPPLY_DROPS.inkCapPerPr ? { ink: SUPPLY_DROPS.inlineInk } : {},
+    supplies: inlineDrop(current.inline),
     counters: {
       player: {},
       pr: { reviewerCounters: { reviewerId, counters: { ...current, inline: inlineAfter } } },
@@ -523,7 +512,7 @@ export function score(
       xp: 0,
       skill: null,
       skillXp: emptySkillXp(),
-      supplies: zeroSupplies(),
+      supplies: emptySupplies(),
       monster: null,
       breakdown: [],
       counterUpdates: outcome.counters,
@@ -577,14 +566,14 @@ export function score(
     outcome.counters,
     stateUpdates({ player, event, pr, mogul, pledge, ctx }),
   );
-  const supplies = { ...zeroSupplies(), ...outcome.supplies };
+  let dailyDrop: Partial<Supplies> = {};
   let dailyPoints = 0;
   if (event.kind !== 'weekly_streak' && player.counters.dailyFirstDay !== today) {
     dailyPoints = POINTS.dailyFirst;
     points += dailyPoints;
     breakdown.push({ label: 'First event of the day', value: dailyPoints, kind: 'points' });
     counterUpdates.player.dailyFirstDay = today;
-    supplies.provisions += SUPPLY_DROPS.dailyFirstProvisions;
+    dailyDrop = dailyFirstDrop();
   }
 
   const xp = Math.floor(points * power * zone);
@@ -612,7 +601,7 @@ export function score(
     xp,
     skill: outcome.skill,
     skillXp,
-    supplies,
+    supplies: sumSupplies(outcome.supplies, dailyDrop),
     monster: outcome.monster,
     breakdown,
     counterUpdates,

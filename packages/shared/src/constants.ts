@@ -4,6 +4,8 @@
  * (Charms, Pledges, shop), game-design.md section 6.1 (supplies) and requirements.md 4, 5, 6, 8, 9.
  */
 
+import type { GearSlot } from './types';
+
 // ---------------------------------------------------------------------------------------------
 // Points (design.md 4.2)
 // ---------------------------------------------------------------------------------------------
@@ -362,3 +364,298 @@ export const GEAR_TIER_LEVELS = [
   { level: 90, tier: 'Dragon' },
   { level: 99, tier: 'Trimmed' },
 ] as const;
+
+// ---------------------------------------------------------------------------------------------
+// Materials and the satchel (game-design.md 6.1 and 7.1; Requirement 15.1)
+// ---------------------------------------------------------------------------------------------
+
+/** The six supplies scored events drop, in satchel display order. */
+export const SUPPLY_KINDS = ['ore', 'timber', 'lore', 'ink', 'provisions', 'flux'] as const;
+export type SupplyKind = (typeof SUPPLY_KINDS)[number];
+
+/** Crafting-tier materials. Events never drop them; only expeditions do. */
+export const TIER_MATERIALS = ['silver', 'mithril', 'rune', 'dragon'] as const;
+export type TierMaterial = (typeof TIER_MATERIALS)[number];
+
+export const MATERIAL_KINDS = [...SUPPLY_KINDS, ...TIER_MATERIALS] as const;
+export type MaterialKind = (typeof MATERIAL_KINDS)[number];
+
+// ---------------------------------------------------------------------------------------------
+// Gear tiers and affixes (game-design.md 7.1; Requirement 16.1)
+// ---------------------------------------------------------------------------------------------
+
+export const GEAR_TIERS = ['leather', 'iron', 'silver', 'mithril', 'rune', 'dragon'] as const;
+export type GearTier = (typeof GEAR_TIERS)[number];
+
+/**
+ * Power per piece and the unlock of each tier. A tier is unlocked at `unlockLevel`, or earlier for the
+ * player who has reached the region that gives it (`unlockRenown`: Silverhall for Silver, The Garbage
+ * Collector for Dragon).
+ */
+export const GEAR_TIER_RULES: Readonly<
+  Record<GearTier, { power: number; unlockLevel: number; unlockRenown: number | null }>
+> = {
+  leather: { power: 0.05, unlockLevel: 1, unlockRenown: null },
+  iron: { power: 0.1, unlockLevel: 10, unlockRenown: null },
+  silver: { power: 0.15, unlockLevel: 30, unlockRenown: 16 },
+  mithril: { power: 0.2, unlockLevel: 50, unlockRenown: null },
+  rune: { power: 0.3, unlockLevel: 70, unlockRenown: null },
+  dragon: { power: 0.4, unlockLevel: 90, unlockRenown: 64 },
+};
+
+/** A full set (all five slots the same tier) adds this much Power on top of the pieces. */
+export const GEAR_SET_BONUS = 0.25;
+
+/** The five affixes (game-design.md 7.1). */
+export const AFFIXES = ['keen', 'stout', 'quick', 'lucky', 'hoarder'] as const;
+export type Affix = (typeof AFFIXES)[number];
+
+// ---------------------------------------------------------------------------------------------
+// Pets (game-design.md 7.3; Requirement 16.5)
+// ---------------------------------------------------------------------------------------------
+
+/** The six pets of v1, each with one small passive. The Linter Cat is the starter. */
+export const PET_IDS = [
+  'linter-cat',
+  'rubber-duck',
+  'flaky-wisp',
+  'goblin-runt',
+  'garbage-collectors-mote',
+  'owl',
+] as const;
+export type PetId = (typeof PET_IDS)[number];
+
+/** Cosmetic pets that only Feats award; they carry no passive. */
+export const FEAT_PET_IDS = [
+  'many-armed-goblin',
+  'polyglot-parrot',
+  'hot-potato',
+  'pager-gremlin',
+  'coin-mote',
+] as const;
+export type FeatPetId = (typeof FEAT_PET_IDS)[number];
+
+// ---------------------------------------------------------------------------------------------
+// Expeditions (game-design.md 6.2; Requirement 15)
+// ---------------------------------------------------------------------------------------------
+
+export const EXPEDITION_HOURS = [4, 12, 24, 48] as const;
+export type ExpeditionHours = (typeof EXPEDITION_HOURS)[number];
+
+/**
+ * Provisions paid and items rolled by duration. Items rise 3 to 6 while the price rises 1 to 6, so the
+ * yield per Provision (3, 2, 1.25, 1) strictly falls: a longer trip is worth more in total and less per
+ * Provision, which makes checking daily optimal and weekly fine.
+ */
+export const EXPEDITION_PLANS: Readonly<
+  Record<ExpeditionHours, { provisions: number; items: number }>
+> = {
+  4: { provisions: 1, items: 3 },
+  12: { provisions: 2, items: 4 },
+  24: { provisions: 4, items: 5 },
+  48: { provisions: 6, items: 6 },
+};
+
+/** The free 4 h Forage: always available, materials and plain gear only. */
+export const FORAGE_PLAN = { hours: 4, provisions: 0, items: 3 } as const;
+
+/** What a loot roll can produce, in rarity order. */
+export const LOOT_KINDS = ['material', 'gear', 'charm_pack', 'pet', 'unique'] as const;
+export type LootKind = (typeof LOOT_KINDS)[number];
+
+/** Every region's loot weights sum to this (per mille: 1000 is 100%). */
+export const LOOT_WEIGHT_TOTAL = 1000;
+
+export const REGION_IDS = [
+  'koko-woods',
+  'crossroads-of-wix',
+  'orrl-falls',
+  'silverhall',
+  'koko-deep-woods',
+  'mazu-deep',
+  'quu-spire',
+  'garbage-collector',
+] as const;
+export type RegionId = (typeof REGION_IDS)[number];
+
+export interface RegionMaterialWeight {
+  material: MaterialKind;
+  weight: number;
+  /** Quantity rolled uniformly from `min` to `max` inclusive. */
+  min: number;
+  max: number;
+}
+
+export interface RegionRules {
+  /** Renown needed to be sent here (Requirement 15.3). */
+  renown: number;
+  /** Per mille, summing to `LOOT_WEIGHT_TOTAL`. Materials dominate; pets are rare; uniques very rare. */
+  weights: Readonly<Record<LootKind, number>>;
+  /** The slot the region's gear leans toward, or `any` for a mixed stock. */
+  gearSlot: GearSlot | 'any';
+  gearTier: GearTier;
+  materials: readonly RegionMaterialWeight[];
+  /** Pets the region can give. */
+  pets: readonly PetId[];
+  /** Catalogue id of the region unique, or `reclaimed` for the named gear of the Garbage Collector. */
+  unique: string;
+  /** Only the Crossroads can give the coin dated 7960. */
+  coin: boolean;
+}
+
+export const REGION_RULES: Readonly<Record<RegionId, RegionRules>> = {
+  'koko-woods': {
+    renown: 0,
+    weights: { material: 640, gear: 300, charm_pack: 40, pet: 15, unique: 5 },
+    gearSlot: 'body',
+    gearTier: 'leather',
+    materials: [
+      { material: 'timber', weight: 50, min: 3, max: 5 },
+      { material: 'provisions', weight: 30, min: 1, max: 2 },
+      { material: 'ore', weight: 10, min: 2, max: 3 },
+      { material: 'lore', weight: 5, min: 1, max: 2 },
+      { material: 'ink', weight: 5, min: 1, max: 2 },
+    ],
+    pets: ['rubber-duck'],
+    unique: 'fernblade',
+    coin: false,
+  },
+  'crossroads-of-wix': {
+    renown: 2,
+    weights: { material: 560, gear: 300, charm_pack: 100, pet: 30, unique: 10 },
+    gearSlot: 'any',
+    gearTier: 'leather',
+    materials: [
+      { material: 'timber', weight: 20, min: 2, max: 4 },
+      { material: 'ore', weight: 20, min: 2, max: 4 },
+      { material: 'lore', weight: 15, min: 1, max: 2 },
+      { material: 'ink', weight: 15, min: 1, max: 2 },
+      { material: 'provisions', weight: 20, min: 1, max: 2 },
+      { material: 'flux', weight: 10, min: 1, max: 1 },
+    ],
+    pets: ['rubber-duck', 'flaky-wisp'],
+    unique: 'pedlars-button',
+    coin: true,
+  },
+  'orrl-falls': {
+    renown: 8,
+    weights: { material: 620, gear: 320, charm_pack: 40, pet: 15, unique: 5 },
+    gearSlot: 'weapon',
+    gearTier: 'iron',
+    materials: [
+      { material: 'ore', weight: 60, min: 4, max: 6 },
+      { material: 'timber', weight: 15, min: 2, max: 3 },
+      { material: 'provisions', weight: 15, min: 1, max: 2 },
+      { material: 'flux', weight: 10, min: 1, max: 1 },
+    ],
+    pets: ['flaky-wisp'],
+    unique: 'cascade-pick',
+    coin: false,
+  },
+  silverhall: {
+    renown: 16,
+    weights: { material: 600, gear: 320, charm_pack: 55, pet: 20, unique: 5 },
+    gearSlot: 'body',
+    gearTier: 'silver',
+    materials: [
+      { material: 'silver', weight: 45, min: 1, max: 3 },
+      { material: 'flux', weight: 25, min: 1, max: 2 },
+      { material: 'ore', weight: 20, min: 3, max: 4 },
+      { material: 'provisions', weight: 10, min: 1, max: 2 },
+    ],
+    pets: ['flaky-wisp'],
+    unique: 'hallkeepers-mail',
+    coin: false,
+  },
+  'koko-deep-woods': {
+    renown: 24,
+    weights: { material: 600, gear: 300, charm_pack: 70, pet: 25, unique: 5 },
+    gearSlot: 'cape',
+    gearTier: 'silver',
+    materials: [
+      { material: 'lore', weight: 40, min: 2, max: 3 },
+      { material: 'ink', weight: 35, min: 2, max: 3 },
+      { material: 'provisions', weight: 15, min: 1, max: 2 },
+      { material: 'timber', weight: 10, min: 2, max: 4 },
+    ],
+    pets: ['owl'],
+    unique: 'moth-lantern-cloak',
+    coin: false,
+  },
+  'mazu-deep': {
+    renown: 32,
+    weights: { material: 580, gear: 330, charm_pack: 60, pet: 25, unique: 5 },
+    gearSlot: 'trinket',
+    gearTier: 'mithril',
+    materials: [
+      { material: 'mithril', weight: 45, min: 1, max: 2 },
+      { material: 'flux', weight: 15, min: 1, max: 2 },
+      { material: 'silver', weight: 15, min: 1, max: 2 },
+      { material: 'lore', weight: 15, min: 2, max: 3 },
+      { material: 'ink', weight: 10, min: 2, max: 3 },
+    ],
+    pets: ['owl', 'flaky-wisp'],
+    unique: 'pressure-pearl',
+    coin: false,
+  },
+  'quu-spire': {
+    renown: 48,
+    weights: { material: 510, gear: 340, charm_pack: 70, pet: 50, unique: 30 },
+    gearSlot: 'weapon',
+    gearTier: 'rune',
+    materials: [
+      { material: 'rune', weight: 45, min: 1, max: 2 },
+      { material: 'mithril', weight: 15, min: 1, max: 2 },
+      { material: 'flux', weight: 20, min: 1, max: 2 },
+      { material: 'lore', weight: 10, min: 2, max: 3 },
+      { material: 'ink', weight: 10, min: 2, max: 3 },
+    ],
+    pets: ['owl'],
+    unique: 'plumb-of-quu',
+    coin: false,
+  },
+  'garbage-collector': {
+    renown: 64,
+    weights: { material: 510, gear: 340, charm_pack: 60, pet: 50, unique: 40 },
+    gearSlot: 'any',
+    gearTier: 'dragon',
+    materials: [
+      { material: 'dragon', weight: 40, min: 1, max: 2 },
+      { material: 'rune', weight: 20, min: 1, max: 2 },
+      { material: 'flux', weight: 20, min: 1, max: 2 },
+      { material: 'mithril', weight: 10, min: 1, max: 2 },
+      { material: 'ore', weight: 10, min: 3, max: 5 },
+    ],
+    pets: ['garbage-collectors-mote'],
+    unique: 'reclaimed',
+    coin: false,
+  },
+};
+
+export const EXPEDITION_RULES = {
+  /** Gear found on an expedition carries an affix this often (percent). */
+  foundAffixPercent: 20,
+  /** The coin dated 7960: this many in a thousand per item rolled at the Crossroads (0.1%). */
+  oldCoinPerMille: 1,
+  oldCoinYear: 7960,
+  /** Quick pieces and pet passives together never shorten a trip by more than this fraction. */
+  reductionCap: 0.5,
+  /** Lucky pieces and pet passives together never add more than this many points of Charm-pack odds. */
+  packOddsCapPoints: 15,
+  /** Flux given in place of a pet the player already owns. */
+  duplicatePetFlux: 2,
+} as const;
+
+/** Affix numbers (game-design.md 7.1). Keen and Stout are Power; the rest touch supplies or expeditions. */
+export const AFFIX_RULES = {
+  /** Keen: Power per piece on a review event. */
+  keenPower: 0.1,
+  /** Stout: Power per piece on a merge event. */
+  stoutPower: 0.1,
+  /** Quick: each piece shortens an expedition by this fraction. */
+  quickReduction: 0.1,
+  /** Lucky: each piece adds this many points to the Charm-pack odds of every loot roll. */
+  luckyPackPoints: 5,
+  /** Hoarder: each piece adds this many of the event's main supply. */
+  hoarderSupplies: 1,
+} as const;

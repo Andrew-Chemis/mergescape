@@ -38,7 +38,7 @@ import {
   REVIEWER_ID,
   settledPlayer,
 } from './test-builders';
-import { productionSources, SOURCES } from './test-sources';
+import { NAME_DENYLIST, productionSources, SOURCES } from './test-sources';
 import type {
   GameEvent,
   MogulId,
@@ -123,42 +123,7 @@ describe('the six Moguls (Requirement 7.1, design.md 6.2 as audited)', () => {
 describe('copy review (Requirement 7.5): no real names, company names or trademarks', () => {
   // A denylist of obvious real names and brands. Word-boundary, case-insensitive. "Oracle" is a real
   // company too: the Oracle Charm is a design name outside the Mogul copy, so it is denied only here.
-  const DENY = [
-    'elon',
-    'musk',
-    'tesla',
-    'spacex',
-    'jensen',
-    'huang',
-    'nvidia',
-    'zuckerberg',
-    'zuck',
-    'facebook',
-    'instagram',
-    'meta',
-    'steve jobs',
-    'jobs',
-    'apple',
-    'bezos',
-    'amazon',
-    'gates',
-    'microsoft',
-    'altman',
-    'openai',
-    'anthropic',
-    'sam altman',
-    'google',
-    'alphabet',
-    'pichai',
-    'nadella',
-    'twitter',
-    'oracle',
-    'netflix',
-    'uber',
-    'ellison',
-    'dorsey',
-    'cook',
-  ];
+  const DENY = NAME_DENYLIST;
   const pattern = new RegExp(`\\b(${DENY.join('|')})\\b`, 'i');
 
   it('finds nothing in moguls.ts', () => {

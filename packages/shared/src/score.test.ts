@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { D2_XP } from './d2table';
 import { actWindow, utcDay } from './calendar';
-import { score, sizePoints, sizeTier, streakPoints, zoneFor } from './score';
+import { score, sizePoints, streakPoints, zoneFor } from './score';
+import { sizeTier } from './supplies';
 import { applyScoreResult, createPlayerState, createPRState } from './state';
 import {
   AUTHOR_ID,

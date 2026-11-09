@@ -1,4 +1,13 @@
-import type { ActId, Rarity } from './constants';
+import type {
+  ActId,
+  Affix,
+  ExpeditionHours,
+  GearTier,
+  MaterialKind,
+  Rarity,
+  RegionId,
+  TierMaterial,
+} from './constants';
 
 // ---------------------------------------------------------------------------------------------
 // Skills and supplies
@@ -19,6 +28,15 @@ export interface Supplies {
   provisions: number;
   flux: number;
 }
+
+/**
+ * Everything the character carries: the six supplies plus the four crafting-tier materials that only
+ * expeditions give. All ten counts are whole numbers with no cap and no decay (Requirement 15.1).
+ */
+export type Satchel = Supplies & Record<TierMaterial, number>;
+
+/** A satchel entry by name, for partial drops and costs. */
+export type MaterialAmounts = Partial<Record<MaterialKind, number>>;
 
 // ---------------------------------------------------------------------------------------------
 // Content records (filled in by later tasks; shapes fixed here)
@@ -148,6 +166,21 @@ export interface GearPiece {
   slot: GearSlot;
   /** Power of this equipped piece. */
   power: number;
+  /*
+   * Everything below is optional so a piece stored before tiers existed still reads.
+   */
+  /** The tier whose Power the piece carries. */
+  tier?: GearTier;
+  /** The tier the piece looks like, when that differs from `tier` (the Monolith Plate). */
+  look?: GearTier;
+  name?: string;
+  affix?: Affix;
+  /** `region` and `feat` for named uniques, `reclaimed` for the Garbage Collector's former-owner gear. */
+  unique?: 'region' | 'feat' | 'reclaimed';
+  /** The invented former owner of a Reclaimed piece. */
+  owner?: string;
+  /** Catalogue id of a named unique, or the pet's id on a pet-slot piece. */
+  ref?: string;
 }
 
 export interface GearLoadout {
@@ -169,6 +202,40 @@ export interface FeatLoadout {
   unlocked: readonly string[];
   /** Feat Power bonus, already capped at +0.5. */
   powerBonus: number;
+}
+
+/** One item of an expedition's loot. */
+export type LootItem =
+  | { kind: 'material'; material: MaterialKind; quantity: number }
+  | { kind: 'gear'; piece: GearPiece }
+  /** An unopened Charm pack; `seed` fixes its 3 options. */
+  | { kind: 'charm_pack'; seed: number }
+  | { kind: 'pet'; petId: string }
+  | { kind: 'unique'; piece: GearPiece }
+  /** The coin dated 7960. */
+  | { kind: 'coin'; year: number };
+
+/**
+ * One expedition (the `EXPEDITION#` item). The seed is stored at send time and loot is rolled from it
+ * on collection, so a refresh never re-rolls (Requirement 15.4).
+ */
+export interface ExpeditionState {
+  region: RegionId;
+  /** The nominal duration; a Forage is 4. */
+  hours: ExpeditionHours;
+  /** The free 4 h Forage: materials and plain gear only. */
+  forage: boolean;
+  /** Epoch milliseconds. */
+  sentAt: number;
+  /** Epoch milliseconds the character is back (shortened by Quick gear and pet passives). */
+  returnsAt: number;
+  seed: number;
+  provisionsPaid: number;
+  /** Points of Charm-pack odds (Lucky gear, pet passives) captured at send, so swapping gear cannot change a roll. */
+  packBonus: number;
+  collected: boolean;
+  /** Present once collected; the roll is never repeated. */
+  loot?: LootItem[];
 }
 
 /** A Charm the Founder's Board has removed; it returns on Friday with +0.25 Power. */
@@ -258,6 +325,20 @@ export interface PlayerState {
   cosmetics: readonly string[];
   /** Lifetime scored merges per repository, keyed by the repo id as a string (Grey Beard, Mentor). */
   repoMerges: Readonly<Record<string, number>>;
+  /*
+   * The depth layers (tasks 20 and 21). Every field is optional and absent means empty, so a profile
+   * stored before they existed still reads and `createPlayerState` is unchanged.
+   */
+  /** Supplies and crafting materials banked; see supplies.ts. Absent means an empty satchel. */
+  satchel?: Satchel;
+  /** The latest expedition, collected or not (expeditions.ts). Null or absent: the character is in Town. */
+  expedition?: ExpeditionState | null;
+  /** Gear owned and not equipped. */
+  inventory?: readonly GearPiece[];
+  /** Pet ids owned. Absent means the starter, the Linter Cat. */
+  pets?: readonly string[];
+  /** Seeds of Charm packs from loot that are not yet opened. */
+  charmPacks?: readonly number[];
 }
 
 /** The scorer's view of a PR. Metadata persisted per Requirement 3.1 is handled by the backend. */

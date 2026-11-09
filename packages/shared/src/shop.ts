@@ -79,7 +79,7 @@ function drawCharm(random: () => number, taken: readonly CharmDefinition[]): Cha
 }
 
 /** `count` different Charm definitions, each drawn by rarity weight. */
-function drawDistinctCharms(count: number, random: () => number): CharmDefinition[] {
+export function drawDistinctCharms(count: number, random: () => number): CharmDefinition[] {
   const drawn: CharmDefinition[] = [];
   while (drawn.length < count) {
     drawn.push(drawCharm(random, drawn));
