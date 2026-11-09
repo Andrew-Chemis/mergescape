@@ -11,6 +11,7 @@ import {
   TARGET_MAX_PREVIOUS_MULTIPLE,
 } from './constants';
 import type { ActId } from './constants';
+import { WEEK_MS } from './calendar';
 import { payActClear } from './economy';
 import type { GoldEntry } from './economy';
 import { applyFounderBoard, mogulGoldMultiplier, selectMogul } from './moguls';
@@ -40,7 +41,7 @@ export function isoWeekKey(now: number): string {
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - sinceMonday + 3),
   );
   const yearStart = Date.UTC(thursday.getUTCFullYear(), 0, 1);
-  const week = Math.floor((thursday.getTime() - yearStart) / (7 * 24 * 60 * 60 * 1000)) + 1;
+  const week = Math.floor((thursday.getTime() - yearStart) / WEEK_MS) + 1;
   return `${thursday.getUTCFullYear()}-${String(week).padStart(2, '0')}`;
 }
 

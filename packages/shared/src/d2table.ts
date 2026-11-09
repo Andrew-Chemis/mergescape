@@ -1,3 +1,5 @@
+import { clamp } from './math';
+
 /**
  * Diablo II (Lord of Destruction) experience table, copied verbatim from research.md section 2.
  * Index = level; the value is the cumulative XP required to reach that level. Index 0 is unused.
@@ -111,7 +113,7 @@ export const MAX_LEVEL = 99;
 
 /** Cumulative XP needed to reach `level` (clamped to 1..99). */
 function xpAt(level: number): number {
-  return D2_XP[Math.min(MAX_LEVEL, Math.max(1, level))]!;
+  return D2_XP[clamp(level, 1, MAX_LEVEL)]!;
 }
 
 /** Largest level L in 1..99 with `D2_XP[L] <= xp`, found by binary search. */

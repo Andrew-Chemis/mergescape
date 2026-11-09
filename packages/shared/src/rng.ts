@@ -1,3 +1,5 @@
+import { sumBy } from './math';
+
 /**
  * Seeded randomness for the run layer: the shop, Pledge draws, Mogul bag and Founder's Board all derive
  * from the week's seed, so a reload or a retry never changes what the player was shown.
@@ -59,7 +61,7 @@ export function weightedPick<T>(
   entries: readonly { value: T; weight: number }[],
   random: () => number,
 ): T {
-  const total = entries.reduce((sum, entry) => sum + entry.weight, 0);
+  const total = sumBy(entries, (entry) => entry.weight);
   let threshold = random() * total;
   let chosen = entries[0] as { value: T; weight: number };
   for (const entry of entries) {

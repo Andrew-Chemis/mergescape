@@ -7,7 +7,7 @@ import {
   SOLO_KILL_MULTIPLIER,
 } from './constants';
 import { actWindow, DAY_MS, utcDay } from './calendar';
-import { hasCharm, partyBonusPoints, riposteMultiplier } from './charms';
+import { hasCharmEffect, partyBonusPoints, riposteMultiplier } from './charms';
 import { levelFor } from './d2table';
 import { mergeFacts } from './facts';
 import { activeMogul, mogulFactors, mogulGoldMultiplier, mogulSizeLines } from './moguls';
@@ -371,7 +371,7 @@ function scoreRiposteCredit(
   pr: PRState,
   now: number,
 ): Outcome {
-  if (!event.pr.merged || !hasCharm(player, 'jesters-rebase')) {
+  if (!event.pr.merged || !hasCharmEffect(player, 'riposte')) {
     return skipped('not_scoring');
   }
   const stats = event.pr.stats ?? pr;

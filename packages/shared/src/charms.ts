@@ -9,7 +9,7 @@ import {
 import type { Rarity } from './constants';
 import { utcDay } from './calendar';
 import { eventLines, hoursBetween } from './facts';
-import { tidy } from './math';
+import { sumBy, tidy } from './math';
 import { lifetimeMerges } from './pledges';
 import { charmSlotCount } from './vouchers';
 import type {
@@ -29,8 +29,9 @@ import type {
  * the hour of day, a rubber stamp or a closed PR. A definition carries:
  * - `basePower`: Power the Charm always gives, per copy. 0 where the text only gives a conditional effect.
  * - `condition` and `conditionalPower`: extra Power per copy on events where the condition holds.
- * - the rule changes (Second Pair of Eyes, Jester's Rebase, Loaded Dice, Oracle), which are read where the
- *   rule lives: `partyBonusPoints`, `riposteMultiplier`, power.ts, and `canSeeNextMogul`.
+ * - `effects`: the rule changes (Second Pair of Eyes, Jester's Rebase, Loaded Dice, Oracle) as data. They are
+ *   read where the rule lives, through `hasCharmEffect` and `sumCharmEffect`: `partyBonusPoints`,
+ *   `riposteMultiplier` and the Riposte credit, power.ts, and `canSeeNextMogul`.
  * Rarity (common +0.25, uncommon +0.5, rare +1, legendary +2) is the nominal tier; each Charm's actual
  * numbers are the ones in its description, as in the design table.
  */
@@ -57,6 +58,26 @@ export type CharmCondition = (
   now: number,
 ) => boolean;
 
+/** The rules a Charm changes outright, as data. Absent keys mean the Charm does not touch that rule. */
+export interface CharmEffects {
+  /** Jester's Rebase: changes you request earn a Riposte when the PR merges, and Riposte points are multiplied. */
+  riposte?: true;
+  /** Second Pair of Eyes: extra party-bonus points per copy held. */
+  partyPoints?: number;
+  /** Oracle: next week's Mogul is revealed. */
+  seesNextMogul?: true;
+  /** Loaded Dice: once a week one event's Power is replaced. */
+  loadedDice?: true;
+}
+
+/** The effects that are a yes or no, read with `hasCharmEffect`. */
+export type CharmEffectKey = keyof CharmEffects;
+
+/** The effects that are an amount per copy, read with `sumCharmEffect`. */
+export type CharmEffectAmountKey = {
+  [K in CharmEffectKey]-?: NonNullable<CharmEffects[K]> extends number ? K : never;
+}[CharmEffectKey];
+
 export interface CharmDefinition {
   id: CharmId;
   name: string;
@@ -69,6 +90,8 @@ export interface CharmDefinition {
   /** Short phrase shown in the Combat Log when the condition fired, e.g. "first event of the day". */
   conditionLabel: string;
   condition?: CharmCondition;
+  /** Rule changes the Charm makes, for the Charms that are not (only) Power. */
+  effects?: CharmEffects;
 }
 
 const rubberDuckCondition: CharmCondition = (event, _player, pr) =>
@@ -165,6 +188,7 @@ export const CHARMS: readonly CharmDefinition[] = [
     basePower: 0,
     conditionalPower: 0,
     conditionLabel: '',
+    effects: { partyPoints: CHARM_RULES.secondPairExtraPartyPoints },
   },
   {
     id: 'familiar-path',
@@ -216,6 +240,7 @@ export const CHARMS: readonly CharmDefinition[] = [
     basePower: 0,
     conditionalPower: 0,
     conditionLabel: '',
+    effects: { riposte: true },
   },
   {
     id: 'loaded-dice',
@@ -225,6 +250,7 @@ export const CHARMS: readonly CharmDefinition[] = [
     basePower: 0,
     conditionalPower: 0,
     conditionLabel: '',
+    effects: { loadedDice: true },
   },
   {
     id: 'oracle',
@@ -234,6 +260,7 @@ export const CHARMS: readonly CharmDefinition[] = [
     basePower: 0,
     conditionalPower: 0,
     conditionLabel: '',
+    effects: { seesNextMogul: true },
   },
 ];
 
@@ -267,6 +294,19 @@ export function copiesOf(charm: Charm): number {
 
 export function hasCharm(player: PlayerState, id: CharmId): boolean {
   return player.charms.some((charm) => charm.id === id);
+}
+
+/** True when a held Charm carries the rule change `key`, however many copies and whichever Charm it is. */
+export function hasCharmEffect(player: PlayerState, key: CharmEffectKey): boolean {
+  return player.charms.some((charm) => charmDefinition(charm.id)?.effects?.[key] !== undefined);
+}
+
+/** The total of an amount effect across the held Charms: each Charm's amount times its copies. */
+export function sumCharmEffect(player: PlayerState, key: CharmEffectAmountKey): number {
+  return sumBy(
+    player.charms,
+    (charm) => (charmDefinition(charm.id)?.effects?.[key] ?? 0) * copiesOf(charm),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -305,24 +345,21 @@ export function charmPowerLines(player: PlayerState, ctx?: PowerContext): Breakd
 
 /** True when Loaded Dice is held and this week's charge is unspent. */
 export function loadedDiceReady(player: PlayerState): boolean {
-  return hasCharm(player, 'loaded-dice') && !player.week.loadedDiceUsed;
+  return hasCharmEffect(player, 'loadedDice') && !player.week.loadedDiceUsed;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Points rules held by Charms
 // ---------------------------------------------------------------------------------------------
 
-/** Points of the party bonus: 30, plus 30 per copy of Second Pair of Eyes held. */
+/** Points of the party bonus: 30, plus the party points of each Charm held per copy (30 for Second Pair of Eyes). */
 export function partyBonusPoints(player: PlayerState): number {
-  const copies = player.charms
-    .filter((charm) => charm.id === 'second-pair-of-eyes')
-    .reduce((sum, charm) => sum + copiesOf(charm), 0);
-  return POINTS.party + CHARM_RULES.secondPairExtraPartyPoints * copies;
+  return POINTS.party + sumCharmEffect(player, 'partyPoints');
 }
 
 /** Multiplier on Riposte points: 4 with Jester's Rebase, otherwise 1. */
 export function riposteMultiplier(player: PlayerState): number {
-  return hasCharm(player, 'jesters-rebase') ? CHARM_RULES.jestersRiposteMultiplier : 1;
+  return hasCharmEffect(player, 'riposte') ? CHARM_RULES.jestersRiposteMultiplier : 1;
 }
 
 // ---------------------------------------------------------------------------------------------

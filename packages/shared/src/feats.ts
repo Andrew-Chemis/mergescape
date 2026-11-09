@@ -1,10 +1,10 @@
 import { FEAT_RULES, PET_IDS } from './constants';
 import type { RegionId } from './constants';
-import { DAY_MS, utcDay } from './calendar';
+import { DAY_MS, MINUTE_MS, utcDay } from './calendar';
 import { levelFor } from './d2table';
 import { eventLines, hoursBetween, mergeFacts } from './facts';
 import { uniqueDefinition, uniquePiece } from './gear';
-import { tidy } from './math';
+import { clamp, clamp01, tidy } from './math';
 import { grantPet, ownedPets } from './pets';
 import { lifetimeMerges } from './pledges';
 import { isoWeekKey } from './run';
@@ -89,7 +89,7 @@ export interface FeatDefinition {
 const R = FEAT_RULES;
 
 function ratio(value: number, target: number): number {
-  return Math.min(1, Math.max(0, value / target));
+  return clamp01(value / target);
 }
 
 function reward(parts: Partial<FeatReward>): FeatReward {
@@ -563,7 +563,7 @@ export function featBonusFor(unlocked: readonly string[]): number {
  * "Feat bonus" line.
  */
 export function featPowerBonus(player: Pick<PlayerState, 'feats'>): number {
-  return tidy(Math.min(FEAT_RULES.bonusCap, Math.max(0, player.feats.powerBonus)));
+  return tidy(clamp(player.feats.powerBonus, 0, FEAT_RULES.bonusCap));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -648,7 +648,7 @@ function localTime(
   now: number,
   offsetMinutes: number | undefined,
 ): { hour: number; weekday: number } {
-  const local = new Date(now + (offsetMinutes ?? 0) * 60_000);
+  const local = new Date(now + (offsetMinutes ?? 0) * MINUTE_MS);
   return { hour: local.getUTCHours(), weekday: local.getUTCDay() };
 }
 
@@ -715,7 +715,7 @@ function recordMerge(
 ): void {
   const facts = mergeFacts(event, pr);
   const mergedAt = Date.parse(event.pr.mergedAt ?? '');
-  const minute = Math.floor((Number.isNaN(mergedAt) ? now : mergedAt) / 60_000);
+  const minute = Math.floor((Number.isNaN(mergedAt) ? now : mergedAt) / MINUTE_MS);
   if (counters.lastMergeMinute === minute) {
     counters.simultaneousMerges += 1;
   }

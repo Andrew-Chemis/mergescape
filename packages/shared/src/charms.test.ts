@@ -9,12 +9,14 @@ import {
   copiesOf,
   freeCharmSlots,
   hasCharm,
+  hasCharmEffect,
   loadedDiceFires,
   loadedDiceReady,
   makeCharm,
   partyBonusPoints,
   riposteMultiplier,
   sellCharm,
+  sumCharmEffect,
 } from './charms';
 import type { CharmId } from './charms';
 import { CHARM_POWER_BY_RARITY, CHARM_PRICE_BY_RARITY, POWER_CAP } from './constants';
@@ -655,6 +657,53 @@ describe('Oracle: data only', () => {
     expect(result.power).toBe(plain.power);
     expect(result.points).toBe(plain.points);
     expect(hasCharm(oracle, 'oracle')).toBe(true);
+  });
+});
+
+describe('Charm effects as data', () => {
+  it('only the four rule-changing Charms carry effects, and each carries its own', () => {
+    const withEffects = CHARMS.filter((definition) => definition.effects !== undefined);
+    expect(withEffects.map((definition) => definition.id)).toEqual([
+      'second-pair-of-eyes',
+      'jesters-rebase',
+      'loaded-dice',
+      'oracle',
+    ]);
+    expect(charmDefinition('second-pair-of-eyes')?.effects).toEqual({ partyPoints: 30 });
+    expect(charmDefinition('jesters-rebase')?.effects).toEqual({ riposte: true });
+    expect(charmDefinition('loaded-dice')?.effects).toEqual({ loadedDice: true });
+    expect(charmDefinition('oracle')?.effects).toEqual({ seesNextMogul: true });
+  });
+
+  it('hasCharmEffect is true only while a held Charm carries the effect', () => {
+    const nothing = settledPlayer(AUTHOR_ID);
+    const lantern = playerWith(AUTHOR_ID, held('lantern'));
+    const rebase = playerWith(AUTHOR_ID, held('jesters-rebase'), held('lantern'));
+    const stacked = playerWith(AUTHOR_ID, held('jesters-rebase', 2));
+    for (const key of ['riposte', 'partyPoints', 'seesNextMogul', 'loadedDice'] as const) {
+      expect(hasCharmEffect(nothing, key), key).toBe(false);
+      expect(hasCharmEffect(lantern, key), key).toBe(false);
+    }
+    expect(hasCharmEffect(rebase, 'riposte')).toBe(true);
+    expect(hasCharmEffect(rebase, 'loadedDice')).toBe(false);
+    expect(hasCharmEffect(stacked, 'riposte')).toBe(true);
+    expect(hasCharmEffect(playerWith(AUTHOR_ID, held('oracle')), 'seesNextMogul')).toBe(true);
+    expect(hasCharmEffect(playerWith(AUTHOR_ID, held('loaded-dice')), 'loadedDice')).toBe(true);
+  });
+
+  it('sumCharmEffect adds an amount per copy, and skips Charms the catalogue does not know', () => {
+    expect(sumCharmEffect(settledPlayer(AUTHOR_ID), 'partyPoints')).toBe(0);
+    expect(sumCharmEffect(playerWith(AUTHOR_ID, held('lantern')), 'partyPoints')).toBe(0);
+    expect(sumCharmEffect(playerWith(AUTHOR_ID, held('second-pair-of-eyes')), 'partyPoints')).toBe(
+      30,
+    );
+    expect(
+      sumCharmEffect(
+        playerWith(AUTHOR_ID, held('second-pair-of-eyes', 2), held('lantern'), charm(1)),
+        'partyPoints',
+      ),
+    ).toBe(60);
+    expect(hasCharmEffect(playerWith(AUTHOR_ID, charm(1, 'Oracle')), 'seesNextMogul')).toBe(false);
   });
 });
 

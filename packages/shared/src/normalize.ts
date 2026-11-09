@@ -1,3 +1,4 @@
+import { isRecord } from './math';
 import type {
   EventActor,
   GameEvent,
@@ -54,9 +55,7 @@ export const GAME_EVENT_KEYS: ReadonlySet<string> = new Set([
 type Json = Record<string, unknown>;
 
 function asObject(value: unknown): Json | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : null;
+  return isRecord(value) ? value : null;
 }
 
 /** A non-negative safe integer (GitHub ids, counts), else null. */

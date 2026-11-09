@@ -6,6 +6,7 @@ import {
   SHOP,
   ZONE_EXPONENT,
 } from './constants';
+import { hasCharmEffect } from './charms';
 import type { PlayerState, Result, Voucher, VoucherId } from './types';
 
 /**
@@ -129,5 +130,5 @@ export function shrineCost(player: PlayerState): number {
  * is data only; the backend asks this and reveals `moguls.bag[0]`.
  */
 export function canSeeNextMogul(player: PlayerState): boolean {
-  return ownsVoucher(player, 'scouts-eye') || player.charms.some((charm) => charm.id === 'oracle');
+  return ownsVoucher(player, 'scouts-eye') || hasCharmEffect(player, 'seesNextMogul');
 }

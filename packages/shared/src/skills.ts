@@ -1,4 +1,5 @@
 import { levelFor } from './d2table';
+import { sumBy } from './math';
 import type { Skill, SkillXp } from './types';
 
 /** The four skills in display order (Requirement 5.2). */
@@ -10,7 +11,7 @@ export function emptySkillXp(): SkillXp {
 
 /** OSRS-style total level: the sum of the four skill levels (each on the same D2 table). */
 export function totalLevel(skillXp: SkillXp): number {
-  return SKILLS.reduce((sum, skill) => sum + levelFor(skillXp[skill]), 0);
+  return sumBy(SKILLS, (skill) => levelFor(skillXp[skill]));
 }
 
 /** Display names for the skills. */

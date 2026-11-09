@@ -21,6 +21,7 @@ import {
   uniqueDefinition,
   uniquePiece,
   WORN_SLOTS,
+  wornPower,
 } from './gear';
 import { petDefinition, petPiece } from './pets';
 import { computePower, powerBreakdown } from './power';
@@ -365,6 +366,24 @@ describe('equipGear', () => {
     const equipped = equipGear(player, 'weapon-iron');
     expect(before).toBe(1);
     expect(equipped.ok && computePower(equipped.player)).toBe(1.1);
+  });
+});
+
+describe('wornPower', () => {
+  it('is the pieces plus the set bonus, free of float noise, and 0 for nothing worn', () => {
+    expect(wornPower([], 0)).toBe(0);
+    expect(wornPower([piece('weapon', 'leather'), piece('body', 'iron')], 0)).toBe(0.15);
+    const leather = WORN_SLOTS.map((slot) => piece(slot, 'leather'));
+    expect(wornPower(leather, 0.25)).toBe(0.45);
+    expect(wornPower([piece('weapon', 'leather')], 0.1)).toBe(0.15);
+  });
+
+  it('is the Gear line of gearPowerLines', () => {
+    const worn = [piece('weapon', 'iron'), piece('body', 'iron')];
+    const player: PlayerState = { ...createPlayerState(1), gear: loadoutOf(worn) };
+    expect(gearPowerLines(player)).toEqual([
+      { label: 'Gear', value: wornPower(worn, player.gear.setBonus), kind: 'power' },
+    ]);
   });
 });
 

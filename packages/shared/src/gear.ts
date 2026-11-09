@@ -1,7 +1,7 @@
 import { AFFIX_RULES, GEAR_SET_BONUS, GEAR_TIER_RULES, GEAR_TIERS } from './constants';
 import type { Affix, GearTier } from './constants';
 import { levelFor } from './d2table';
-import { tidy } from './math';
+import { sumBy, tidy } from './math';
 import type {
   BreakdownLine,
   GearLoadout,
@@ -409,15 +409,18 @@ export function unequipGear(
 // Power (Requirement 4.5)
 // ---------------------------------------------------------------------------------------------
 
+/** The unconditional Power of what is worn: the power of every piece plus the set bonus, free of float noise. */
+export function wornPower(pieces: readonly GearPiece[], setBonus: number): number {
+  return tidy(sumBy(pieces, (piece) => piece.power) + setBonus);
+}
+
 /**
  * The gear terms of Power as Combat Log lines. "Gear" is the unconditional line: every equipped piece plus
  * the set bonus. With an event context, Keen pieces add +0.1 each on a review and Stout pieces +0.1 each on
  * a merge, as lines of their own. Terms that are zero are omitted.
  */
 export function gearPowerLines(player: PlayerState, ctx?: PowerContext): BreakdownLine[] {
-  const base = tidy(
-    player.gear.pieces.reduce((sum, piece) => sum + piece.power, 0) + player.gear.setBonus,
-  );
+  const base = wornPower(player.gear.pieces, player.gear.setBonus);
   const lines: BreakdownLine[] = [];
   if (base !== 0) {
     lines.push({ label: 'Gear', value: base, kind: 'power' });
@@ -444,5 +447,5 @@ export function gearPowerLines(player: PlayerState, ctx?: PowerContext): Breakdo
 
 /** The Power gear contributes to an event (0 with nothing equipped): the sum of `gearPowerLines`. */
 export function gearPower(player: PlayerState, ctx?: PowerContext): number {
-  return tidy(gearPowerLines(player, ctx).reduce((sum, line) => sum + line.value, 0));
+  return tidy(sumBy(gearPowerLines(player, ctx), (line) => line.value));
 }

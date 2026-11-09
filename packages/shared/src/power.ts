@@ -2,7 +2,7 @@ import { BASE_POWER, CHARM_RULES, POWER_CAP } from './constants';
 import { charmPowerLines, loadedDiceFires } from './charms';
 import { featPowerBonus } from './feats';
 import { gearPowerLines } from './gear';
-import { tidy } from './math';
+import { sumBy, tidy } from './math';
 import { mogulPowerLines } from './moguls';
 import { pledgePower } from './pledges';
 import type { BreakdownLine, GameEvent, PlayerState, PowerContext, PRState } from './types';
@@ -18,7 +18,7 @@ export function powerContext(event: GameEvent, pr: PRState, now: number): PowerC
 
 /** The sum of a breakdown's Power lines, free of float noise. */
 export function powerOf(lines: readonly BreakdownLine[]): number {
-  return tidy(lines.reduce((sum, line) => sum + line.value, 0));
+  return tidy(sumBy(lines, (line) => line.value));
 }
 
 /**
