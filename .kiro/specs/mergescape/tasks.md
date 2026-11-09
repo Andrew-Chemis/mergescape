@@ -135,13 +135,13 @@ Conventions for the implementer:
   - _Requirements: 10.1, 10.3, 7.3, 7.5, 13.3_
   - Verify: fixture render tests; manual pass on a phone width shows no horizontal scroll.
 
-- [ ] 18. **[v1]** Backend: badge, export, delete
+- [x] 18. **[v1]** Backend: badge, export, delete
   - `GET /badge/{login}.svg` (level, vocation, Renown; unranked fallback; 6 h cache headers); `GET /export`; `POST /delete` (all `USER#` items and solely-owned `PR#` items).
   - `installation.deleted` cleanup already in task 7; confirm.
   - _Requirements: 11.1, 11.2, 11.3, 13.1, 13.2_
   - Verify: badge SVG validates and renders in a README; after delete, `/me` creates a fresh profile on next login; CloudFront returns `X-Cache: Hit` on the second badge request.
 
-- [ ] 19. **[v1]** Hardening and release
+- [x] 19. **[v1]** Hardening and release
   - Schema-guard coverage of every write path; dependency audit; `checkov` on the template; CSP verified in the deployed client; budget alarms confirmed by a test notification.
   - README: permissions list, scorer link, Privacy/Terms links, one-page self-hosting guide.
   - Public App listing with the permission set visible.
