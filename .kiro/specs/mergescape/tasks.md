@@ -164,7 +164,7 @@ Conventions for the implementer:
   - _Requirements: 4.5, 16.1, 16.2, 16.3, 16.5, 16.6, 17.1, 17.2, 17.3, 17.6_
   - Verify: Power cap test at 9; one test per Feat condition including the other-human-approval gate on Scale Feats; a Feat never fires on backfill-flagged events.
 
-- [ ] 22. **[v1.5]** Backend: expedition, Forge and Feat endpoints
+- [x] 22. **[v1.5]** Backend: expedition, Forge and Feat endpoints
   - Routes: `POST /expedition/send`, `POST /expedition/collect`, `GET /expedition`, `POST /forge/start`, `POST /forge/collect`, `POST /forge/upgrade`, `POST /gear/equip`, `GET /feats`, `POST /feats/pin`. All conditional writes; collect is idempotent.
   - Ingest: after scoring, bank supplies, evaluate Feats, write `FEAT#` on unlock, update rolling counters.
   - Onboarding: first scored event auto-sends the Koko Woods 4 h expedition once.
@@ -172,20 +172,20 @@ Conventions for the implementer:
   - _Requirements: 15.4, 15.5, 15.6, 15.8, 16.4, 17.4, 17.7_
   - Verify: integration test sends, advances an injected clock, collects twice and asserts one loot roll; Feat unlock written exactly once under concurrent events.
 
-- [ ] 23. **[v1.5]** Client: Expedition, Forge, Feats screens and Town integration
+- [x] 23. **[v1.5]** Client: Expedition, Forge, Feats screens and Town integration
   - Expedition screen (region map with Renown gates, duration picker, timer, loot reveal animation), Forge screen (three stations, recipes, inventory, equip, affix), Feats screen (progress bars, hidden entries, pin), satchel on Town, character sprite reflecting equipped tier and cape colour, Feat unlock banner.
   - Sprites for 30 gear pieces and 6 pets (16×16, palette-indexed).
   - _Requirements: 10.1, 10.3, 16.4, 17.5_
   - Verify: fixture render tests; manual pass of the onboarding sequence in game-design.md §10 on a fresh character.
 
-- [ ] 24. **[v1.5]** Feel and content pass
+- [x] 24. **[v1.5]** Feel and content pass
   - Implement the five polished moments in game-design.md §9 with reduced-motion fallbacks and opt-in sound (nine samples, generated or CC0, attributed in `docs/credits.md`).
   - Content check against the v1 column of game-design.md §11; copy pass for in-world terms; verify no real names anywhere.
   - Tune onboarding so a normal first week reaches the Boss act (game-design.md §10) using fixture weeks.
   - _Requirements: 10.5, 7.5_
   - Verify: owner walkthrough of day 0 to week 2 on fixture data; axe clean; reduced-motion run shows no animation.
 
-- [ ] 25. **[v1.5]** Infra: convert to CDK for the landing zone
+- [x] 25. **[v1.5]** Infra: convert to CDK for the landing zone
   - Rewrite `packages/infra` as a CDK v2 app (TypeScript) producing the same resources as the SAM template (table, two NodejsFunctions with Function URLs, CloudFront badge distribution, SSM-read IAM, EventBridge rollover, log retention, budgets), targeting the landing zone's bootstrap (`cdk-hnb659fds-*` roles) in `us-east-1`, the one region the landing zone declares for the account.
   - Replace `scripts/validate.mjs` with `aws-cdk-lib/assertions` tests asserting the same IAM and resource set; keep cfn-lint/checkov on the synthesized template in CI.
   - `deploy.yml`: assume `lz-mergescape-deploy` in the Infrastructure account via OIDC, then `cdk deploy --require-approval never`; Pages job unchanged.
