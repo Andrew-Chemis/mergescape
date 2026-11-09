@@ -118,7 +118,10 @@ describe('the deploy wiring', () => {
 
   it("builds the client with the stack's ApiUrl as VITE_API_ORIGIN, so connect-src is the real api", () => {
     expect(deploy).toContain('VITE_API_ORIGIN: ${{ needs.stack.outputs.api_origin }}');
-    expect(deploy).toContain("Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue");
+    // `cdk deploy --outputs-file` writes the outputs: the OIDC role can only assume the CDK bootstrap roles,
+    // so the workflow cannot call CloudFormation itself.
+    expect(deploy).toContain('--outputs-file "$RUNNER_TEMP/outputs.json"');
+    expect(deploy).toContain("jq -r '[.[].ApiUrl][0] // empty'");
     // The workflow strips the trailing slash; a CSP source with a path would not match a request.
     expect(deploy).toContain('api_origin=${api_url%/}');
   });

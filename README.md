@@ -40,16 +40,17 @@ Every XP grant follows a published formula. The scorer is a pure function in [`p
 
 ## Self-hosting
 
-You need an AWS account, a GitHub account, the AWS CLI and `openssl`. Everything below runs inside the AWS and GitHub free allowances; [`packages/infra/README.md`](packages/infra/README.md) has the longer notes behind each step.
+You need an AWS account, a GitHub account, the AWS CLI and `openssl`. Everything below runs inside the AWS and GitHub free allowances; [`packages/infra/README.md`](packages/infra/README.md) has the longer notes behind each step. The infrastructure is an AWS CDK app. The owner's deployment goes through an AWS landing zone that has already bootstrapped the account and provides the deploy role; in your own account you do both yourself (step 3).
 
 1. **Fork this repository.** The workflows run in your fork.
 2. **Register the GitHub App** (Settings, Developer settings, GitHub Apps, New GitHub App) with the values from [`docs/github-app-manifest.json`](docs/github-app-manifest.json):
-   - Homepage URL: your fork's URL. Webhook: Active, secret from `openssl rand -hex 32` (keep it for step 3). Until step 7 gives you the real URLs, put any `https://` placeholder in the webhook URL and callback URL.
+   - Homepage URL: your fork's URL. Webhook: Active, secret from `openssl rand -hex 32` (keep it for step 4). Until step 7 gives you the real URLs, put any `https://` placeholder in the webhook URL and callback URL.
    - Repository permissions: **Pull requests: Read-only** and **Metadata: Read-only**; no other permission.
    - Subscribe to events: **Pull request**, **Pull request review**, **Pull request review comment**.
    - Identifying users: leave "Request user authorization (OAuth) during installation" off, callback URL set in step 7.
    - After creating it, note the **Client ID**, generate a **client secret** and generate a **private key** (a `.pem` file).
-3. **Create the five SSM parameters** (once per account and region; the prefix must equal the stack's `SsmPrefix`, default `/mergescape`). Use the default key (omit `--key-id`):
+3. **Prepare the AWS account for CDK deploys.** The stack deploys through the CDK bootstrap roles (`cdk-hnb659fds-*`) of one account in one region (default `us-east-1`), and GitHub Actions reaches them through OIDC with no stored keys. With the landing zone both exist and you only need the account id; for either, check that the account's Lambda concurrent-executions quota is at least 115 (a new account can still be at 10; the stack reserves 15 and Lambda keeps 100 unreserved). Without it: run `pnpm install`, then `pnpm --filter @mergescape/infra exec cdk bootstrap aws://<ACCOUNT_ID>/us-east-1`, create the OIDC identity provider and a deploy role pinned to your `main` branch whose only permission is `sts:AssumeRole` on `arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-*` (trust policy in [`packages/infra/README.md`](packages/infra/README.md)).
+4. **Create the five SSM parameters** (once per account and region; the prefix must equal the stack's `ssmPrefix`, default `/mergescape`; on the owner's landing zone, put them by hand with the Admin entitlement for the account). Use the default key (omit `--key-id`):
    ```sh
    export AWS_REGION=us-east-1 MSYS_NO_PATHCONV=1
    P=/mergescape
@@ -59,10 +60,9 @@ You need an AWS account, a GitHub account, the AWS CLI and `openssl`. Everything
    aws ssm put-parameter --type SecureString --name $P/github-oauth-client-secret --value '<client secret>'
    aws ssm put-parameter --type SecureString --name $P/jwt-key --value "$(openssl rand -base64 48)"
    ```
-4. **Let GitHub Actions deploy without stored keys:** create the OIDC identity provider and a deploy role pinned to your `main` branch (trust policy in [`packages/infra/README.md`](packages/infra/README.md)).
-5. **Set repository variables** (Settings, Secrets and variables, Actions, Variables): `AWS_DEPLOY_ROLE_ARN` (the role), `PAGES_ORIGIN` (`https://<owner>.github.io`) and `ALERT_EMAIL` (receives the budget alarms). Optional: `APP_SLUG` (your App's slug, for the install link; default `mergescape`), `CLIENT_BASE_PATH`, `AWS_REGION`, `STACK_NAME`, `SSM_PREFIX`, `STAGE`.
-6. **Enable Pages:** Settings, Pages, Source: **GitHub Actions**. Then push to `main`: `deploy.yml` validates the template, builds and deploys the stack, builds the client against its API URL and publishes it.
-7. **Connect the App.** Read the stack outputs (`aws cloudformation describe-stacks --stack-name mergescape --query "Stacks[0].Outputs"`). In the App's settings set the webhook URL to `IngestUrl` and the callback URL to `ApiUrl` plus `auth/callback`. "Recent deliveries" should show a ping answered with 200.
+5. **Set repository variables** (Settings, Secrets and variables, Actions, Variables): `AWS_ACCOUNT_ID` (the account of step 3; the deploy job is skipped while it is empty), `PAGES_ORIGIN` (`https://<owner>.github.io`) and `ALERT_EMAIL` (receives the budget alarms). Optional: `AWS_DEPLOY_ROLE_ARN` (your deploy role from step 3; the default is the owner's landing-zone role `lz-mergescape-deploy`, which only the owner's repository can assume), `APP_SLUG` (your App's slug, for the install link; default `mergescape`), `CLIENT_BASE_PATH`, `AWS_REGION`, `SSM_PREFIX`, `STAGE`.
+6. **Enable Pages:** Settings, Pages, Source: **GitHub Actions**. Then push to `main`: `deploy.yml` runs `cdk deploy` (bundling the two functions and creating the stack), builds the client against its API URL and publishes it.
+7. **Connect the App.** The deploy job's summary lists the stack outputs; you can also read them with `aws cloudformation describe-stacks --stack-name mergescape --region us-east-1 --query "Stacks[0].Outputs"`. In the App's settings set the webhook URL to `IngestUrl` and the callback URL to `ApiUrl` plus `auth/callback`. "Recent deliveries" should show a ping answered with 200.
 8. **Play.** Open your Pages site, sign in with GitHub, install the App on the repositories you want counted, and open a pull request.
 
 ### Budget alarms
@@ -82,10 +82,10 @@ pnpm build                       # build every package
 pnpm format                      # prettier --write
 
 pnpm --filter @mergescape/client dev       # client dev server
-pnpm --filter @mergescape/infra validate   # template checks, plus sam validate --lint if SAM is installed
+pnpm --filter @mergescape/infra validate   # cdk synth, then cfn-lint and checkov if installed
 ```
 
-`pnpm test` fails below these line-coverage floors: `shared` 95 % (and 100 % branches on `score.ts`), `backend` 90 %, `client` 90 %. CI also runs `cfn-lint` and `checkov` on the template and `pnpm audit --prod`.
+`pnpm test` fails below these line-coverage floors: `shared` 95 % (and 100 % branches on `score.ts`), `backend` 90 %, `client` 90 %. CI also synthesizes the CDK stack and runs `cfn-lint` and `checkov` on the template it writes, and `pnpm audit --prod`.
 
 ## Layout
 
@@ -94,7 +94,7 @@ pnpm --filter @mergescape/infra validate   # template checks, plus sam validate 
 | `packages/shared`  | Game tables, constants, types and the pure scorer |
 | `packages/backend` | Lambda handlers: webhook ingest and the API       |
 | `packages/client`  | Svelte 5 + Vite static client                     |
-| `packages/infra`   | AWS SAM template                                  |
+| `packages/infra`   | AWS CDK app (TypeScript)                          |
 
 ## License
 

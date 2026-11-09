@@ -43,11 +43,12 @@ jobs:
           retention-days: 14
       - run: pnpm build
 
-  # The SAM template: our structural checks, cfn-lint, and checkov with the documented skip list.
+  # The CDK stack: synthesize it (no AWS credentials, no lookups), lint the template it writes with cfn-lint
+  # and with checkov (documented skip list in packages/infra/.checkov.yaml), and run the assertions on it.
   template:
     if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -56,13 +57,20 @@ jobs:
       - name: Enable pnpm via corepack
         run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @mergescape/infra validate
+      - name: Synthesize the stack
+        run: pnpm --filter @mergescape/infra exec cdk synth --quiet --no-lookups
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install cfn-lint==1.60.0 checkov==3.4.3
-      - run: cfn-lint packages/infra/template.yaml
-      - run: checkov --config-file packages/infra/.checkov.yaml -f packages/infra/template.yaml
+      - name: cfn-lint
+        working-directory: packages/infra
+        run: cfn-lint
+      - name: checkov
+        working-directory: packages/infra
+        run: checkov --config-file .checkov.yaml -f dist/cdk.out/Mergescape.template.json
+      - name: Assertions on the stack and its bundles
+        run: pnpm --filter @mergescape/infra test
 
   # Production dependencies are what ends up in the Lambda bundles.
   audit:

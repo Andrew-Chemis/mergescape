@@ -11,6 +11,22 @@ import coverageConfig from '../../../vitest.config';
 const root = (path: string): string => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
 const read = (path: string): string => readFileSync(root(path), 'utf8');
 
+/**
+ * The synthesized CloudFormation of the CDK stack: the committed snapshot, which `stack.test.ts` proves equal to
+ * what `cdk synth` writes for the test context.
+ */
+interface StackTemplate {
+  Resources: Record<string, { Type: string; Properties: Record<string, unknown> }>;
+  Outputs: Record<string, { Description: string }>;
+}
+const stack = JSON.parse(
+  read('packages/infra/test/__snapshots__/mergescape.template.json'),
+) as StackTemplate;
+const resourcesOf = (type: string) =>
+  Object.values(stack.Resources)
+    .filter((resource) => resource.Type === type)
+    .map((resource) => resource.Properties);
+
 const requirements = read('.kiro/specs/mergescape/requirements.md');
 const readme = read('README.md');
 const deploy = read('.github/workflows/deploy.yml');
@@ -67,11 +83,10 @@ describe('docs/github-app-manifest.json (Requirement 1.1)', () => {
     expect(manifest.callback_urls[0]).toMatch(
       /^https:\/\/\S+\.lambda-url\.\S+\.on\.aws\/auth\/callback$/,
     );
-    // The api's route and the template outputs those URLs come from.
+    // The api's route and the stack outputs those URLs come from.
     expect(read('packages/backend/src/handlers/api.ts')).toContain("path === '/auth/callback'");
-    const template = read('packages/infra/template.yaml');
-    expect(template).toMatch(/^ {2}IngestUrl:\n {4}Description:.*webhook URL/m);
-    expect(template).toMatch(/^ {2}ApiUrl:\n/m);
+    expect(stack.Outputs['IngestUrl']?.Description).toContain('webhook URL');
+    expect(stack.Outputs['ApiUrl']).toBeDefined();
   });
 
   it('is a public App that does not ask for OAuth on install, with only fields GitHub knows', () => {
@@ -152,7 +167,7 @@ describe('README.md (Requirement 18.4 and the self-hosting guide)', () => {
   });
 
   it('names only repository variables the deploy workflow reads', () => {
-    const section = /5\. \*\*Set repository variables\*\*(.*)/.exec(readme)?.[1] ?? '';
+    const section = /\*\*Set repository variables\*\*(.*)/.exec(readme)?.[1] ?? '';
     const variables = [...section.matchAll(/`([A-Z][A-Z_]+)`/g)].map((match) => match[1] ?? '');
     expect(variables.length).toBeGreaterThanOrEqual(7);
     for (const variable of variables) {
@@ -160,14 +175,17 @@ describe('README.md (Requirement 18.4 and the self-hosting guide)', () => {
     }
   });
 
-  it('describes the budget alarms the template creates', () => {
-    const template = read('packages/infra/template.yaml');
+  it('describes the budget alarms and the concurrency limits the stack creates', () => {
     expect(readme).toContain('**1 USD** and **10 USD**');
-    expect(template).toMatch(/Amount: 1\n/);
-    expect(template).toMatch(/Amount: 10\n/);
+    const amounts = resourcesOf('AWS::Budgets::Budget').map(
+      (budget) => (budget['Budget'] as { BudgetLimit: { Amount: number } }).BudgetLimit.Amount,
+    );
+    expect(amounts.sort((a, b) => a - b)).toEqual([1, 10]);
     expect(readme).toContain('reserved concurrency (10 for `ingest`, 5 for `api`)');
-    expect(template).toContain('ReservedConcurrentExecutions: 10');
-    expect(template).toContain('ReservedConcurrentExecutions: 5');
+    const concurrency = resourcesOf('AWS::Lambda::Function').map(
+      (fn) => fn['ReservedConcurrentExecutions'],
+    );
+    expect(concurrency.sort()).toEqual([10, 5].sort());
   });
 
   it('documents the thresholds CI enforces', () => {
@@ -212,8 +230,12 @@ describe('coverage thresholds (Requirement 4.10 and 18.2)', () => {
   });
 
   it('are joined in CI by the template checks and the dependency audit', () => {
-    expect(ci).toContain('cfn-lint packages/infra/template.yaml');
-    expect(ci).toContain('checkov --config-file packages/infra/.checkov.yaml');
+    expect(ci).toContain('@mergescape/infra exec cdk synth');
+    expect(ci).toMatch(/run: cfn-lint$/m);
+    expect(ci).toContain(
+      'checkov --config-file .checkov.yaml -f dist/cdk.out/Mergescape.template.json',
+    );
+    expect(ci).toContain('pnpm --filter @mergescape/infra test');
     expect(ci).toContain('pnpm audit --prod');
   });
 });
@@ -221,12 +243,16 @@ describe('coverage thresholds (Requirement 4.10 and 18.2)', () => {
 describe('docs/decisions.md', () => {
   const decisions = read('docs/decisions.md');
 
-  it('records that SAM was kept over CDK, and why', () => {
+  it('records that CDK replaced SAM (task 25), and why', () => {
     const section =
-      /## Infrastructure: AWS SAM, kept over CDK([\s\S]*?)\n## /.exec(decisions)?.[1] ?? '';
-    expect(section).toContain('SAM stays');
-    expect(section).toContain('CDK');
-    for (const reason of ['Two functions and one table', 'locally', 'No bootstrap stack']) {
+      /## Infrastructure: AWS CDK, replacing SAM([\s\S]*?)\n## /.exec(decisions)?.[1] ?? '';
+    expect(section).toContain('Task 25 reverses that');
+    for (const reason of [
+      'landing zone grants deploys only through CDK bootstrap roles',
+      'other projects are CDK',
+      'Two functions and one table',
+      'No bootstrap stack',
+    ]) {
       expect(section, `missing the reason "${reason}"`).toContain(reason);
     }
   });
