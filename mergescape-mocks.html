@@ -1,0 +1,749 @@
+<meta charset="utf-8">
+<title>Mergescape Mocks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a dungeon-dark page; each screen mock sits in a brown OSRS-style frame on a stone background. Single committed theme. */
+:root{
+  --bg:#0e0b0a; --bg2:#17120f; --stone:#2a2420; --stone2:#36302a;
+  --wood:#5a3b1e; --wood2:#7a5330; --parch:#e9d8b0; --parch2:#d7c197;
+  --fg:#efe6d3; --fg-dim:#b7a98d; --ink:#2b1d10;
+  --gold:#f2c14e; --xp:#49c178; --chips:#5ec8ff; --mult:#ff5c5c; --purple:#a371f7; --red:#e5484d;
+  --display:'Pixelify Sans',"Trebuchet MS",sans-serif; --body:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);
+  background-image:radial-gradient(ellipse at 50% 0%,#1d1612 0,var(--bg) 60%)}
+.wrap{max-width:1180px;margin:0 auto;padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+h1{font-size:clamp(34px,6vw,56px);line-height:1;color:var(--gold);text-shadow:3px 3px 0 #000}
+h2{font-size:26px;color:var(--parch);margin-top:56px;margin-bottom:6px}
+h3{font-size:17px;color:var(--gold)}
+p{max-width:68ch}
+.sub{color:var(--fg-dim);margin:0 0 14px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--fg-dim)}
+.hero{display:flex;gap:28px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.hero .spr{filter:drop-shadow(4px 4px 0 #000)}
+.pill{display:inline-block;font:600 11px/1 var(--mono);padding:5px 8px;border-radius:3px;background:var(--stone2);color:var(--fg)}
+.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+
+/* sprites */
+.spr{display:inline-block;line-height:0;image-rendering:pixelated}
+.spr svg{display:block;shape-rendering:crispEdges}
+
+/* OSRS frame */
+.frame{background:var(--stone);border:4px solid var(--wood);outline:2px solid #000;box-shadow:inset 0 0 0 2px var(--wood2),0 12px 30px rgba(0,0,0,.6);border-radius:4px;overflow:hidden;min-width:0}
+.frame .bar{display:flex;align-items:center;gap:8px;background:linear-gradient(#8a6038,#5a3b1e);padding:7px 12px;border-bottom:2px solid #000;font-family:var(--display);font-size:15px;color:var(--parch)}
+.frame .bar .dots{margin-left:auto;display:flex;gap:4px}
+.frame .bar .dots i{width:9px;height:9px;background:#000;border-radius:0;display:block;opacity:.5}
+.screen{display:grid;grid-template-columns:52px 1fr;min-height:420px}
+.rail{background:#1a1411;border-right:2px solid #000;padding:10px 0;display:flex;flex-direction:column;gap:8px;align-items:center}
+.rail i{width:30px;height:30px;background:var(--stone2);border:2px solid #000;display:grid;place-items:center;font:700 12px var(--display);color:var(--fg-dim)}
+.rail i.on{background:var(--wood2);color:var(--gold)}
+.body{padding:14px;display:grid;gap:12px;min-width:0}
+.panel{background:#201a16;border:2px solid #000;box-shadow:inset 0 0 0 2px var(--wood);padding:10px 12px;min-width:0}
+.panel.parch{background:var(--parch);color:var(--ink);box-shadow:inset 0 0 0 2px var(--parch2)}
+.panel h4{margin:0 0 6px;font:600 13px var(--display);color:var(--gold);letter-spacing:.02em}
+.panel.parch h4{color:#6b3f12}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.grow{flex:1 1 160px;min-width:0}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.meter{height:14px;background:#0a0807;border:2px solid #000;position:relative}
+.meter b{position:absolute;inset:0;background:var(--xp);width:var(--w,40%)}
+.meter.gold b{background:var(--gold)}
+.meter span{position:absolute;inset:0;font:600 10px/10px var(--mono);color:#fff;text-align:center;text-shadow:1px 1px 0 #000}
+.acts{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.act{padding:6px 8px;border:2px solid #000;background:#141010;font-size:12px}
+.act.done{background:#1d3a28}
+.act.now{background:#3a2a10;border-color:var(--gold)}
+.act small{display:block;color:var(--fg-dim)}
+.scene{height:150px;position:relative;border:2px solid #000;overflow:hidden;
+  background:linear-gradient(#1c2437 0 55%,#2e4a2a 55% 62%,#3b2a1a 62%)}
+.scene .spr{position:absolute;bottom:14px}
+.scene .torch{position:absolute;top:18px;width:6px;height:6px;background:var(--gold);box-shadow:0 0 18px 8px rgba(242,193,78,.25)}
+.scene .say{position:absolute;left:10px;top:10px;font:600 12px var(--display);color:#fff;text-shadow:1px 1px 0 #000}
+.scene .hp{position:absolute;height:6px;background:#300;border:1px solid #000;width:60px}
+.scene .hp b{display:block;height:100%;background:var(--red);width:var(--w,70%)}
+
+/* balatro ticker */
+.score{font-family:var(--mono);font-size:13px;display:grid;gap:3px}
+.score .l{display:flex;justify-content:space-between;gap:12px}
+.score .l span:last-child{color:var(--fg-dim)}
+.score .chips{color:var(--chips)} .score .mult{color:var(--mult)} .score .zone{color:var(--purple)}
+.score .total{border-top:2px solid var(--wood);padding-top:4px;font-size:18px;font-weight:600;color:var(--xp)}
+.panel.parch .score .l span:last-child{color:#6a5a40}
+.panel.parch .score .total{border-color:var(--parch2)}
+
+/* log */
+.log{display:grid;gap:4px}
+.logrow{display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:center;padding:6px 8px;background:#141010;border:2px solid #000}
+.logrow .t{font-size:13px}
+.logrow .t small{display:block;color:var(--fg-dim);font-family:var(--mono);font-size:11px}
+.logrow .x{font-family:var(--mono);color:var(--xp);font-weight:600;text-align:right;white-space:nowrap}
+.logrow .x small{display:block;color:var(--fg-dim);font-weight:400;font-size:11px}
+.logrow.open{grid-template-columns:1fr;background:#1b1512;border-color:var(--gold)}
+
+/* skills OSRS */
+.skills{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.skill{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;background:#141010;border:2px solid #000;padding:6px 8px}
+.skill .n{font:600 13px var(--display);color:var(--parch)}
+.skill .lv{font:700 16px var(--display);color:var(--gold);grid-row:span 2}
+.skill .meter{grid-column:1}
+.slots{display:flex;gap:6px;flex-wrap:wrap}
+.slot{width:54px;height:54px;border:2px solid #000;background:#0f0c0b;display:grid;place-items:center;position:relative}
+.slot .spr{filter:drop-shadow(1px 1px 0 #000)}
+.slot em{position:absolute;bottom:-2px;right:0;font:600 9px var(--mono);background:#000;color:var(--gold);padding:1px 3px}
+.slot.empty{border-style:dashed;border-color:var(--wood)}
+
+/* map */
+.map{position:relative;height:230px;border:2px solid #000;background:#0f0c0b;overflow:hidden}
+.map .lane{position:absolute;left:0;right:0;top:50%;height:2px;background:var(--wood)}
+.node{position:absolute;transform:translate(-50%,-50%);width:38px;height:38px;border:2px solid #000;background:var(--stone2);display:grid;place-items:center;font:700 12px var(--display);color:var(--fg)}
+.node.done{background:#1d3a28;color:var(--xp)}
+.node.now{background:#3a2a10;border-color:var(--gold);color:var(--gold);box-shadow:0 0 0 3px rgba(242,193,78,.3)}
+.node.elite{background:#3a1515;border-color:var(--red)}
+.node.boss{width:56px;height:56px;background:#231033;border-color:var(--purple)}
+.node small{position:absolute;top:100%;margin-top:4px;white-space:nowrap;font:11px var(--body);color:var(--fg-dim)}
+.lbl{position:absolute;top:8px;font:600 11px var(--mono);letter-spacing:.1em;color:var(--fg-dim)}
+
+/* cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.card{border:3px solid #000;background:linear-gradient(#2a2420,#17120f);padding:10px;position:relative;box-shadow:4px 4px 0 #000;min-width:0}
+.card .rar{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.card h4{margin:4px 0 6px;font:700 15px var(--display);color:var(--parch)}
+.card p{font-size:12.5px;color:var(--fg-dim);margin:0;line-height:1.4}
+.card .m{position:absolute;top:8px;right:8px;font:700 13px var(--mono);color:var(--mult);background:#000;padding:2px 5px}
+.card.common{border-color:#6d6d6d}.card.uncommon{border-color:#3fa06a}.card.rare{border-color:#4b8ef0}.card.legend{border-color:var(--gold);background:linear-gradient(#3a2a10,#17120f)}
+.card.common .rar{color:#9a9a9a}.card.uncommon .rar{color:#5fcf8d}.card.rare .rar{color:#7fb0ff}.card.legend .rar{color:var(--gold)}
+.pledge{border-color:var(--chips);background:linear-gradient(#10202b,#0e1419)}
+.pledge .rar{color:var(--chips)}
+.pledge .cost{position:absolute;top:-10px;left:-10px;width:26px;height:26px;border-radius:50%;background:var(--chips);color:#000;font:700 13px var(--mono);display:grid;place-items:center;border:2px solid #000}
+.pick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pick .card{box-shadow:2px 2px 0 #000;padding:8px}
+.pick .card h4{font-size:13px}.pick .card p{font-size:11.5px}
+
+/* grids */
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:28px}
+.beasts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.beast{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;background:var(--stone);border:2px solid #000;padding:12px;box-shadow:inset 0 0 0 2px var(--wood)}
+.beast .spr{filter:drop-shadow(2px 2px 0 #000)}
+.beast h4{margin:0;font:700 15px var(--display);color:var(--parch)}
+.beast p{margin:3px 0 0;font-size:12.5px;color:var(--fg-dim)}
+.beast .k{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.beast .k.elite{color:var(--red)}.beast .k.boss{color:var(--purple)}.beast .k.mob{color:var(--xp)}
+.tiers{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}
+.tier{text-align:center;font:600 12px var(--display);color:var(--fg-dim)}
+.tier .spr{display:block;margin:0 auto 6px;filter:drop-shadow(3px 3px 0 #000)}
+.tier b{display:block;color:var(--gold);font-size:14px}
+.badge{display:inline-flex;align-items:stretch;font:600 12px var(--mono);border:1px solid #000;border-radius:3px;overflow:hidden}
+.badge span{padding:4px 8px;background:#2a2420;color:#fff}.badge span+span{background:var(--purple)}
+.bestiary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.bcell{aspect-ratio:1;background:#141010;border:2px solid #000;display:grid;place-items:center;position:relative}
+.bcell em{position:absolute;bottom:2px;right:4px;font:600 10px var(--mono);color:var(--fg-dim)}
+.bcell.locked .spr{filter:brightness(0) opacity(.35)}
+.note{font-size:13px;color:var(--fg-dim);border-left:3px solid var(--wood2);padding-left:10px;margin-top:10px}
+.foot{margin-top:60px;color:var(--fg-dim);font-size:13px}
+@media (max-width:640px){.screen{grid-template-columns:1fr}.rail{flex-direction:row;border-right:0;border-bottom:2px solid #000;padding:8px}.pick{grid-template-columns:1fr}.skills{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:no-preference){.now{animation:pulse 1.6s ease-in-out infinite}@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(242,193,78,.15)}}}
+</style>
+
+<div class="wrap">
+  <div class="hero">
+    <i class="spr" data-s="hero" data-pal="rune" data-z="7"></i>
+    <div>
+      <div class="eyebrow">UI / UX mocks · v0.1 · companion to SPEC.md</div>
+      <h1>Mergescape</h1>
+      <p class="sub">An idle RPG where pull requests are monsters. Your real reviews and merges are the only way to gain experience.</p>
+      <div class="tags"><span class="pill">OSRS skills</span><span class="pill">Diablo II exp table</span><span class="pill">Balatro points × power</span><span class="pill">Slay the Spire weekly run</span><span class="pill">Balatro shop</span><span class="pill">Mogul bosses</span><span class="pill">Read-only GitHub App</span></div>
+    </div>
+  </div>
+
+  <h2>Screen 1 · Town (home)</h2>
+  <p class="sub">The daily glance. Character in the current biome, this week's three acts, the last kill with its full score breakdown, Pledges in play, and whether the shop is open.</p>
+  <div class="frame">
+    <div class="bar">mergescape.app / town <div class="dots"><i></i><i></i><i></i></div></div>
+    <div class="screen">
+      <div class="rail"><i class="on">T</i><i>L</i><i>C</i><i>M</i><i>B</i><i>⚙</i></div>
+      <div class="body">
+        <div class="scene">
+          <span class="say">Dependency Mines · Renown 17</span>
+          <span class="torch" style="left:40px"></span><span class="torch" style="right:60px"></span>
+          <i class="spr" data-s="hero" data-pal="mithril" data-z="5" style="left:60px"></i>
+          <i class="spr" data-s="goblin" data-z="5" style="left:220px"></i>
+          <span class="hp" style="left:220px;bottom:98px"><b style="--w:35%"></b></span>
+          <i class="spr" data-s="hydra" data-z="4" style="right:40px;opacity:.55"></i>
+        </div>
+        <div class="row">
+          <div class="panel grow">
+            <h4>This week's Run · Act II</h4>
+            <div class="acts">
+              <div class="act done">I · Scout<small>1,420,000 ✓ +20 gold · shop visited</small></div>
+              <div class="act now">II · Raid<small>1,912,400 / 2,370,000</small></div>
+              <div class="act">III · The Rocket Man<small>Deletions ×2 · night +1 Power · unmerged −5g</small></div>
+            </div>
+            <div class="meter gold" style="margin-top:8px"><b style="--w:81%"></b><span>81% · 3 days left</span></div>
+          </div>
+          <div class="panel grow" style="flex-basis:220px">
+            <h4>Level 41 · Warden</h4>
+            <div class="num" style="font-size:12px;color:var(--fg-dim)">19,864,113 / 21,376,515</div>
+            <div class="meter"><b style="--w:29%"></b><span>Lv 42 in 1,512,402</span></div>
+            <div class="num" style="font-size:12px;margin-top:6px">Total level <b style="color:var(--gold)">151</b> · Gold <b style="color:var(--gold)">2,340</b></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="panel parch grow">
+            <h4>Last kill · Merge Goblin · octo/api #412</h4>
+            <div class="score">
+              <div class="l chips"><span>Points 90 merge + 112 size (+318/−97) + 30 party</span><span>232</span></div>
+              <div class="l mult"><span>× Power  Rubber Duck 0.5 · Small Hands 0.75 · Hot Potato 1.5</span><span>× 3.75</span></div>
+              <div class="l zone"><span>× Zone  (41+1)^1.6</span><span>× 395.6</span></div>
+              <div class="l total"><span>Smithing +344,172 XP</span><span>2 min ago</span></div>
+            </div>
+          </div>
+          <div class="panel grow" style="flex-basis:300px">
+            <h4>Pledges in play · 3 of 3</h4>
+            <div class="pick">
+              <div class="card pledge"><span class="cost">3</span><span class="rar">Pledge</span><h4>Strike</h4><p>Merge 3 PRs · 2/3</p></div>
+              <div class="card pledge"><span class="cost">5</span><span class="rar">Pledge</span><h4>Defend</h4><p>5 reviews · done ✓ +1 Power</p></div>
+              <div class="card pledge"><span class="cost">1</span><span class="rar">Pledge</span><h4>Big Game Hunter</h4><p>Review ≥800 LoC · 0/1</p></div>
+            </div>
+            <div class="note" style="margin-top:8px">The Grizzled Reviewer's shop is open until Raid clears · 2,340 gold</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h2>Screen 2 · Combat Log</h2>
+      <p class="sub">Every XP grant is one row. Tap a row for the Balatro breakdown. Filter by skill, repo, week.</p>
+      <div class="frame">
+        <div class="bar">Combat Log <div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="screen">
+          <div class="rail"><i>T</i><i class="on">L</i><i>C</i><i>M</i><i>B</i><i>⚙</i></div>
+          <div class="body">
+            <div class="log">
+              <div class="logrow"><i class="spr" data-s="goblin" data-z="2"></i><div class="t">Merged octo/api #412<small>232 × 3.75 × 395.6 · 14:02</small></div><div class="x">+344,172<small>Smithing</small></div></div>
+              <div class="logrow open">
+                <div class="row" style="justify-content:space-between"><div class="row"><i class="spr" data-s="imp" data-z="2"></i><div class="t">Review on octo/web #88 · 7 inline<small>13:40 · Nitpick Imp</small></div></div><div class="x">+133,000<small>Vigilance · Oratory</small></div></div>
+                <div class="score" style="margin-top:8px">
+                  <div class="l chips"><span>Points 40 changes requested + 35 inline (7×5)</span><span>75</span></div>
+                  <div class="l mult"><span>× Power 1 + Rubber Duck 0.5 (≥3 inline) + Small Hands 0 + Hot Potato 0 + Defend pledge 1.0</span><span>× 2.5</span></div>
+                  <div class="l zone"><span>× Zone (41+1)^1.6 · ×1.5 Boss "Nitpick Imp King"</span><span>× 593.4</span></div>
+                  <div class="l total"><span>+111,262 Vigilance · +22,250 Oratory</span><span>Riposte pending</span></div>
+                </div>
+              </div>
+              <div class="logrow"><i class="spr" data-s="wraith" data-z="2"></i><div class="t">Merged octo/infra #1301 after 6 pushes<small>Flaky Test Wraith · 11:15</small></div><div class="x">+288,900<small>Smithing</small></div></div>
+              <div class="logrow"><i class="spr" data-s="hero" data-pal="mithril" data-z="2"></i><div class="t">First event of the day<small>Endurance · 09:02</small></div><div class="x">+29,670<small>Endurance</small></div></div>
+              <div class="logrow" style="opacity:.6"><i class="spr" data-s="monolith" data-z="2"></i><div class="t">a private repo · approved<small>shown by id only to others · yesterday</small></div><div class="x">+59,340<small>Vigilance</small></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h2>Screen 3 · Character</h2>
+      <p class="sub">D2-style XP bar with exact numbers, four OSRS skills, five Charm slots, gear tier.</p>
+      <div class="frame">
+        <div class="bar">Character <div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="screen">
+          <div class="rail"><i>T</i><i>L</i><i class="on">C</i><i>M</i><i>B</i><i>⚙</i></div>
+          <div class="body">
+            <div class="row">
+              <i class="spr" data-s="hero" data-pal="mithril" data-z="5" style="filter:drop-shadow(3px 3px 0 #000)"></i>
+              <div class="grow">
+                <div style="font:700 20px var(--display);color:var(--gold)">andrewchemis <span style="color:var(--fg-dim);font-size:14px">· Warden</span></div>
+                <div class="num" style="font-size:12px;color:var(--fg-dim)">Level 41 · 19,864,113 / 21,376,515 XP</div>
+                <div class="meter"><b style="--w:29%"></b><span>Mithril tier · Rune at 70</span></div>
+              </div>
+            </div>
+            <div class="skills">
+              <div class="skill"><span class="n">Smithing</span><span class="lv">38</span><div class="meter"><b style="--w:62%"></b></div></div>
+              <div class="skill"><span class="n">Vigilance</span><span class="lv">44</span><div class="meter"><b style="--w:18%"></b></div></div>
+              <div class="skill"><span class="n">Oratory</span><span class="lv">35</span><div class="meter"><b style="--w:88%"></b></div></div>
+              <div class="skill"><span class="n">Endurance</span><span class="lv">34</span><div class="meter"><b style="--w:40%"></b></div></div>
+            </div>
+            <div class="panel">
+              <h4>Charms · 5 slots · Power 1 + 2.75</h4>
+              <div class="slots">
+                <div class="slot"><i class="spr" data-s="duck" data-z="2"></i><em>+.5</em></div>
+                <div class="slot"><i class="spr" data-s="hands" data-z="2"></i><em>+.75</em></div>
+                <div class="slot"><i class="spr" data-s="potato" data-z="2"></i><em>+1.5</em></div>
+                <div class="slot empty"></div><div class="slot empty"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h2>Screen 4 · Run Map</h2>
+      <p class="sub">Slay the Spire's map, one week wide. Three acts, Scout → Raid → Boss, each with an XP target. Your real events move the token; the shop opens after every cleared act.</p>
+      <div class="frame">
+        <div class="bar">Run · Week 45 <div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="screen">
+          <div class="rail"><i>T</i><i>L</i><i>C</i><i class="on">M</i><i>B</i><i>⚙</i></div>
+          <div class="body">
+            <div class="map">
+              <span class="lbl" style="left:4%">ACT I · MON–TUE</span><span class="lbl" style="left:38%">ACT II · WED–THU</span><span class="lbl" style="left:70%">ACT III · FRI–SUN</span>
+              <div class="lane"></div>
+              <div class="node done" style="left:8%;top:50%">✓<small>Merge Goblin</small></div>
+              <div class="node done" style="left:19%;top:50%">✓<small>Goblin ×2</small></div>
+              <div class="node done elite" style="left:30%;top:50%">!<small>Hydra · chest</small></div>
+              <div class="node done" style="left:42%;top:50%">✓<small>Wraith</small></div>
+              <div class="node now" style="left:54%;top:50%">◆<small>you · 81%</small></div>
+              <div class="node" style="left:66%;top:50%">?<small>unknown</small></div>
+              <div class="node boss" style="left:84%;top:50%"><i class="spr" data-s="rocket" data-z="2"></i><small>The Rocket Man</small></div>
+            </div>
+            <div class="row">
+              <div class="panel parch grow"><h4>Act III Mogul · The Rocket Man</h4><div style="font-size:13px"><b>Hardcore week.</b> Deletions count double toward size points. Events between 22:00 and 06:00 get +1 Power. Any PR closed unmerged costs 5 gold. <i>Clear it for Renown 18, 100 gold and a shop visit.</i></div></div>
+              <div class="panel grow" style="flex-basis:200px"><h4>Targets</h4>
+                <div class="acts" style="grid-template-columns:1fr">
+                  <div class="act done">Scout · 60%<small>1,420,000 ✓</small></div>
+                  <div class="act now">Raid · 100%<small>2,370,000</small></div>
+                  <div class="act">Boss · 150%<small>3,555,000</small></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h2>Screen 5 · Bestiary &amp; badge</h2>
+      <p class="sub">Collection grid with kill counts. Below it, the README badge, the only public surface in v1.</p>
+      <div class="frame">
+        <div class="bar">Bestiary <div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="screen">
+          <div class="rail"><i>T</i><i>L</i><i>C</i><i>M</i><i class="on">B</i><i>⚙</i></div>
+          <div class="body">
+            <div class="bestiary-grid">
+              <div class="bcell"><i class="spr" data-s="goblin" data-z="3"></i><em>1,204</em></div>
+              <div class="bcell"><i class="spr" data-s="imp" data-z="3"></i><em>377</em></div>
+              <div class="bcell"><i class="spr" data-s="wraith" data-z="3"></i><em>58</em></div>
+              <div class="bcell"><i class="spr" data-s="golem" data-z="3"></i><em>21</em></div>
+              <div class="bcell"><i class="spr" data-s="hydra" data-z="3"></i><em>44</em></div>
+              <div class="bcell"><i class="spr" data-s="creep" data-z="3"></i><em>9</em></div>
+              <div class="bcell"><i class="spr" data-s="dragon" data-z="3"></i><em>6</em></div>
+              <div class="bcell locked"><i class="spr" data-s="monolith" data-z="3"></i><em>?</em></div>
+            </div>
+            <div class="panel">
+              <h4>README badge · /badge/andrewchemis.svg</h4>
+              <div class="badge"><span>mergescape</span><span>Lv 41 Warden · Renown 17</span></div>
+              <div class="note">Exposes level, vocation and renown only. Cached 6 h at CloudFront.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h2>Screen 6 · The Shop</h2>
+      <p class="sub">Balatro's shop, run by the Grizzled Reviewer. Opens after each cleared act. Two Charms, two packs, one Voucher, a re-roll, and you can sell what you hold.</p>
+      <div class="frame">
+        <div class="bar">Shop · open until Raid clears <div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="screen">
+          <div class="rail"><i>T</i><i>L</i><i>C</i><i>M</i><i>B</i><i class="on">$</i></div>
+          <div class="body">
+            <div class="row" style="justify-content:space-between">
+              <div class="row"><i class="spr" data-s="hero" data-pal="leather" data-z="3" style="filter:sepia(.6) drop-shadow(2px 2px 0 #000)"></i><div style="font:600 13px var(--display);color:var(--parch)">"Spend it or save it. Interest pays 1 per 25, cap 10."</div></div>
+              <div class="num" style="font:700 18px var(--display);color:var(--gold)">2,340 g <span style="font-size:11px;color:var(--fg-dim)">+10 interest next clear</span></div>
+            </div>
+            <div class="panel">
+              <h4>Charms</h4>
+              <div class="pick" style="grid-template-columns:1fr 1fr">
+                <div class="card rare"><span class="m">+1.0</span><span class="rar">Rare · 120 g</span><h4>Grey Beard</h4><p>+1 Power in repos you've merged 50+ times.</p></div>
+                <div class="card common"><span class="m">+.5</span><span class="rar">Common · 40 g</span><h4>Night Owl</h4><p>+0.5 Power 22:00–06:00. Pairs with the Rocket Man.</p></div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="panel grow"><h4>Packs</h4>
+                <div class="pick" style="grid-template-columns:1fr 1fr">
+                  <div class="card pledge"><span class="rar">Pledge pack · 60 g</span><h4>See 3, keep 1</h4><p>Adds one Pledge to your deck.</p></div>
+                  <div class="card uncommon"><span class="rar">Charm pack · 100 g</span><h4>See 3, keep 1</h4><p>Rarity-weighted.</p></div>
+                </div>
+              </div>
+              <div class="panel grow"><h4>Voucher · one per act</h4>
+                <div class="card legend" style="box-shadow:2px 2px 0 #000;padding:8px"><span class="rar">Voucher · 200 g</span><h4>Charm Belt</h4><p>A permanent 6th Charm slot.</p></div>
+              </div>
+            </div>
+            <div class="row" style="gap:8px">
+              <span class="pill" style="background:var(--wood2);color:var(--parch)">Re-roll · 20 g</span>
+              <span class="pill">Shrine: remove a Pledge · 50 g</span>
+              <span class="pill">Sell Hot Potato · 60 g</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h2>The Moguls · Act III bosses</h2>
+      <p class="sub">Six parody archetypes, one per week, each with a modifier that is both a joke and a nudge. Invented names, no real names or logos anywhere. The Bestiary carries the disclaimer: any resemblance to persons living, dead or on a podcast is satire.</p>
+      <div class="beasts" style="grid-template-columns:1fr">
+        <div class="beast"><i class="spr" data-s="rocket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Rocket Man</h4><p><b>Hardcore week.</b> Deletions count double, night events +1 Power, unmerged PRs cost 5 gold. "The best part is no part."</p></div></div>
+        <div class="beast"><i class="spr" data-s="jacket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Leather Jacket</h4><p><b>The more you merge, the more you save.</b> Each merge in a row adds +0.1 Power (cap +1.5); an unmerged close resets the chain.</p></div></div>
+        <div class="beast"><i class="spr" data-s="turtle" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Turtleneck</h4><p><b>One more thing.</b> PRs under 100 lines ×3, over 400 ×0.5. An approval with exactly one inline comment is a design review: ×2.</p></div></div>
+        <div class="beast"><i class="spr" data-s="hoodie" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Hoodie</h4><p><b>Move fast.</b> Only PRs merged within 24 hours of opening score, at ×2. Everything else goes to the metaverse.</p></div></div>
+        <div class="beast"><i class="spr" data-s="founder" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Founder</h4><p><b>Non-profit to for-profit.</b> Points ×0.5, gold ×4. Wednesday the Board removes a random Charm; Friday it returns with +0.25 Power.</p></div></div>
+        <div class="beast"><i class="spr" data-s="pizza" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Two-Pizza Boss</h4><p><b>Two-pizza teams.</b> Merges with 2+ human reviewers ×2.5, party bonus ×3, solo merges score 0.</p></div></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Your character · gear tiers by level</h2>
+  <p class="sub">One sprite, palette-swapped. Vocation changes the held item (Smith hammer, Warden shield, Herald scroll, Pilgrim staff).</p>
+  <div class="tiers">
+    <div class="tier"><i class="spr" data-s="hero" data-pal="rags" data-z="4"></i><b>1</b>Rags</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="leather" data-z="4"></i><b>10</b>Leather</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="iron" data-z="4"></i><b>30</b>Iron</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="mithril" data-z="4"></i><b>50</b>Mithril</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="rune" data-z="4"></i><b>70</b>Rune</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="dragon" data-z="4"></i><b>90</b>Dragon</div>
+    <div class="tier"><i class="spr" data-s="hero" data-pal="cape" data-z="4"></i><b>99</b>Trimmed</div>
+  </div>
+
+  <h2>Bestiary · pull requests as monsters</h2>
+  <p class="sub">The monster is chosen from the PR's shape. Cosmetic, but it makes the log readable at a glance.</p>
+  <div class="beasts">
+    <div class="beast"><i class="spr" data-s="goblin" data-z="4"></i><div><span class="k mob">Mob</span><h4>Merge Goblin</h4><p>Any ordinary merged PR under 300 lines. Clutches a tiny purple merge icon.</p></div></div>
+    <div class="beast"><i class="spr" data-s="imp" data-z="4"></i><div><span class="k mob">Mob</span><h4>Nitpick Imp</h4><p>A review with 5+ inline comments. Hurls quotation marks.</p></div></div>
+    <div class="beast"><i class="spr" data-s="wraith" data-z="4"></i><div><span class="k mob">Mob</span><h4>Flaky Test Wraith</h4><p>A PR pushed to 4+ times before merge. Flickers red and green.</p></div></div>
+    <div class="beast"><i class="spr" data-s="golem" data-z="4"></i><div><span class="k mob">Mob</span><h4>Legacy Golem</h4><p>A merged PR of 1,000+ lines. Carved with COBOL runes. Size points capped at 120.</p></div></div>
+    <div class="beast"><i class="spr" data-s="hydra" data-z="4"></i><div><span class="k elite">Elite</span><h4>Rebase Hydra</h4><p>Three or more review rounds. Each head is a branch. Drops a pick-1-of-3.</p></div></div>
+    <div class="beast"><i class="spr" data-s="creep" data-z="4"></i><div><span class="k elite">Elite</span><h4>Scope Creep</h4><p>Open more than 14 days before merging. Grew out of a ticket.</p></div></div>
+    <div class="beast"><i class="spr" data-s="dragon" data-z="4"></i><div><span class="k elite">Elite</span><h4>Release Dragon</h4><p>A merge that closes 5+ linked PRs or issues. Curled around a v1.0.0 tag.</p></div></div>
+    <div class="beast"><i class="spr" data-s="monolith" data-z="4"></i><div><span class="k elite">Elite</span><h4>The Silent Monolith</h4><p>A PR merged with no review of any kind. One unread notification dot.</p></div></div>
+  </div>
+  <p class="note">Elites drop 25 gold and a free Charm pack. Bosses are the Moguls above.</p>
+
+  <h2>Charms · Balatro's Jokers</h2>
+  <p class="sub">Persistent passives in five slots. Power = 1 + the sum of your Charms. Bought in the Shop, pulled from Charm packs, or granted by a Boss clear. Sell any for half price.</p>
+  <div class="cards">
+    <div class="card common"><span class="m">+0.25</span><span class="rar">Common</span><h4>Rubber Duck</h4><p>+0.25 Power; +0.25 more on reviews with 3+ inline comments.</p></div>
+    <div class="card common"><span class="m">+0.5</span><span class="rar">Common</span><h4>Night Owl</h4><p>+0.5 Power on events between 22:00 and 06:00 local.</p></div>
+    <div class="card uncommon"><span class="m">+0.75</span><span class="rar">Uncommon</span><h4>Small Hands</h4><p>Merges under 150 lines gain +0.75 Power.</p></div>
+    <div class="card uncommon"><span class="m">points</span><span class="rar">Uncommon</span><h4>Second Pair of Eyes</h4><p>Party bonus points 30 → 60.</p></div>
+    <div class="card rare"><span class="m">+1.5</span><span class="rar">Rare</span><h4>Hot Potato</h4><p>Approve within 2 hours of a PR opening: +1.5 Power on that review.</p></div>
+    <div class="card rare"><span class="m">+1.0</span><span class="rar">Rare</span><h4>Grey Beard</h4><p>+1 Power on any PR in a repo you've merged 50+ times in.</p></div>
+    <div class="card legend"><span class="m">×4</span><span class="rar">Legendary</span><h4>Jester's Rebase</h4><p>Riposte points ×4; changes-requested reviews you give also grant Riposte.</p></div>
+    <div class="card legend"><span class="m">=10</span><span class="rar">Legendary</span><h4>Loaded Dice</h4><p>Once a week, one event's Power becomes 10.</p></div>
+    <div class="card legend"><span class="m">👁</span><span class="rar">Legendary</span><h4>Oracle</h4><p>See next week's Boss early and ban one modifier.</p></div>
+  </div>
+
+  <h2>Pledges · Slay the Spire's cards</h2>
+  <p class="sub">Draw five on Monday, play up to three. A Pledge is a contract for the week: hit it and collect, miss it and nothing happens. The number is the contract target.</p>
+  <div class="cards">
+    <div class="card pledge"><span class="cost">3</span><span class="rar">Pledge</span><h4>Strike</h4><p>Merge 3 PRs this week. +300 points on the third.</p></div>
+    <div class="card pledge"><span class="cost">5</span><span class="rar">Pledge</span><h4>Defend</h4><p>Submit 5 scoring reviews. +1 Power on reviews for the rest of the week.</p></div>
+    <div class="card pledge"><span class="cost">1</span><span class="rar">Pledge</span><h4>Big Game Hunter</h4><p>Review a PR of 800+ lines. That review scores ×3.</p></div>
+    <div class="card pledge"><span class="cost">2</span><span class="rar">Pledge</span><h4>Mentor</h4><p>Approve 2 PRs from authors with fewer merges than you. +0.5 Power until Sunday.</p></div>
+    <div class="card pledge"><span class="cost">0</span><span class="rar">Pledge</span><h4>Clean Sweep</h4><p>Close zero PRs unmerged this week. Upgrades the next chest.</p></div>
+    <div class="card pledge"><span class="cost">3</span><span class="rar">Pledge+</span><h4>Pair Up</h4><p>Merge 3 PRs each with a party bonus. +600 points.</p></div>
+  </div>
+
+  <p class="foot">All numbers on this page follow the scoring in SPEC.md §4–6: XP = Points × Power × (Level+1)^1.6, levels from the Diablo II experience table. Sprites are 16×16 placeholders drawn to establish silhouette and palette; final art should keep the same proportions.</p>
+</div>
+
+<script>
+(function(){
+  // 16x16 sprites. Letters map to palette entries; '.' is transparent.
+  const S = {
+    hero: [
+      "....HHHHHH......",
+      "...HHHHHHHH.....",
+      "...HSSSSSSH.....",
+      "...HSESSESH.....",
+      "...HSSSSSSH.....",
+      "....SSMMSS......",
+      ".....SSSS.......",
+      "...AAAAAAAA..W..",
+      "..ASAAAAAASA.W..",
+      "..ASAAAAAASA.W..",
+      "..S.AAAAAA.S.W..",
+      "....AAAAAA...W..",
+      "....BBBBBB......",
+      "....BB..BB......",
+      "....BB..BB......",
+      "...FFF..FFF....."],
+    goblin: [
+      "................",
+      ".....GG..GG.....",
+      "....GGGGGGGG....",
+      "...GGGGGGGGGG...",
+      "...GEGGGGGGEG...",
+      "...GGGGGGGGGG...",
+      "....GGTTTTGG....",
+      ".....GGGGGG.....",
+      "..G..GGGGGG..PP.",
+      "..GGGGGGGGGGPPP.",
+      ".....GGGGGG..PP.",
+      ".....GGGGGG.....",
+      ".....GG..GG.....",
+      ".....GG..GG.....",
+      "....GGG..GGG....",
+      "................"],
+    imp: [
+      "................",
+      "....R......R....",
+      ".....R....R.....",
+      ".....RRRRRR.....",
+      "....RRRRRRRR....",
+      "....RYRRRRYR....",
+      "....RRRRRRRR....",
+      ".....RRWWRR.....",
+      "......RRRR......",
+      "..Q...RRRR...Q..",
+      "..Q.RRRRRRRR.Q..",
+      "....R.RRRR.R....",
+      "......RRRR......",
+      "......R..R......",
+      ".....RR..RR.....",
+      "................"],
+    wraith: [
+      ".....WWWWWW.....",
+      "....WWWWWWWW....",
+      "...WWWWWWWWWW...",
+      "...WWEWWWWEWW...",
+      "...WWWWWWWWWW...",
+      "...WWWWWWWWWW...",
+      "..WWWWWWWWWWWW..",
+      "..WWWWWWWWWWWW..",
+      "..WWWWWWWWWWWW..",
+      "..WWWRWWGWWRWW..",
+      "..WWWWWWWWWWWW..",
+      "...WWWWWWWWWW...",
+      "...WW.WWWW.WW...",
+      "...W..WW.W..W...",
+      "......W..W......",
+      "................"],
+    golem: [
+      "....SSSSSSSS....",
+      "...SSSSSSSSSS...",
+      "...SSOSSSSOSS...",
+      "...SSSSSSSSSS...",
+      "..SSSSSSSSSSSS..",
+      ".SSSSSSSSSSSSSS.",
+      "SSS.SSSSSSSS.SSS",
+      "SSS.SSRSSRSS.SSS",
+      "SSS.SSSSSSSS.SSS",
+      "SSS.SSRSSSSS.SSS",
+      ".SS.SSSSSSSS.SS.",
+      "....SSSSSSSS....",
+      "....SSS..SSS....",
+      "....SSS..SSS....",
+      "...SSSS..SSSS...",
+      "................"],
+    hydra: [
+      ".HH....HH....HH.",
+      "HEHH..HEHH..HEHH",
+      "HHHH..HHHH..HHHH",
+      ".HH....HH....HH.",
+      ".HH....HH....HH.",
+      "..HH...HH...HH..",
+      "...HH..HH..HH...",
+      "....HHHHHHHH....",
+      ".....HHHHHH.....",
+      ".....HHHHHH.....",
+      "....HHHHHHHH....",
+      "...HHHHHHHHHH...",
+      "..HHHHHHHHHHHH..",
+      ".HHHHHHHHHHHHHH.",
+      "HHHHHHHHHHHHHHHH",
+      "................"],
+    creep: [
+      "..V......V......",
+      "..V.V....V.V....",
+      "...VV.VV.VV.....",
+      "....VVVVVV......",
+      "...VVEVVEVV.....",
+      "..VVVVVVVVVV....",
+      ".V..VVVVVV..V...",
+      ".V..VVVVVV..V...",
+      "....VVVVVV......",
+      "...TTTTTTTTT....",
+      "...TKTTTTTTT....",
+      "...TTTTTTTTT....",
+      "...TTTTTTTTT....",
+      "...TKKTTTTTT....",
+      "...TTTTTTTTT....",
+      "................"],
+    dragon: [
+      "..D..........D..",
+      "..DD........DD..",
+      "..DDD......DDD..",
+      "...DDD....DDD...",
+      "...DDDDDDDDDD...",
+      "....DDDDDDDD....",
+      "....DEDDDDED....",
+      "....DDDDDDDD....",
+      ".....DDTTDD.....",
+      ".....DDDDDD..DD.",
+      "....DDDDDDDDDD..",
+      "....DDDDDDDD....",
+      "....DD....DD....",
+      "...DDD....DDD...",
+      "..GGGGGGGGGGGG..",
+      "..G.GGGG.GGG.G.."],
+    rocket: [
+      ".....HHHH.......",
+      "....HHHHHH..N...",
+      "....SSSSSS..N...",
+      "....SESSES..N...",
+      "....SSSSSS..N...",
+      ".....SSSS...N...",
+      "...LLLLLLLL.N...",
+      "..LLLLLLLLLLN...",
+      "..LSLLLLLLSLN...",
+      "..LSLLLLLLSLF...",
+      "..S.LLLLLL.SF...",
+      "....LLLLLL..O...",
+      "....LL..LL......",
+      "....LL..LL......",
+      "...LLL..LLL.....",
+      "................"],
+    jacket: [
+      "....GGGGGG......",
+      "...GGGGGGGG.....",
+      "...GSSSSSSG.....",
+      "...GSESSESG.....",
+      "....SSSSSS......",
+      ".....SSSS.......",
+      "...JJJJJJJJ.....",
+      "..JJJWWJJJJJ....",
+      "..JJJWWJJJJJ....",
+      "..SJJWWJJJS.....",
+      ".CCCJJJJJJ.S....",
+      ".CCC.JJJJ.......",
+      "....BBBBBB......",
+      "....BB..BB......",
+      "....BB..BB......",
+      "...FFF..FFF....."],
+    turtle: [
+      "....HHHH........",
+      "...HHHHHH.......",
+      "...HSSSSSH......",
+      "...HOSSOSH..S...",
+      "...HSSSSSH..S...",
+      "....GGGGG...S...",
+      "....TTTTTT..S...",
+      "...TTTTTTTT.S...",
+      "..TTTTTTTTTTS...",
+      "..STTTTTTTTT....",
+      "..S.TTTTTT......",
+      "....TTTTTT......",
+      "....DDDDDD......",
+      "....DD..DD......",
+      "....DD..DD......",
+      "...FFF..FFF....."],
+    hoodie: [
+      "....HHHHHH......",
+      "...HHHHHHHH.....",
+      "...HVVVVVVH.....",
+      "...HSSSSSSH.....",
+      "...HSESSESH.....",
+      "....SSSSSS......",
+      ".....SSSS.......",
+      "...UUUUUUUU.....",
+      "..UUUUUUUUUU....",
+      "..SUUUUUUUUS....",
+      "..S.UUUUUU.S....",
+      "....UUUUUU......",
+      "....DDDDDD......",
+      "....DD..DD......",
+      "....DD..DD......",
+      "...FFF..FFF....."],
+    founder: [
+      "....HHHHHH......",
+      "...HHHHHHHH.....",
+      "...HSSSSSSH.....",
+      "...HSESSESH.....",
+      "...HSSSSSSH.....",
+      "....SSMMSS......",
+      ".....SSSS.......",
+      "...CCCCCCCC.....",
+      "..CCCCCCCCCC....",
+      "..SCCCOOCCCS....",
+      "..SSSOOOOSSS....",
+      "....CCOOCC......",
+      "....BBBBBB......",
+      "....BB..BB......",
+      "....BB..BB......",
+      "...FFF..FFF....."],
+    pizza: [
+      ".....SSSS.......",
+      "....SSSSSS......",
+      "....SSSSSS......",
+      "....SESSES......",
+      "....SSSSSS......",
+      ".....SMMS.......",
+      "......SS........",
+      "...BBWWWWBB.....",
+      "..BBBBWWBBBB....",
+      "..SBBBBBBBBS....",
+      "..S.BBBBBB.S....",
+      ".PPPPPPPP.......",
+      ".PPPPPPPP.......",
+      ".PPPPPPPP.......",
+      "....BB..BB......",
+      "...FFF..FFF....."],
+    monolith: [
+      ".....KKKKKK.....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKR....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "....KKKKKKKK....",
+      "...KKKKKKKKKK...",
+      "..KKKKKKKKKKKK..",
+      "................"],
+    duck: [
+      "................","................","......YYYY......",".....YYYYYY.....",".....YEYYYY.....",".....YYYYOO.....",".....YYYYYY.....",
+      "......YYYY......","..Y..YYYYYY.....","..YYYYYYYYYYY...","..YYYYYYYYYYY...","...YYYYYYYYY....","....YYYYYYY.....","................","................","................"],
+    hands: [
+      "................","................","................","....SS...SS.....","...SSSS.SSSS....","...SSSS.SSSS....","...SSSS.SSSS....",
+      "..SSSSS.SSSSS...","..SSSSS.SSSSS...","...SSSS.SSSS....","...SSSS.SSSS....","................","................","................","................","................"],
+    potato: [
+      "................","................","................","......BBBB......","....BBBBBBBB....","...BBBBBBBBBB...","...BBBBOBBBBB...",
+      "..BBBBBBBBBBBB..","..BBBOBBBBBBBB..","...BBBBBBBOBB...","...BBBBBBBBBB...","....BBBBBBBB....","......BBBB......","................","................","................"]
+  };
+  const P = {
+    base:{H:"#4a2a12",S:"#e8b28a",E:"#111",M:"#a05a3a",B:"#3b2f2a",F:"#241a16",W:"#c9c9c9",
+      G:"#5fae46",T:"#fff",P:"#a371f7",R:"#d13b3b",Y:"#ffe26a",Q:"#fff",O:"#ff9c2b",K:"#15110f",V:"#4f8a3e",D:"#7a4bd6"},
+    hero:{rags:{A:"#7a5330",W:"#9c7b55"},leather:{A:"#8c5a2b",W:"#bfb9ae"},iron:{A:"#8e8e8e",W:"#d6d6d6"},mithril:{A:"#2f6f73",W:"#78c9cf"},
+      rune:{A:"#3a8fb5",W:"#9fe6ff"},dragon:{A:"#b3272b",W:"#ff8a3d"},cape:{A:"#b3272b",W:"#f2c14e",H:"#f2c14e"}},
+    goblin:{E:"#ff3b3b"}, imp:{W:"#fff",R:"#d13b3b"}, wraith:{W:"#bfeff5",E:"#000",R:"#ff5c5c",G:"#49c178"},
+    golem:{S:"#7d7a74",O:"#ff9c2b",R:"#e0a84a"}, hydra:{H:"#3e8f7b",E:"#ffe26a"}, creep:{T:"#ead98f",K:"#8a7d5a",E:"#ffe26a"},
+    dragon:{E:"#ffe26a",T:"#fff",G:"#f2c14e"}, monolith:{K:"#1c1a1f",R:"#ff3b3b"},
+    rocket:{H:"#3a2a1a",L:"#c8ccd2",N:"#f4f4f4",F:"#ff8a3d",O:"#ffd23f"},
+    jacket:{G:"#c4c4c4",J:"#1d1d1f",W:"#f4f4f4",C:"#76b900",B:"#2a2a2e"},
+    turtle:{H:"#9a9a9a",O:"#222",G:"#b5b5b5",T:"#111",D:"#3b5a8a"},
+    hoodie:{H:"#5a3a1a",V:"#e6eef5",U:"#8a8f98",D:"#2c3e66"},
+    founder:{H:"#5a3a1a",C:"#6e7480",O:"#7ff0ff"},
+    pizza:{B:"#2f6fb5",W:"#f4f4f4",P:"#d9b26f",M:"#a05a3a"},
+    duck:{Y:"#ffd23f",E:"#000",O:"#ff8a3d"}, hands:{S:"#e8b28a"}, potato:{B:"#b97b3a",O:"#7a4a1e"}
+  };
+  function render(el){
+    const name=el.dataset.s, z=+el.dataset.z||4, rows=S[name]; if(!rows) return;
+    const pal=Object.assign({},P.base,P[name]||{}, name==="hero"&&P.hero[el.dataset.pal]||P.hero.rags);
+    let out='<svg width="'+16*z+'" height="'+16*z+'" viewBox="0 0 16 16" role="img" aria-label="'+name+'">';
+    const alpha = name==="wraith" ? ' fill-opacity="0.78"' : '';
+    rows.forEach((r,y)=>{ for(let x=0;x<16;x++){ const c=r[x]; if(c&&c!=='.'&&pal[c]) out+='<rect x="'+x+'" y="'+y+'" width="1" height="1" fill="'+pal[c]+'"'+(c==='W'&&name==='wraith'?alpha:'')+'/>'; } });
+    el.innerHTML=out+'</svg>';
+  }
+  document.querySelectorAll('.spr').forEach(render);
+})();
+</script>
