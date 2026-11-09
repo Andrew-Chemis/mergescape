@@ -28,7 +28,7 @@ import type {
   Skill,
 } from '@mergescape/shared';
 import { ApiError } from './api';
-import { expeditionViewFrom, forgeViewFrom } from './depth';
+import { expeditionStatusOf, expeditionViewFrom, forgeViewFrom } from './depth';
 import { describeError } from './errors';
 import type { ActionResult } from './errors';
 import { unseenEntries } from './log';
@@ -41,6 +41,7 @@ import type {
   ShopBuyInput,
   ShopPickInput,
 } from './api';
+import { playCue } from './sound';
 import { gearTierFor } from './sprites';
 import type { GearTierName } from './sprites';
 import type {
@@ -202,9 +203,25 @@ export class Session {
       const stale = epoch !== this.#epoch || this.#writes > 0;
       const before = this.me ? levelFor(this.me.xp) : levelFor(me.xp);
       if (!stale) {
+        const earlier = this.week;
+        const away = this.me ? expeditionStatusOf(this.me.expedition, this.now) === 'away' : false;
         this.me = me;
         this.week = me.week ?? null;
         this.#sync();
+        // Two moments that happen while the tab is open and have no screen of their own: an act clearing
+        // (a further act cleared in the same week) and the character coming home. Cues are opt-in.
+        const later = me.week;
+        if (
+          earlier &&
+          later &&
+          earlier.weekKey === later.weekKey &&
+          later.clearedActs.length > earlier.clearedActs.length
+        ) {
+          playCue('actClear');
+        }
+        if (away && expeditionStatusOf(me.expedition, Date.now()) === 'returned') {
+          playCue('expeditionReturn');
+        }
       }
       if (installations) {
         this.installations = installations.installations;
@@ -310,7 +327,12 @@ export class Session {
 
   /** `POST /shop/buy`. `scope` names the control, e.g. `charm:0`, for its inline error. */
   shopBuy(scope: string, input: ShopBuyInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.shopBuy(input, options));
+    return this.#write(scope, async (api, options) => {
+      const answer = await api.shopBuy(input, options);
+      // The server took the purchase: the coin sounds (opt-in) before the screen catches up.
+      playCue('purchase');
+      return answer;
+    });
   }
 
   /** `POST /shop/pick`; index -1 is the free Raid pack. */

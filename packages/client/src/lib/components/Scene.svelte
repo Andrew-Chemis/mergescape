@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { TIER_SWAP_MS } from '../motion';
   import { MONSTER_NAMES } from '../names';
-  import { heroPaletteFor, MONSTER_SPRITE } from '../sprites';
+  import { gearTierFor, heroPaletteFor, MONSTER_SPRITE } from '../sprites';
   import type { HeroPalette } from '../sprites';
   import type { MonsterId } from '@mergescape/shared';
   import Sprite from './Sprite.svelte';
@@ -33,6 +34,28 @@
     cape = null,
   }: Props = $props();
 
+  /**
+   * A level-up that crosses into a new gear tier swaps the hero's sprite (game-design.md section 9, moment 2).
+   * The swap blinks for a moment, or only fades under reduced motion; opening Town already in a tier does not.
+   */
+  const tier = $derived(gearTierFor(level).tier);
+  let swapping = $state(false);
+  let shownTier: string | undefined;
+
+  $effect(() => {
+    const now = tier;
+    const before = shownTier;
+    shownTier = now;
+    if (before === undefined || before === now) {
+      return;
+    }
+    swapping = true;
+    const timer = setTimeout(() => {
+      swapping = false;
+    }, TIER_SWAP_MS);
+    return () => clearTimeout(timer);
+  });
+
   const description = $derived(
     asleep
       ? `Your character is asleep in ${biome}.`
@@ -47,7 +70,7 @@
   <span class="torch left" aria-hidden="true"></span>
   <span class="torch right" aria-hidden="true"></span>
   <div class="cast" role="img" aria-label={description}>
-    <span class="hero" class:asleep>
+    <span class="hero" class:asleep class:swap={swapping} data-tier={tier}>
       <Sprite
         name={asleep ? 'hero-asleep' : 'hero'}
         palette={palette ?? heroPaletteFor(level)}
@@ -138,9 +161,40 @@
     letter-spacing: 0.2em;
   }
 
+  /* A new gear tier: one fade under reduced motion, a quick blink of the new look otherwise. */
+  .hero.swap {
+    animation: swap-fade 0.9s linear both;
+  }
+
+  @keyframes swap-fade {
+    from {
+      opacity: 0.2;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes swap-blink {
+    0%,
+    40%,
+    80% {
+      filter: drop-shadow(4px 4px 0 #000) brightness(2.6);
+    }
+    20%,
+    60%,
+    100% {
+      filter: drop-shadow(4px 4px 0 #000);
+    }
+  }
+
   @media (prefers-reduced-motion: no-preference) {
     .zzz {
       animation: drift 3s ease-in-out infinite;
+    }
+
+    .hero.swap {
+      animation: swap-blink 0.9s steps(1, end) both;
     }
   }
 

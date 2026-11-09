@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
+import { cuesHeard, soundOnAfterGesture, stubAudio } from '../../test/audio';
 import { mockReducedMotion } from '../../test/helpers';
 import { LEVEL_UP_MS } from '../motion';
 import type { LevelUp } from '../session.svelte';
@@ -50,6 +51,35 @@ describe('LevelUpFlash', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5000);
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a one-to-two second moment', () => {
+    expect(LEVEL_UP_MS).toBeGreaterThanOrEqual(1000);
+    expect(LEVEL_UP_MS).toBeLessThanOrEqual(2000);
+  });
+
+  it('is skippable: a click on the message dismisses it at once, and so does Escape', async () => {
+    const onDone = vi.fn();
+    render(LevelUpFlash, { levelUp: base, onDone });
+    await fireEvent.click(screen.getByText('Level up!'));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    await fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onDone).toHaveBeenCalledTimes(2);
+  });
+
+  it('plays its cue once, only when sound is on, and again for a back-to-back level-up', async () => {
+    const silent = stubAudio();
+    const first = render(LevelUpFlash, { levelUp: base, onDone: () => {} });
+    expect(silent.contexts).toHaveLength(0);
+    first.unmount();
+
+    const audio = soundOnAfterGesture();
+    const { rerender } = render(LevelUpFlash, { levelUp: base, onDone: () => {} });
+    expect(cuesHeard(audio)).toEqual(['levelUp']);
+    await rerender({ levelUp: { ...base, id: 2, level: 51 }, onDone: () => {} });
+    expect(cuesHeard(audio)).toEqual(['levelUp', 'levelUp']);
   });
 
   it('restarts its timer for a back-to-back level-up and clears it on unmount', async () => {

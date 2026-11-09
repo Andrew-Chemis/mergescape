@@ -7,9 +7,12 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api';
 import type { Api } from '../lib/api';
+import { CONSENT_KEY, consent, soundAllowed } from '../lib/consent';
 import { createFixtureApi } from '../lib/fixtures/api';
 import { exportFileName, formatOffset, timezoneInfo } from '../lib/settings';
-import { forbidNetwork, NOW, renderApp, textOf } from '../test/helpers';
+import { armSound } from '../lib/sound';
+import { cuesHeard, gesture, stubAudio } from '../test/audio';
+import { forbidNetwork, mockReducedMotion, NOW, renderApp, textOf } from '../test/helpers';
 
 forbidNetwork();
 
@@ -46,6 +49,88 @@ beforeEach(() => {
 afterEach(() => {
   URL.createObjectURL = realCreate;
   URL.revokeObjectURL = realRevoke;
+});
+
+const soundSwitch = () =>
+  screen.getByRole('switch', { name: 'Play sound effects' }) as HTMLInputElement;
+
+describe('Settings: sound', () => {
+  it('has the Sound panel, with the switch off, and builds no audio object just by being opened', async () => {
+    const audio = stubAudio();
+    await settings();
+    const panel = screen.getByRole('region', { name: 'Sound' });
+    expect(textOf(panel)).toContain('there are no audio files');
+    expect(textOf(panel)).toContain('Sound is off, which is how it starts');
+    expect(soundSwitch().checked).toBe(false);
+    expect(soundAllowed()).toBe(false);
+    expect(within(panel).getByRole('button', { name: 'Hear a sample' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(audio.contexts).toHaveLength(0);
+    expect(window.localStorage.getItem(CONSENT_KEY)).toBeNull();
+  });
+
+  it('turns on only when the player flips the switch, and remembers it on this device', async () => {
+    await settings();
+    await fireEvent.click(soundSwitch());
+    expect(soundSwitch().checked).toBe(true);
+    expect(soundAllowed()).toBe(true);
+    expect(JSON.parse(window.localStorage.getItem(CONSENT_KEY) ?? 'null')).toMatchObject({
+      sound: true,
+      analytics: false,
+    });
+    const panel = screen.getByRole('region', { name: 'Sound' });
+    expect(textOf(panel)).toContain('Sound is on.');
+    expect(textOf(panel)).toContain('after your first click, tap or key press');
+    await fireEvent.click(soundSwitch());
+    expect(soundAllowed()).toBe(false);
+    expect(JSON.parse(window.localStorage.getItem(CONSENT_KEY) ?? 'null').sound).toBe(false);
+  });
+
+  it('starts on when it was turned on before (a reload), and reads the same from the Cookies key', async () => {
+    window.localStorage.setItem(CONSENT_KEY, '{"analytics":false,"sound":true,"updatedAt":null}');
+    await settings();
+    expect(soundSwitch().checked).toBe(true);
+    expect(
+      within(screen.getByRole('region', { name: 'Sound' })).getByRole('button', {
+        name: 'Hear a sample',
+      }),
+    ).toHaveProperty('disabled', false);
+  });
+
+  it('plays a sample, through the real engine, once it is on and the page has been touched', async () => {
+    const audio = stubAudio();
+    armSound();
+    await settings();
+    await fireEvent.click(soundSwitch());
+    gesture();
+    await fireEvent.click(screen.getByRole('button', { name: 'Hear a sample' }));
+    expect(cuesHeard(audio)).toEqual(['levelUp']);
+  });
+
+  it('is not turned on by prefers-reduced-motion, and says so', async () => {
+    mockReducedMotion(true);
+    const audio = stubAudio();
+    armSound();
+    await settings();
+    gesture();
+    expect(soundSwitch().checked).toBe(false);
+    expect(soundAllowed()).toBe(false);
+    expect(textOf(screen.getByRole('region', { name: 'Sound' }))).toContain(
+      'reduced motion. That never turns sound on',
+    );
+    expect(audio.contexts).toHaveLength(0);
+  });
+
+  it('says so when the browser will not save the choice', async () => {
+    await settings();
+    vi.spyOn(consent, 'setSound').mockReturnValue(false);
+    await fireEvent.click(soundSwitch());
+    expect(textOf(screen.getByRole('region', { name: 'Sound' }))).toContain(
+      'would not let Mergescape save your choice',
+    );
+  });
 });
 
 describe('Settings', () => {

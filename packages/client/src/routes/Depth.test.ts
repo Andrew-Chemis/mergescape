@@ -139,6 +139,21 @@ describe('Town, the Feat unlock banner', () => {
     expect(session.feats?.find((feat) => feat.id === 'spelunker')?.unlocked).toBe(true);
   });
 
+  it('counts as clicked when the player follows its link to the Feat list', async () => {
+    const { session } = await renderApp({ hash: '#/expedition' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Collect' }));
+    await waitFor(() => expect(session.pendingFeats).toEqual(['spelunker']));
+    window.location.hash = '#/';
+    const banner = await screen.findByRole('status', { name: 'Feat unlocked' });
+    await fireEvent.click(within(banner).getByRole('link', { name: 'See your Feats' }));
+    expect(session.pendingFeats).toEqual([]);
+    // The link goes on to the Feat list; coming back to Town, the banner is gone.
+    await screen.findByRole('heading', { name: 'Feats', level: 1 });
+    window.location.hash = '#/';
+    await screen.findByRole('heading', { name: 'Town', level: 1 });
+    expect(screen.queryByRole('status', { name: 'Feat unlocked' })).toBeNull();
+  });
+
   it('adds the unlocked Feat to the Feats list', async () => {
     await renderApp({ hash: '#/expedition' });
     await fireEvent.click(screen.getByRole('button', { name: 'Collect' }));

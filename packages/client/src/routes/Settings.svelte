@@ -2,9 +2,13 @@
   import { onDestroy, tick } from 'svelte';
   import { installUrl } from '../lib/api';
   import Frame from '../lib/components/Frame.svelte';
+  import Switch from '../lib/components/Switch.svelte';
+  import { consent } from '../lib/consent';
   import { formatInt } from '../lib/format';
+  import { prefersReducedMotion } from '../lib/motion';
   import { exportFileName, timezoneInfo } from '../lib/settings';
   import type { Session } from '../lib/session.svelte';
+  import { playCue } from '../lib/sound';
 
   interface Props {
     session: Session;
@@ -16,6 +20,15 @@
 
   const me = $derived(session.me);
   const zone = timezoneInfo();
+
+  // --- Sound --------------------------------------------------------------------------------------
+  let soundSaveFailed = $state(false);
+  /** Read once: only used to explain that the system setting does not decide anything about sound. */
+  const reducedMotion = prefersReducedMotion();
+
+  function chooseSound(event: Event & { currentTarget: HTMLInputElement }) {
+    soundSaveFailed = !consent.setSound(event.currentTarget.checked);
+  }
 
   // --- Export -------------------------------------------------------------------------------------
   let exporting = $state(false);
@@ -166,6 +179,52 @@
       <p class="dim small">
         Adding or removing repositories happens on GitHub. Uninstalling the App stops its events
         counting at once.
+      </p>
+    </section>
+
+    <section class="panel" aria-labelledby="sound-heading">
+      <h2 id="sound-heading">Sound</h2>
+      <p>
+        Short chimes for the big moments: the score ticker, a level-up, loot, a Feat, a Mogul
+        arriving, a purchase, an act clear and the character coming home. They are made in your
+        browser as they play; there are no audio files.
+      </p>
+      <Switch
+        id="sound-switch"
+        checked={$consent.sound}
+        label="Play sound effects"
+        describedBy="sound-status"
+        onchange={chooseSound}
+      />
+      <div id="sound-status" aria-live="polite">
+        <p class="dim small">
+          {#if $consent.sound}
+            Sound is on. Your browser starts it after your first click, tap or key press on the
+            page.
+          {:else}
+            Sound is off, which is how it starts. Nothing is played, and no audio is set up, until
+            you turn it on here.
+          {/if}
+          {#if reducedMotion}
+            Your device asks for reduced motion. That never turns sound on; only this switch does.
+          {/if}
+        </p>
+        {#if soundSaveFailed}
+          <p class="error">
+            This browser would not let Mergescape save your choice, so it only lasts until you leave
+            this page.
+          </p>
+        {/if}
+      </div>
+      <p class="row">
+        <button
+          type="button"
+          class="btn small"
+          disabled={!$consent.sound}
+          onclick={() => playCue('levelUp')}
+        >
+          Hear a sample
+        </button>
       </p>
     </section>
 

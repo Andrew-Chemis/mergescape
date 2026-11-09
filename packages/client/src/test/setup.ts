@@ -1,4 +1,5 @@
 import { afterEach, vi } from 'vitest';
+import { sound } from '../lib/sound';
 
 // jsdom starts with a bare document; the app's index.html sets these.
 document.documentElement.lang = 'en';
@@ -16,4 +17,6 @@ afterEach(() => {
   Reflect.deleteProperty(window, 'matchMedia');
   window.history.replaceState(null, '', '/');
   window.localStorage.clear();
+  // The sound engine is a module-level singleton: forget any gesture, context or listener a test made.
+  sound.reset();
 });

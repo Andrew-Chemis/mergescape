@@ -1,6 +1,7 @@
 <script lang="ts">
   import { BREAKDOWN_GROUPS } from '../breakdown';
   import { prefersReducedMotion, TICKER_TOTAL_MS } from '../motion';
+  import { playCue } from '../sound';
   import type { LogEntry } from '../types';
   import Breakdown from './Breakdown.svelte';
 
@@ -22,6 +23,9 @@
   let revealed = $state(BREAKDOWN_GROUPS);
   let timers: ReturnType<typeof setTimeout>[] = [];
 
+  /** Each term lands a little higher than the one before it: Points, Power, Zone, XP (opt-in sound). */
+  const CLIMB = [0, 2, 4, 7];
+
   function stop() {
     for (const timer of timers) {
       clearTimeout(timer);
@@ -40,15 +44,19 @@
     if (prefersReducedMotion()) {
       mode = 'reduced';
       revealed = BREAKDOWN_GROUPS;
+      // One fade, so one soft tick instead of the climb.
+      playCue('tick', { step: CLIMB[BREAKDOWN_GROUPS - 1] ?? 0 });
       return;
     }
     mode = 'full';
     revealed = 1;
+    playCue('tick', { step: CLIMB[0] ?? 0 });
     const step = totalMs / BREAKDOWN_GROUPS;
     for (let group = 1; group < BREAKDOWN_GROUPS; group += 1) {
       timers.push(
         setTimeout(() => {
           revealed = group + 1;
+          playCue('tick', { step: CLIMB[group] ?? 0 });
         }, step * group),
       );
     }

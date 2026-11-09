@@ -11,6 +11,7 @@ import { createFixtureApi } from './lib/fixtures/api';
 import { FINAL_SKILL_XP, FINAL_XP } from './lib/fixtures/raw-log';
 import { fixtureLogEntries, fixtureMe } from './lib/fixtures/state';
 import { LEVEL_UP_MS } from './lib/motion';
+import { cuesHeard, soundOnAfterGesture, stubAudio } from './test/audio';
 import { mockReducedMotion, NOW, renderApp } from './test/helpers';
 
 /** Any network call during these tests is a bug: the fixture mode must not touch the network. */
@@ -594,6 +595,51 @@ describe('level-up flash', () => {
     expect(await screen.findByText('Level up!')).toBeTruthy();
     expect(document.querySelector('.wash')).toBeNull();
     expect(document.querySelector('.flash.reduced')).not.toBeNull();
+  });
+});
+
+describe('sound is opt-in (Requirement 10.5)', () => {
+  const TOUR = [
+    '#/',
+    '#/log',
+    '#/map',
+    '#/shop',
+    '#/expedition',
+    '#/forge',
+    '#/feats',
+    '#/settings',
+  ];
+
+  it('makes no audio object anywhere in the app while sound is off, reduced motion or not', async () => {
+    for (const reduced of [false, true]) {
+      mockReducedMotion(reduced);
+      const audio = stubAudio();
+      for (const hash of TOUR) {
+        const { unmount } = await renderApp({ hash });
+        window.dispatchEvent(new Event('pointerdown'));
+        unmount();
+      }
+      expect(audio.contexts, `reduced motion ${reduced}`).toHaveLength(0);
+    }
+  });
+
+  it('plays the level-up cue with the flash when sound is on', async () => {
+    const audio = soundOnAfterGesture();
+    const base = createFixtureApi({ now: NOW });
+    let leveled = false;
+    const api: Api = {
+      ...base,
+      async me() {
+        const me = fixtureMe(NOW);
+        return leveled ? { ...me, xp: me.xp + 300_000 } : me;
+      },
+    };
+    const { session } = await renderApp({ api });
+    expect(cuesHeard(audio)).toEqual([]);
+    leveled = true;
+    await session.refresh();
+    await screen.findByText('Level up!');
+    expect(cuesHeard(audio)).toEqual(['levelUp']);
   });
 });
 

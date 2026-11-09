@@ -1,6 +1,7 @@
 <script lang="ts">
   import { TOKEN_KEY } from '../lib/api';
   import Frame from '../lib/components/Frame.svelte';
+  import Switch from '../lib/components/Switch.svelte';
   import { clearLocalData, consent, CONSENT_KEY, pageControls } from '../lib/consent';
   import { LEGAL_UPDATED } from '../lib/promises';
   import { REVEAL_KEY } from '../lib/reveal';
@@ -29,8 +30,8 @@
     },
     {
       key: CONSENT_KEY,
-      what: 'Your analytics choice, as analytics on or off and when you changed it.',
-      why: 'To remember what you chose. It is written only when you use the switch below.',
+      what: 'Your choices: analytics on or off and when you changed it, and whether sound is on.',
+      why: 'To remember what you chose. It is written only when you use a switch: the analytics switch below, or the sound switch in Settings.',
       removed: 'Clear local data.',
     },
   ] as const;
@@ -155,21 +156,13 @@
       because nothing reads it.
     </p>
     <div class="choice">
-      <label class="switch" for="analytics-switch">
-        <input
-          id="analytics-switch"
-          type="checkbox"
-          role="switch"
-          checked={$consent.analytics}
-          aria-describedby="analytics-status"
-          onchange={chooseAnalytics}
-        />
-        <span class="track" aria-hidden="true"><span class="knob"></span></span>
-        <span class="switch-text">
-          Allow first-party analytics
-          <b class="state num" aria-hidden="true">{$consent.analytics ? 'On' : 'Off'}</b>
-        </span>
-      </label>
+      <Switch
+        id="analytics-switch"
+        checked={$consent.analytics}
+        label="Allow first-party analytics"
+        describedBy="analytics-status"
+        onchange={chooseAnalytics}
+      />
       <div id="analytics-status" aria-live="polite">
         <p class="dim">{choiceText}</p>
         {#if saveFailed}
@@ -180,6 +173,24 @@
         {/if}
       </div>
     </div>
+  </section>
+
+  <section class="panel" aria-labelledby="sound-heading">
+    <h2 id="sound-heading">The sound choice</h2>
+    <p>
+      Mergescape can play a few short chimes for the big moments: a level-up, a Feat unlocking, a
+      Mogul arriving, loot, a purchase, an act clear and the character coming home.
+      <b>Sound is off by default.</b> Only you switch it on, with the sound switch in
+      <a href="#/settings">Settings</a>, and it stays off even if your device asks for reduced
+      motion until you do.
+    </p>
+    <p class="dim">
+      The chimes are made in your browser as it plays them: there are no audio files and nothing is
+      downloaded or sent anywhere. Your choice is saved on this device in
+      <code>mergescape.consent</code>. Browsers only start sound after you have clicked, tapped or
+      pressed a key on the page, so nothing plays before that, and with sound off the page does not
+      even create an audio object. Clear local data resets it to off.
+    </p>
   </section>
 
   <p class="foot dim">
@@ -234,70 +245,6 @@
   .choice {
     display: grid;
     gap: 6px;
-  }
-
-  .switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    cursor: pointer;
-  }
-
-  /* The real checkbox stays in the page, focusable and clickable through its label; only its look is
-     replaced. */
-  .switch input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    border: 0;
-  }
-
-  .track {
-    flex: none;
-    width: 48px;
-    height: 26px;
-    padding: 2px;
-    border: 2px solid #000;
-    background: var(--track);
-    box-shadow: inset 0 0 0 2px var(--wood);
-    display: flex;
-    align-items: center;
-  }
-
-  .knob {
-    width: 16px;
-    height: 16px;
-    background: var(--fg-dim);
-    border: 2px solid #000;
-  }
-
-  .switch input:checked + .track {
-    background: var(--act-done);
-    justify-content: flex-end;
-  }
-
-  .switch input:checked + .track .knob {
-    background: var(--xp);
-  }
-
-  .switch input:focus-visible + .track {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-    box-shadow:
-      inset 0 0 0 2px var(--wood),
-      0 0 0 2px #000;
-  }
-
-  .state {
-    margin-left: 6px;
-    padding: 1px 6px;
-    background: var(--stone2);
-    font-size: 12px;
   }
 
   .foot {

@@ -14,6 +14,7 @@ import {
   DEFAULT_CONSENT,
   pageControls,
   parseConsent,
+  soundAllowed,
   STORAGE_PREFIX,
 } from './consent';
 import { REVEAL_KEY } from './reveal';
@@ -48,17 +49,19 @@ describe('parseConsent', () => {
   it('reads what the store writes', () => {
     expect(parseConsent('{"analytics":true,"updatedAt":"2026-11-09T12:30:00.000Z"}')).toEqual({
       analytics: true,
+      sound: false,
       updatedAt: '2026-11-09T12:30:00.000Z',
     });
-    expect(parseConsent('{"analytics":false,"updatedAt":"x"}')).toEqual({
+    expect(parseConsent('{"analytics":false,"sound":true,"updatedAt":"x"}')).toEqual({
       analytics: false,
+      sound: true,
       updatedAt: 'x',
     });
   });
 
   it('means "never chose" for anything that is missing or damaged', () => {
     for (const raw of [null, undefined, '', 'not json', 'null', '7', '"yes"', '[]', '{}']) {
-      expect(parseConsent(raw)).toEqual({ analytics: false, updatedAt: null });
+      expect(parseConsent(raw)).toEqual({ analytics: false, sound: false, updatedAt: null });
     }
   });
 
@@ -85,12 +88,12 @@ describe('the default', () => {
   it('is analytics off, with no date, and writes nothing', () => {
     const storage = memoryStorage();
     const store = createConsentStore(() => storage);
-    expect(get(store)).toEqual({ analytics: false, updatedAt: null });
+    expect(get(store)).toEqual({ analytics: false, sound: false, updatedAt: null });
     expect(storage.length).toBe(0);
   });
 
   it('is off for the shared store on a fresh device, and analyticsAllowed says no', () => {
-    expect(get(consent)).toEqual({ analytics: false, updatedAt: null });
+    expect(get(consent)).toEqual({ analytics: false, sound: false, updatedAt: null });
     expect(analyticsAllowed()).toBe(false);
     expect(window.localStorage.getItem(CONSENT_KEY)).toBeNull();
   });
@@ -104,9 +107,14 @@ describe('persisting the choice', () => {
       () => FIXED,
     );
     expect(store.setAnalytics(true)).toBe(true);
-    expect(get(store)).toEqual({ analytics: true, updatedAt: '2026-11-09T12:30:00.000Z' });
+    expect(get(store)).toEqual({
+      analytics: true,
+      sound: false,
+      updatedAt: '2026-11-09T12:30:00.000Z',
+    });
     expect(JSON.parse(storage.getItem(CONSENT_KEY) ?? '')).toEqual({
       analytics: true,
+      sound: false,
       updatedAt: '2026-11-09T12:30:00.000Z',
     });
   });
@@ -128,7 +136,11 @@ describe('persisting the choice', () => {
     );
     store.setAnalytics(true);
     expect(store.setAnalytics(false)).toBe(true);
-    expect(get(store)).toEqual({ analytics: false, updatedAt: '2026-11-09T12:30:00.000Z' });
+    expect(get(store)).toEqual({
+      analytics: false,
+      sound: false,
+      updatedAt: '2026-11-09T12:30:00.000Z',
+    });
     expect(get(createConsentStore(() => storage)).analytics).toBe(false);
   });
 
@@ -171,7 +183,7 @@ describe('persisting the choice', () => {
     );
     store.setAnalytics(true);
     store.reset();
-    expect(get(store)).toEqual({ analytics: false, updatedAt: null });
+    expect(get(store)).toEqual({ analytics: false, sound: false, updatedAt: null });
     expect(storage.getItem(CONSENT_KEY)).toBeNull();
   });
 
@@ -184,6 +196,92 @@ describe('persisting the choice', () => {
     expect(get(store).analytics).toBe(false);
     expect(store.setAnalytics(true)).toBe(true);
     expect(get(createConsentStore(() => storage)).analytics).toBe(true);
+  });
+});
+
+describe('the sound preference (opt-in, off by default)', () => {
+  it('is off on a fresh device and for a stored value without it, and only a literal true turns it on', () => {
+    expect(get(createConsentStore(() => memoryStorage())).sound).toBe(false);
+    expect(soundAllowed()).toBe(false);
+    expect(parseConsent('{"analytics":true}').sound).toBe(false);
+    for (const value of ['1', '"true"', '"yes"', '"on"', '{}', 'null', '[true]', '0']) {
+      expect(parseConsent(`{"sound":${value}}`).sound, value).toBe(false);
+    }
+    expect(parseConsent('{"sound":true}').sound).toBe(true);
+  });
+
+  it('is saved under mergescape.consent and remembered by a store created later (a reload)', () => {
+    const storage = memoryStorage();
+    const store = createConsentStore(
+      () => storage,
+      () => FIXED,
+    );
+    expect(store.setSound(true)).toBe(true);
+    expect(get(store).sound).toBe(true);
+    expect(JSON.parse(storage.getItem(CONSENT_KEY) ?? '').sound).toBe(true);
+    expect(get(createConsentStore(() => storage)).sound).toBe(true);
+    expect(store.setSound(false)).toBe(true);
+    expect(get(createConsentStore(() => storage)).sound).toBe(false);
+  });
+
+  it('does not touch the analytics choice or its date, and the analytics choice does not touch it', () => {
+    const storage = memoryStorage();
+    const store = createConsentStore(
+      () => storage,
+      () => FIXED,
+    );
+    store.setAnalytics(true);
+    store.setSound(true);
+    expect(get(store)).toEqual({
+      analytics: true,
+      sound: true,
+      updatedAt: '2026-11-09T12:30:00.000Z',
+    });
+    store.setAnalytics(false);
+    expect(get(store)).toEqual({
+      analytics: false,
+      sound: true,
+      updatedAt: '2026-11-09T12:30:00.000Z',
+    });
+    const later = createConsentStore(
+      () => storage,
+      () => new Date('2026-12-01T00:00:00.000Z'),
+    );
+    later.setSound(false);
+    expect(get(later)).toEqual({
+      analytics: false,
+      sound: false,
+      updatedAt: '2026-11-09T12:30:00.000Z',
+    });
+  });
+
+  it('is reset to off with everything else, and soundAllowed follows the shared store', () => {
+    expect(consent.setSound(true)).toBe(true);
+    expect(soundAllowed()).toBe(true);
+    consent.reset();
+    expect(soundAllowed()).toBe(false);
+    expect(window.localStorage.getItem(CONSENT_KEY)).toBeNull();
+  });
+
+  it('changes for the screen but is not saved when storage is blocked', () => {
+    const store = createConsentStore(
+      () => undefined,
+      () => FIXED,
+    );
+    const seen: boolean[] = [];
+    const stop = store.subscribe((value) => seen.push(value.sound));
+    expect(store.setSound(true)).toBe(false);
+    expect(seen).toEqual([false, true]);
+    stop();
+    expect(get(store).sound).toBe(false);
+  });
+
+  it('survives a setItem that throws and reports it', () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+    expect(createConsentStore(() => storage).setSound(true)).toBe(false);
   });
 });
 
@@ -208,7 +306,7 @@ describe('when storage is blocked (private windows, blocked site data)', () => {
       throw new Error('SecurityError');
     };
     const store = createConsentStore(() => storage);
-    expect(get(store)).toEqual({ analytics: false, updatedAt: null });
+    expect(get(store)).toEqual({ analytics: false, sound: false, updatedAt: null });
   });
 
   it('survives a setItem that throws (quota, blocked) and reports it', () => {
@@ -242,7 +340,7 @@ describe('when storage is blocked (private windows, blocked site data)', () => {
     vi.spyOn(globalThis, 'localStorage', 'get').mockImplementation(() => {
       throw new Error('SecurityError');
     });
-    expect(get(consent)).toEqual({ analytics: false, updatedAt: null });
+    expect(get(consent)).toEqual({ analytics: false, sound: false, updatedAt: null });
     expect(consent.setAnalytics(true)).toBe(false);
     expect(() => consent.reset()).not.toThrow();
     expect(analyticsAllowed()).toBe(false);

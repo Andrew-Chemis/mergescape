@@ -2,6 +2,7 @@
   import { mogulDefinition } from '@mergescape/shared';
   import type { MogulId } from '@mergescape/shared';
   import { prefersReducedMotion } from '../motion';
+  import { playCue } from '../sound';
   import { MONSTER_SPRITE } from '../sprites';
   import Sprite from './Sprite.svelte';
 
@@ -21,13 +22,24 @@
    * - `rise`: the Mogul climbs up from behind the node in a few pixel steps
    * - `fade`: prefers-reduced-motion, the same moment as a single fade-in
    */
+  /** A click on the stage ends the moment at once (game-design.md section 3: every moment is skippable). */
+  let skipped = $state(false);
   const motion = $derived<'still' | 'rise' | 'fade'>(
-    play ? (prefersReducedMotion() ? 'fade' : 'rise') : 'still',
+    play && !skipped ? (prefersReducedMotion() ? 'fade' : 'rise') : 'still',
   );
+
+  // The Mogul's arrival has its own cue (opt-in sound), once per reveal and not when it is skipped.
+  $effect(() => {
+    if (motion !== 'still') {
+      playCue('mogul');
+    }
+  });
 </script>
 
 <div class="reveal" data-motion={motion}>
-  <div class="stage">
+  <!-- Pointer users can click to skip; the moment is decoration, so the keyboard has nothing to skip. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="stage" onclick={() => (skipped = true)}>
     <span class="rise"><Sprite name={MONSTER_SPRITE[mogul]} scale={6} /></span>
     <div class="node">
       <span class="act-name"

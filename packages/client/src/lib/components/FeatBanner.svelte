@@ -1,5 +1,7 @@
 <script lang="ts">
   import { featName, featRewardText } from '../depth';
+  import { prefersReducedMotion } from '../motion';
+  import { playCue } from '../sound';
 
   interface Props {
     /** Feat ids unlocked and not yet dismissed. */
@@ -8,13 +10,22 @@
   }
 
   let { ids, onDismiss }: Props = $props();
+
+  /** Read once, when the banner appears: it drops in, or under reduced motion only fades in. */
+  const motion = prefersReducedMotion() ? 'fade' : 'slide';
+
+  // A cue for the banner, and again when a further Feat joins it while it is still up (opt-in sound).
+  $effect(() => {
+    void ids.join(',');
+    playCue('feat');
+  });
 </script>
 
 <!--
-  Game-design.md section 9, moment 4: a banner across the top of Town that stays until it is clicked.
-  It is a plain status message, so it needs no animation and nothing to fall back to.
+  Game-design.md section 9, moment 4: a banner across the top of Town that stays until it is clicked. It is
+  a plain status message: the text is there at once and the entrance is only decoration.
 -->
-<section class="banner" role="status" aria-label="Feat unlocked">
+<section class="banner" data-motion={motion} role="status" aria-label="Feat unlocked">
   <div class="text">
     <h2>{ids.length === 1 ? 'Feat unlocked' : `${ids.length} Feats unlocked`}</h2>
     <ul>
@@ -27,7 +38,7 @@
     </ul>
   </div>
   <div class="row actions">
-    <a class="btn small" href="#/feats">See your Feats</a>
+    <a class="btn small" href="#/feats" onclick={onDismiss}>See your Feats</a>
     <button type="button" class="btn small primary" onclick={onDismiss}>Dismiss</button>
   </div>
 </section>
@@ -43,6 +54,34 @@
     background: linear-gradient(var(--act-now), var(--bg2));
     border: 3px solid var(--gold);
     box-shadow: 4px 4px 0 #000;
+    animation: banner-fade 300ms linear both;
+  }
+
+  @keyframes banner-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes banner-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    /* steps() keeps the drop in whole pixels, like the sprites */
+    .banner[data-motion='slide'] {
+      animation: banner-drop 450ms steps(6, end) both;
+    }
   }
 
   h2 {

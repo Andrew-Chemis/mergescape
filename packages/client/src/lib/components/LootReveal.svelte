@@ -2,6 +2,7 @@
   import type { LootItem } from '@mergescape/shared';
   import { lootCaption, lootKindLabel, lootRarity, lootSpoken, lootTitle } from '../depth';
   import { prefersReducedMotion } from '../motion';
+  import { playCue, soundOn } from '../sound';
   import GearSprite from './GearSprite.svelte';
 
   interface Props {
@@ -15,9 +16,28 @@
 
   let { loot, play = true }: Props = $props();
 
-  /** The gap between one card turning and the next, and how long one turn takes. */
-  const STEP_MS = 380;
+  /**
+   * How long one card takes to turn, the most the gap between two cards may be, and how long the whole flip
+   * may last: game-design.md section 6.2 calls the reveal a two-second flip of 3 to 6 cards, so the gap
+   * shrinks as the haul grows (380 ms for 3 or 4 cards, about 300 ms for 6) and the last card has turned by
+   * the two-second mark.
+   */
   const FLIP_MS = 520;
+  const MAX_STEP_MS = 380;
+  const REVEAL_MS = 2000;
+  /** How long the border glint of a rare card lasts, after it is face up. */
+  const GLINT_MS = 800;
+
+  const stepMs = $derived(
+    loot.length > 1
+      ? Math.min(MAX_STEP_MS, Math.floor((REVEAL_MS - FLIP_MS) / (loot.length - 1)))
+      : 0,
+  );
+
+  const glints = (item: LootItem): boolean => {
+    const rarity = lootRarity(item);
+    return rarity === 'rare' || rarity === 'legendary';
+  };
 
   let finished = $state(false);
   let skipped = $state(false);
@@ -35,11 +55,30 @@
     if (motion === 'still') {
       return;
     }
-    const total = motion === 'flip' ? loot.length * STEP_MS + FLIP_MS + 900 : 700;
-    const timer = setTimeout(() => {
-      finished = true;
-    }, total);
-    return () => clearTimeout(timer);
+    const total = motion === 'flip' ? (loot.length - 1) * stepMs + FLIP_MS + GLINT_MS + 100 : 700;
+    const timers = [
+      setTimeout(() => {
+        finished = true;
+      }, total),
+    ];
+    // Opt-in sound follows the cards: a chirp as each turns, a sparkle as a rare one lands. Skipping, or
+    // finishing, clears these with the rest. Under reduced motion there is one chirp for the one fade.
+    if (soundOn()) {
+      if (motion === 'flip') {
+        loot.forEach((item, index) => {
+          timers.push(setTimeout(() => playCue('lootFlip'), index * stepMs + FLIP_MS / 2));
+          if (glints(item)) {
+            timers.push(setTimeout(() => playCue('lootGlint'), index * stepMs + FLIP_MS));
+          }
+        });
+      } else {
+        playCue('lootFlip');
+        if (loot.some(glints)) {
+          timers.push(setTimeout(() => playCue('lootGlint'), 250));
+        }
+      }
+    }
+    return () => timers.forEach(clearTimeout);
   });
 
   const summary = $derived(
@@ -47,17 +86,19 @@
   );
 </script>
 
-<div class="reveal" data-motion={motion}>
+<div
+  class="reveal"
+  data-motion={motion}
+  style:--step="{stepMs}ms"
+  style:--turn="{FLIP_MS}ms"
+  style:--glint-ms="{GLINT_MS}ms"
+>
   <ol class="cards-row" aria-label="Haul">
     {#each loot as item, index (index)}
       {@const rarity = lootRarity(item)}
       <li class="slot" style:--i={index}>
         <span class="back" aria-hidden="true"><span class="mark">?</span></span>
-        <article
-          class="card {rarity}"
-          class:glint={rarity === 'rare' || rarity === 'legendary'}
-          aria-label={lootSpoken(item)}
-        >
+        <article class="card {rarity}" class:glint={glints(item)} aria-label={lootSpoken(item)}>
           <span class="rar">{lootKindLabel(item)}</span>
           <div class="icon">
             {#if item.kind === 'gear' || item.kind === 'unique'}
@@ -213,6 +254,24 @@
       0 0 14px 2px rgba(242, 193, 78, 0.45);
   }
 
+  .card.glint {
+    --glint: var(--rar-rare);
+  }
+
+  .card.glint.legendary {
+    --glint: var(--gold);
+  }
+
+  /* The border lights up once, in the card's own colour, and settles back (game-design.md section 9). */
+  @keyframes border-glint {
+    40% {
+      border-color: #fff;
+      box-shadow:
+        4px 4px 0 #000,
+        0 0 14px 3px var(--glint);
+    }
+  }
+
   @keyframes turn-away {
     from {
       transform: scaleX(1);
@@ -261,18 +320,27 @@
     .reveal[data-motion='flip'] .back {
       display: grid;
       animation: turn-away calc(var(--turn, 520ms) / 2) steps(5, end) both;
-      animation-delay: calc(var(--i) * 380ms);
+      animation-delay: calc(var(--i) * var(--step, 380ms));
       transform-origin: center;
     }
 
     .reveal[data-motion='flip'] .card {
       animation: turn-up calc(var(--turn, 520ms) / 2) steps(5, end) both;
-      animation-delay: calc(var(--i) * 380ms + var(--turn, 520ms) / 2);
+      animation-delay: calc(var(--i) * var(--step, 380ms) + var(--turn, 520ms) / 2);
+    }
+
+    .reveal[data-motion='flip'] .card.glint {
+      animation:
+        turn-up calc(var(--turn, 520ms) / 2) steps(5, end) both,
+        border-glint var(--glint-ms, 800ms) ease-out both;
+      animation-delay:
+        calc(var(--i) * var(--step, 380ms) + var(--turn, 520ms) / 2),
+        calc(var(--i) * var(--step, 380ms) + var(--turn, 520ms));
     }
 
     .reveal[data-motion='flip'] .glint::after {
       animation: glint 800ms ease-out both;
-      animation-delay: calc(var(--i) * 380ms + var(--turn, 520ms));
+      animation-delay: calc(var(--i) * var(--step, 380ms) + var(--turn, 520ms));
     }
   }
 </style>

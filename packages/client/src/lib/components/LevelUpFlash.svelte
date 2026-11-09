@@ -3,6 +3,7 @@
   import { LEVEL_UP_MS, prefersReducedMotion } from '../motion';
   import { SKILL_COLOR_VAR } from '../names';
   import type { LevelUp } from '../session.svelte';
+  import { playCue } from '../sound';
 
   interface Props {
     levelUp: LevelUp;
@@ -20,16 +21,28 @@
 
   $effect(() => {
     void levelUp.id;
+    playCue('levelUp');
     const timer = setTimeout(onDone, LEVEL_UP_MS);
     return () => clearTimeout(timer);
   });
+
+  /** Skippable like every moment: Escape ends it at once. */
+  function onKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      onDone();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="flash" class:reduced role="status" data-level={levelUp.level}>
   {#if !reduced}
     <div class="wash" style:--flash={color} aria-hidden="true"></div>
   {/if}
-  <div class="message" style:--flash={color}>
+  <!-- Pointer users can click the message to dismiss it; the keyboard has Escape (above). -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="message" style:--flash={color} onclick={onDone}>
     <p class="title">Level up!</p>
     <p class="level num">Level {levelUp.level}</p>
     {#if levelUp.skill}
@@ -42,7 +55,7 @@
 </div>
 
 <style>
-  /* Never traps focus or clicks: it is a notice, not a dialog. */
+  /* Never traps focus or clicks (only the message itself takes one, to dismiss it): a notice, not a dialog. */
   .flash {
     position: fixed;
     inset: 0;
@@ -68,7 +81,9 @@
     box-shadow:
       0 0 0 3px #000,
       6px 6px 0 #000;
-    animation: message-fade 2.4s ease-out both;
+    animation: message-fade 2s ease-out both;
+    pointer-events: auto;
+    cursor: pointer;
   }
 
   .title {
@@ -128,7 +143,7 @@
     .message {
       animation:
         message-pop 0.3s ease-out both,
-        message-fade 2.4s ease-out both;
+        message-fade 2s ease-out both;
     }
   }
 </style>

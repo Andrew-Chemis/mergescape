@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { fixtureLogEntries } from '../fixtures/state';
+import { cuesHeard, soundOnAfterGesture, stubAudio, tickSteps } from '../../test/audio';
 import { mockReducedMotion } from '../../test/helpers';
 import { TICKER_TOTAL_MS } from '../motion';
 import type { LogEntry } from '../types';
@@ -121,6 +122,55 @@ describe('ScoreTicker', () => {
 
     unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('is silent, and makes no audio object, while sound is off', async () => {
+    vi.useFakeTimers();
+    const audio = stubAudio();
+    render(ScoreTicker, { entry });
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(audio.contexts).toHaveLength(0);
+  });
+
+  it('ticks as each term lands, each a little higher than the last, when sound is on', async () => {
+    vi.useFakeTimers();
+    const audio = soundOnAfterGesture();
+    render(ScoreTicker, { entry });
+    expect(tickSteps(audio)).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(tickSteps(audio)).toEqual([0, 2]);
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(tickSteps(audio)).toEqual([0, 2, 4, 7]);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(cuesHeard(audio)).toEqual(['tick', 'tick', 'tick', 'tick']);
+    // Sound adds no timers: the roll's own four are all there is.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops ticking when it is skipped', async () => {
+    vi.useFakeTimers();
+    const audio = soundOnAfterGesture();
+    render(ScoreTicker, { entry });
+    await fireEvent.click(ticker());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(cuesHeard(audio)).toEqual(['tick']);
+  });
+
+  it('is one soft tick, not a climb, under prefers-reduced-motion', async () => {
+    vi.useFakeTimers();
+    mockReducedMotion(true);
+    const audio = soundOnAfterGesture();
+    render(ScoreTicker, { entry });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(tickSteps(audio)).toEqual([7]);
+  });
+
+  it('does not tick for a row that is only shown, not rolled', () => {
+    vi.useFakeTimers();
+    const audio = soundOnAfterGesture();
+    render(ScoreTicker, { entry, animate: false });
+    expect(audio.oscillators()).toHaveLength(0);
   });
 
   it('draws the same lines as the Combat Log expansion', () => {
