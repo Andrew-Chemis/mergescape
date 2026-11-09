@@ -176,15 +176,15 @@ describe('a rollover that fails for one profile', () => {
         error: 'ProvisionedThroughputExceededException',
       }),
     ]);
-    expect((await g.db.getWeek(AUTHOR_ID, '2026-47'))?.weekKey).toBe('2026-47');
-    expect((await g.db.getWeek(MERGER_ID, '2026-47'))?.weekKey).toBe('2026-47');
-    expect(await g.db.getWeek(REVIEWER_ID, '2026-47')).toBeNull();
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-47'))?.run.weekKey).toBe('2026-47');
+    expect((await g.db.getWeekItem(MERGER_ID, '2026-47'))?.run.weekKey).toBe('2026-47');
+    expect(await g.db.getWeekItem(REVIEWER_ID, '2026-47')).toBeNull();
     const seeds = [AUTHOR_ID, MERGER_ID].map((id) => g.fake.peek(`USER#${id}`, 'WEEK#2026-47'));
 
     // The retry (EventBridge invokes asynchronously) finishes the straggler and touches no one else.
     g.intercept.api = undefined;
     await expect(g.rollover()).resolves.toEqual({ statusCode: 200, processed: 3 });
-    expect(await g.db.getWeek(REVIEWER_ID, '2026-47')).not.toBeNull();
+    expect(await g.db.getWeekItem(REVIEWER_ID, '2026-47')).not.toBeNull();
     expect([AUTHOR_ID, MERGER_ID].map((id) => g.fake.peek(`USER#${id}`, 'WEEK#2026-47'))).toEqual(
       seeds,
     );

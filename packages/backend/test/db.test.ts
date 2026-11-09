@@ -7,7 +7,7 @@ import {
   OAUTH_STATE_TTL_SECONDS,
   VersionConflictError,
 } from '../src/db';
-import type { EventRow } from '../src/db';
+import type { Db, EventRow } from '../src/db';
 import { deliveryKey, prMetaKey, profileKey } from '../src/keys';
 import { ALLOWED_ATTRIBUTES, assertItemAllowed, SchemaViolationError } from '../src/schema';
 import { auditSchema, makeDb } from './support';
@@ -540,12 +540,15 @@ describe('weekly run', () => {
     };
   }
 
+  const getRun = async (db: Db): Promise<RunState | null> =>
+    (await db.getWeekItem(USER, '2026-46'))?.run ?? null;
+
   it('creates once, reads back, adds weekly XP atomically and sets or removes fields', async () => {
     const { fake, db } = makeDb();
-    expect(await db.getWeek(USER, '2026-46')).toBeNull();
+    expect(await getRun(db)).toBeNull();
     expect(await db.createWeek(USER, run())).toBe(true);
     expect(await db.createWeek(USER, run({ weeklyXp: 99 }))).toBe(false);
-    expect(await db.getWeek(USER, '2026-46')).toEqual(run());
+    expect(await getRun(db)).toEqual(run());
 
     expect(await db.updateWeek(USER, '2026-46', { addWeeklyXp: 500 })).toBe(true);
     expect(await db.updateWeek(USER, '2026-46', { addWeeklyXp: 250 })).toBe(true);
@@ -554,7 +557,7 @@ describe('weekly run', () => {
         set: { act: 'raid', clearedActs: ['scout'], shopSeed: 7 },
       }),
     ).toBe(true);
-    expect(await db.getWeek(USER, '2026-46')).toMatchObject({
+    expect(await getRun(db)).toMatchObject({
       weeklyXp: 750,
       act: 'raid',
       clearedActs: ['scout'],
@@ -562,7 +565,7 @@ describe('weekly run', () => {
     });
 
     expect(await db.updateWeek(USER, '2026-46', { set: { act: null } })).toBe(true);
-    expect((await db.getWeek(USER, '2026-46'))?.act).toBeNull();
+    expect((await getRun(db))?.act).toBeNull();
     expect(fake.snapshot()[0]).not.toHaveProperty('act');
     auditSchema(fake);
   });
@@ -588,7 +591,7 @@ describe('weekly run', () => {
       rerolls: 1,
     };
     await db.createWeek(USER, run({ shop }));
-    expect((await db.getWeek(USER, '2026-46'))?.shop).toEqual(shop);
+    expect((await getRun(db))?.shop).toEqual(shop);
   });
 });
 

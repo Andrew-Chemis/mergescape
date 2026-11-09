@@ -53,6 +53,7 @@ import type {
 import { applyFeats, settleWorld, writeFeats } from './feat-flow';
 import type { Logger } from './log';
 import type { MetricName, Metrics } from './metrics';
+import { RETRY, versionedWrite, withVersionRetry } from './optimistic';
 import { buildPRState } from './pr-state';
 import { depthPatch, scorerStateOf, toPlayerState } from './player';
 import { loadCurrent } from './runs';
@@ -76,11 +77,8 @@ export interface IngestContext {
 
 export type ProcessOutcome = 'processed' | 'duplicate' | 'dropped';
 
-/** Optimistic-lock retries per credited event before giving up (and failing the delivery). */
-const MAX_CREDIT_ATTEMPTS = 5;
-
 /** Event kinds that can earn points; the others only maintain PR counters. */
-const SCORING_KINDS: ReadonlySet<string> = new Set([
+const SCORING_KINDS: ReadonlySet<GameEvent['kind']> = new Set<GameEvent['kind']>([
   'pr_opened',
   'pr_merged',
   'review_submitted',
@@ -500,7 +498,8 @@ async function credit(
   now: number,
 ): Promise<void> {
   const runContext: RunContext = { db: ctx.db, now, newSeed: ctx.newSeed ?? randomSeed };
-  for (let attempt = 0; attempt < MAX_CREDIT_ATTEMPTS; attempt += 1) {
+  // Optimistic-lock retries per credited event; when they run out the delivery fails.
+  const credited = await withVersionRetry<void>(async () => {
     const current = await loadCurrent(runContext, userId);
     if (!current) {
       return;
@@ -530,17 +529,15 @@ async function credit(
     }
     const depth = depthPatch(player, after);
     if (result.xp > 0 || changesProfile(result) || Object.keys(depth).length > 0) {
-      try {
-        await ctx.db.applyScore(
+      const written = await versionedWrite(() =>
+        ctx.db.applyScore(
           userId,
           profile.version,
           scoreWrite(profile, run.weekKey, player, after, result, now, depth),
-        );
-      } catch (error) {
-        if (error instanceof VersionConflictError) {
-          continue;
-        }
-        throw error;
+        ),
+      );
+      if (!written) {
+        return RETRY;
       }
       progress.committed = true;
       const source = creditSuffix(event, deliveryId);
@@ -557,9 +554,10 @@ async function credit(
       await ctx.db.putEvent(row);
       ctx.metrics.count('events_scored');
     }
-    return;
+  });
+  if (credited === RETRY) {
+    throw new VersionConflictError();
   }
-  throw new VersionConflictError();
 }
 
 /** An event replayed from history never counts toward a Feat or starts an expedition (Requirement 17.6). */
@@ -581,10 +579,10 @@ async function recordDepth(
   now: number,
 ): Promise<void> {
   try {
-    await writeFeats(ctx.db, userId, unlocked, now, source);
-    if (onboarding !== null) {
-      await ctx.db.putExpedition(userId, onboarding);
-    }
+    await Promise.all([
+      writeFeats(ctx.db, userId, unlocked, now, source),
+      onboarding !== null ? ctx.db.putExpedition(userId, onboarding) : null,
+    ]);
   } catch (error) {
     ctx.log.error('ingest.depth_records_failed', { userId }, error);
   }

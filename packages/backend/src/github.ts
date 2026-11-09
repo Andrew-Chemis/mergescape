@@ -3,6 +3,8 @@
  * `GET /user`, `GET /user/installations`. The user access token lives only inside `signInWithCode`: it is
  * a local variable, never returned, stored or logged (Requirement 2.2). `fetch` is injected for tests.
  */
+import { isRecord } from '@mergescape/shared';
+import { GITHUB_LOGIN } from './keys';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -30,7 +32,6 @@ const API = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 3000;
 const PAGE_SIZE = 100;
 const MAX_INSTALLATION_PAGES = 3;
-const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 /** Where the browser is sent to approve the App. The App's configured callback URL receives the code. */
 export function authorizeUrl(clientId: string, state: string): string {
@@ -38,10 +39,6 @@ export function authorizeUrl(clientId: string, state: string): string {
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('state', state);
   return url.toString();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function request(
@@ -111,7 +108,7 @@ export async function signInWithCode(
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || typeof login !== 'string') {
     throw new SignInError('rejected');
   }
-  if (user.type !== 'User' || !LOGIN.test(login)) {
+  if (user.type !== 'User' || !GITHUB_LOGIN.test(login)) {
     throw new SignInError('not_a_user');
   }
 

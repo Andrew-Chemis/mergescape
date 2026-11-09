@@ -329,7 +329,7 @@ describe('the Monday rollover', () => {
 
     const done = await g.db.getProfile(AUTHOR_ID, true);
     expect(done?.runWeek).toBe('2026-47');
-    expect((await g.db.getWeek(AUTHOR_ID, '2026-47'))?.shopSeed).toBe(21);
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-47'))?.run.shopSeed).toBe(21);
     // The same plan as the one that made the week: the Mogul bag moved on exactly once.
     expect(done?.mogulBag).toEqual(started.player.moguls.bag);
     expect(done?.streakWeeks).toBe(1);

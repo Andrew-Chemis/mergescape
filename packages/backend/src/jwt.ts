@@ -3,11 +3,12 @@
  * every verification, `sub` the numeric GitHub id as a string. The key comes from SSM (see `secrets.ts`)
  * and is passed in, so a rotation takes effect on the next cache refresh without a redeploy.
  */
+import { WEEK_MS } from '@mergescape/shared';
 import { errors, jwtVerify, SignJWT } from 'jose';
 
 export const JWT_ISSUER = 'mergescape';
 export const JWT_AUDIENCE = 'mergescape-client';
-export const JWT_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const JWT_TTL_SECONDS = WEEK_MS / 1000;
 /** HS256 wants a key at least as long as its 256-bit output. */
 export const MIN_KEY_BYTES = 32;
 

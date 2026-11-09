@@ -20,11 +20,15 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
+  DAY_MS,
   emptySatchel,
   emptySkillXp,
+  isRecord,
   MATERIAL_KINDS,
+  MINUTE_MS,
   SKILLS,
   starterDeck,
+  WEEK_MS,
 } from '@mergescape/shared';
 import type {
   ActId,
@@ -62,11 +66,13 @@ import {
   inlineKey,
   installKey,
   jobKey,
+  loginPk,
   prMetaKey,
   prPk,
   profileKey,
   reviewKey,
   stateKey,
+  userIdFromPk,
   userPk,
   weekKeyOf,
 } from './keys';
@@ -83,14 +89,14 @@ type Attrs = Record<string, unknown>;
 // Constants (infrastructure, not game rules)
 // ---------------------------------------------------------------------------------------------
 
-/** Requirement 1.6: dedupe records expire after 7 days. */
-export const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
-/** Requirement 2.1: the OAuth state nonce expires after 10 minutes. */
-export const OAUTH_STATE_TTL_SECONDS = 10 * 60;
-/** research.md section 6: scored event rows (the Combat Log) expire after 90 days. */
-export const EVENT_TTL_SECONDS = 90 * 24 * 60 * 60;
-
 const seconds = (ms: number): number => Math.floor(ms / 1000);
+
+/** Requirement 1.6: dedupe records expire after 7 days. */
+export const DELIVERY_TTL_SECONDS = seconds(WEEK_MS);
+/** Requirement 2.1: the OAuth state nonce expires after 10 minutes. */
+export const OAUTH_STATE_TTL_SECONDS = seconds(10 * MINUTE_MS);
+/** research.md section 6: scored event rows (the Combat Log) expire after 90 days. */
+export const EVENT_TTL_SECONDS = seconds(90 * DAY_MS);
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -399,11 +405,12 @@ function list<T>(value: unknown): T[] {
 }
 
 function record<T>(value: unknown): Record<string, T> {
-  return isPlainRecord(value) ? (value as Record<string, T>) : {};
+  return isRecord(value) ? (value as Record<string, T>) : {};
 }
 
-function isPlainRecord(value: unknown): value is Attrs {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/** The player id in an item's `USER#<id>` partition key (NaN on a key that is not one: no reader meets it). */
+function userIdOf(item: Attrs): number {
+  return userIdFromPk(String(item.PK)) ?? Number.NaN;
 }
 
 /** A copy that is safe to marshal: no `undefined` members anywhere (the marshaller rejects them). */
@@ -419,7 +426,7 @@ function plain(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(plain);
   }
-  if (isPlainRecord(value)) {
+  if (isRecord(value)) {
     return Object.fromEntries(Object.entries(value).map(([name, entry]) => [name, plain(entry)]));
   }
   return value;
@@ -476,13 +483,12 @@ const SKILL_ATTRIBUTE: Readonly<Record<Skill, string>> = {
 };
 
 function toProfile(item: Attrs): ProfileItem {
-  const pk = String(item.PK);
   const skillXp = emptySkillXp();
   for (const skill of SKILLS) {
     skillXp[skill] = num(item, SKILL_ATTRIBUTE[skill], 0);
   }
   return {
-    id: Number(pk.slice('USER#'.length)),
+    id: userIdOf(item),
     login: str(item, 'login') ?? '',
     created: str(item, 'created') ?? '',
     installations: numberList(item.installations),
@@ -502,7 +508,7 @@ function toProfile(item: Attrs): ProfileItem {
     charms: list<Charm>(item.charms),
     repoMerges: record<number>(item.repo_merges),
     mogulBag: list<MogulId>(item.mogul_bag),
-    mogulBenched: isPlainRecord(item.mogul_benched)
+    mogulBenched: isRecord(item.mogul_benched)
       ? (item.mogul_benched as unknown as BenchedCharm)
       : null,
     mogulBoardWeek: str(item, 'mogul_board_week'),
@@ -512,9 +518,7 @@ function toProfile(item: Attrs): ProfileItem {
     firstSeen: record<string>(item.first_seen),
     weekState: toWeekState(item),
     satchel: toSatchel(item.satchel),
-    expedition: isPlainRecord(item.expedition)
-      ? (item.expedition as unknown as ExpeditionState)
-      : null,
+    expedition: isRecord(item.expedition) ? (item.expedition as unknown as ExpeditionState) : null,
     inventory: list<GearPiece>(item.inventory),
     gear: toGear(item.gear),
     pets: Array.isArray(item.pets) ? stringList(item.pets) : null,
@@ -525,7 +529,7 @@ function toProfile(item: Attrs): ProfileItem {
     featsUnlocked: stringList(item.feats_unlocked),
     titles: stringList(item.titles),
     pinnedFeats: stringList(item.pinned_feats),
-    featCounters: isPlainRecord(item.feat_counters)
+    featCounters: isRecord(item.feat_counters)
       ? (item.feat_counters as unknown as FeatCounters)
       : null,
     oldCoin: bool(item, 'old_coin', false),
@@ -542,7 +546,7 @@ function stringList(value: unknown): string[] {
 
 /** All ten satchel counts; an absent or damaged count reads as zero. */
 function toSatchel(value: unknown): Satchel {
-  const stored = isPlainRecord(value) ? value : {};
+  const stored = isRecord(value) ? value : {};
   const satchel = emptySatchel();
   for (const kind of MATERIAL_KINDS) {
     satchel[kind] = Math.max(0, Math.floor(num(stored, kind, 0)));
@@ -551,12 +555,12 @@ function toSatchel(value: unknown): Satchel {
 }
 
 function toGear(value: unknown): ProfileItem['gear'] {
-  const stored = isPlainRecord(value) ? value : {};
+  const stored = isRecord(value) ? value : {};
   return { pieces: list<GearPiece>(stored.pieces), capeColor: str(stored, 'capeColor') };
 }
 
 function toForge(value: unknown): ForgeState {
-  const stored = isPlainRecord(value) ? value : {};
+  const stored = isRecord(value) ? value : {};
   return {
     stations: record<ForgeJob>(stored.stations) as ForgeState['stations'],
     upgrades: stringList(stored.upgrades) as ForgeState['upgrades'],
@@ -590,7 +594,7 @@ function toEventRow(item: Attrs): StoredEventRow {
   const inlineComments = numOrNull(item, 'inline_comments');
   return {
     id: String(item.SK).slice(EVENT_SK_PREFIX.length),
-    userId: Number(String(item.PK).slice('USER#'.length)),
+    userId: userIdOf(item),
     ts: str(item, 'ts') ?? '',
     deliveryId: str(item, 'delivery_id') ?? '',
     kind: str(item, 'kind') ?? '',
@@ -671,6 +675,21 @@ export interface ConditionSpec {
   names?: Record<string, string>;
   values?: Record<string, unknown>;
 }
+
+/** Holds when the item is already stored. */
+const ITEM_EXISTS: ConditionSpec = { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } };
+/** Holds when nothing is stored under the key yet. */
+const ITEM_ABSENT: ConditionSpec = {
+  expression: 'attribute_not_exists(#c0)',
+  names: { '#c0': 'PK' },
+};
+
+/** Holds when the item is not stored or its `collected` flag is `collected`. */
+const missingOrCollected = (collected: boolean): ConditionSpec => ({
+  expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
+  names: { '#c0': 'PK', '#c1': 'collected' },
+  values: { ':c0': collected },
+});
 
 function buildUpdate(ops: UpdateOps): {
   expression: string;
@@ -892,6 +911,22 @@ export class Db {
     return output.Attributes as Attrs | undefined;
   }
 
+  /**
+   * Run a write that carries a condition: true when it applied, false when the condition failed (nothing
+   * changed), any other error rethrown. The shape of every "once only" and "only if unchanged" write.
+   */
+  private async conditionalWrite(write: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await write();
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   private async getItem(key: Key, consistent: boolean): Promise<Attrs | undefined> {
     const output = await this.client.send(
       new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: consistent }),
@@ -943,7 +978,7 @@ export class Db {
     const installationIds = [...new Set(input.installations)];
     const set: Attrs = {
       login: input.login,
-      GSI1PK: `LOGIN#${input.login.toLowerCase()}`,
+      GSI1PK: loginPk(input.login),
       GSI1SK: userPk(input.id),
     };
     if (installationIds.length > 0) {
@@ -973,20 +1008,14 @@ export class Db {
 
   /** Add an installation id to an existing profile (no-op, returns false, when there is no profile). */
   async addProfileInstallation(userId: number, installationId: number): Promise<boolean> {
-    try {
-      await this.update(
+    return this.conditionalWrite(() =>
+      this.update(
         'PROFILE',
         profileKey(userId),
         { add: { installations: new Set([installationId]) } },
-        { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+        ITEM_EXISTS,
+      ),
+    );
   }
 
   /**
@@ -1044,17 +1073,15 @@ export class Db {
     expectedVersion: number,
     extra?: ConditionSpec,
   ): Promise<void> {
-    try {
-      await this.update('PROFILE', profileKey(userId), ops, {
+    const applied = await this.conditionalWrite(() =>
+      this.update('PROFILE', profileKey(userId), ops, {
         expression: `attribute_exists(#c0) AND #c1 = :c0${extra ? ` AND (${extra.expression})` : ''}`,
         names: { '#c0': 'PK', '#c1': 'version', ...extra?.names },
         values: { ':c0': expectedVersion, ...extra?.values },
-      });
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        throw new VersionConflictError();
-      }
-      throw error;
+      }),
+    );
+    if (!applied) {
+      throw new VersionConflictError();
     }
   }
 
@@ -1089,9 +1116,8 @@ export class Db {
         }),
       );
       for (const item of (output.Items ?? []) as Attrs[]) {
-        const pk = String(item.PK);
-        const id = pk.startsWith('USER#') ? Number(pk.slice('USER#'.length)) : Number.NaN;
-        if (Number.isSafeInteger(id)) {
+        const id = userIdFromPk(String(item.PK));
+        if (id !== null) {
           yield id;
         }
       }
@@ -1115,21 +1141,26 @@ export class Db {
         IndexName: 'GSI1',
         KeyConditionExpression: '#pk = :pk',
         ExpressionAttributeNames: { '#pk': 'GSI1PK' },
-        ExpressionAttributeValues: { ':pk': `LOGIN#${login.toLowerCase()}` },
+        ExpressionAttributeValues: { ':pk': loginPk(login) },
       }),
     );
-    const players = ((output.Items ?? []) as Attrs[])
-      .map((item) => ({
-        id: Number(String(item.PK).slice('USER#'.length)),
-        login: str(item, 'login') ?? login,
-        level: num(item, 'level', 1),
-        renown: num(item, 'renown', 0),
-        vocation: str(item, 'vocation') ?? 'Journeyman',
-        pins: stringList(item.pinned_feats),
-        coin: bool(item, 'old_coin', false),
-        badgePublic: bool(item, 'badge_public', true),
-      }))
-      .filter((player) => Number.isSafeInteger(player.id));
+    const players = ((output.Items ?? []) as Attrs[]).flatMap((item) => {
+      const id = userIdFromPk(String(item.PK));
+      return id === null
+        ? []
+        : [
+            {
+              id,
+              login: str(item, 'login') ?? login,
+              level: num(item, 'level', 1),
+              renown: num(item, 'renown', 0),
+              vocation: str(item, 'vocation') ?? 'Journeyman',
+              pins: stringList(item.pinned_feats),
+              coin: bool(item, 'old_coin', false),
+              badgePublic: bool(item, 'badge_public', true),
+            },
+          ];
+    });
     return players.reduce<BadgeProfile | null>(
       (best, player) => (best === null || player.id > best.id ? player : best),
       null,
@@ -1379,8 +1410,8 @@ export class Db {
     if (deltas.reviewRoundCount) {
       add.review_round_count = deltas.reviewRoundCount;
     }
-    try {
-      await this.update(
+    const written = await this.conditionalWrite(() =>
+      this.update(
         'PR',
         key,
         { set, add },
@@ -1391,12 +1422,10 @@ export class Db {
               names: { '#c0': 'PK', '#c1': 'merged' },
               values: { ':c0': false },
             },
-      );
+      ),
+    );
+    if (written) {
       return 'written';
-    } catch (error) {
-      if (!isConditionalCheckFailed(error)) {
-        throw error;
-      }
     }
     if (Object.keys(add).length > 0) {
       await this.update('PR', key, { add });
@@ -1525,8 +1554,8 @@ export class Db {
    * and may be claimed again, so GitHub's "Redeliver" button works after a transient error.
    */
   async claimDelivery(deliveryId: string, nowMs: number): Promise<boolean> {
-    try {
-      await this.put(
+    return this.conditionalWrite(() =>
+      this.put(
         'DELIVERY',
         deliveryKey(deliveryId),
         { ttl: seconds(nowMs) + DELIVERY_TTL_SECONDS },
@@ -1535,14 +1564,8 @@ export class Db {
           names: { '#c0': 'PK', '#c1': 'released' },
           values: { ':c0': true },
         },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+      ),
+    );
   }
 
   /** Mark a claimed delivery as failed-before-credit so a redelivery can claim it again. */
@@ -1557,7 +1580,7 @@ export class Db {
       'STATE',
       stateKey(nonce),
       { ttl: seconds(nowMs) + OAUTH_STATE_TTL_SECONDS },
-      { expression: 'attribute_not_exists(#c0)', names: { '#c0': 'PK' } },
+      ITEM_ABSENT,
     );
   }
 
@@ -1566,8 +1589,8 @@ export class Db {
    * TTL sweep is lazy, so expiry is checked in the condition rather than trusted to the sweep.
    */
   async consumeOAuthState(nonce: string, nowMs: number): Promise<boolean> {
-    try {
-      await this.client.send(
+    return this.conditionalWrite(() =>
+      this.client.send(
         new DeleteCommand({
           TableName: this.tableName,
           Key: stateKey(nonce),
@@ -1575,14 +1598,8 @@ export class Db {
           ExpressionAttributeNames: { '#pk': 'PK', '#ttl': 'ttl' },
           ExpressionAttributeValues: { ':now': seconds(nowMs) },
         }),
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+      ),
+    );
   }
 
   // ----- expeditions, Forge orders and Feats: EXPEDITION#<ts>, JOB#<station>, FEAT#<id> -----
@@ -1593,20 +1610,14 @@ export class Db {
 
   /** Record a sent expedition. False when one is already stored for that instant (a repeat of the send). */
   async putExpedition(userId: number, expedition: ExpeditionState): Promise<boolean> {
-    try {
-      await this.put(
+    return this.conditionalWrite(() =>
+      this.put(
         'EXPEDITION',
         expeditionKey(userId, new Date(expedition.sentAt).toISOString()),
         expeditionAttributes(expedition),
-        { expression: 'attribute_not_exists(#c0)', names: { '#c0': 'PK' } },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+        ITEM_ABSENT,
+      ),
+    );
   }
 
   /**
@@ -1619,30 +1630,12 @@ export class Db {
     collected: ExpeditionState,
     nowMs: number,
   ): Promise<boolean> {
-    try {
-      await this.update(
-        'EXPEDITION',
-        expeditionKey(userId, new Date(collected.sentAt).toISOString()),
-        {
-          set: {
-            ...expeditionAttributes(collected),
-            collected: true,
-            collected_at: new Date(nowMs).toISOString(),
-          },
-        },
-        {
-          expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
-          names: { '#c0': 'PK', '#c1': 'collected' },
-          values: { ':c0': false },
-        },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+    const key = expeditionKey(userId, new Date(collected.sentAt).toISOString());
+    return this.claim(
+      (ops, condition) => this.update('EXPEDITION', key, ops, condition),
+      expeditionAttributes(collected),
+      nowMs,
+    );
   }
 
   /**
@@ -1650,47 +1643,33 @@ export class Db {
    * the station's stored order is still waiting to be collected, which the profile never allows.
    */
   async putJob(userId: number, job: ForgeJob): Promise<boolean> {
-    try {
-      await this.put('JOB', jobKey(userId, job.station), jobAttributes(job), {
-        expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
-        names: { '#c0': 'PK', '#c1': 'collected' },
-        values: { ':c0': true },
-      });
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+    return this.conditionalWrite(() =>
+      this.put('JOB', jobKey(userId, job.station), jobAttributes(job), missingOrCollected(true)),
+    );
   }
 
   /** Claim a finished order: flip `collected` false to true and store the piece it made. False if already claimed. */
   async claimJob(userId: number, collected: ForgeJob, nowMs: number): Promise<boolean> {
-    try {
-      await this.update(
-        'JOB',
-        jobKey(userId, collected.station),
-        {
-          set: {
-            ...jobAttributes(collected),
-            collected: true,
-            collected_at: new Date(nowMs).toISOString(),
-          },
-        },
-        {
-          expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
-          names: { '#c0': 'PK', '#c1': 'collected' },
-          values: { ':c0': false },
-        },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+    const key = jobKey(userId, collected.station);
+    return this.claim(
+      (ops, condition) => this.update('JOB', key, ops, condition),
+      jobAttributes(collected),
+      nowMs,
+    );
+  }
+
+  /**
+   * The claim of an `EXPEDITION#` or `JOB#` item that is being collected: one conditional write that flips
+   * `collected` false to true with what the roll made, and is refused when it already is true. `write` is
+   * the guarded `update` of the item (each caller names its own item type there).
+   */
+  private async claim(
+    write: (ops: UpdateOps, condition: ConditionSpec) => Promise<unknown>,
+    collected: Attrs,
+    nowMs: number,
+  ): Promise<boolean> {
+    const set = { ...collected, collected: true, collected_at: new Date(nowMs).toISOString() };
+    return this.conditionalWrite(() => write({ set }, missingOrCollected(false)));
   }
 
   /** Record a Feat's unlock, once. False when it was already recorded (so a repeat never writes twice). */
@@ -1700,20 +1679,14 @@ export class Db {
     unlockedAtMs: number,
     deliveryId: string,
   ): Promise<boolean> {
-    try {
-      await this.put(
+    return this.conditionalWrite(() =>
+      this.put(
         'FEAT',
         featKey(userId, featId),
         { unlocked_at: new Date(unlockedAtMs).toISOString(), delivery_id: deliveryId },
-        { expression: 'attribute_not_exists(#c0)', names: { '#c0': 'PK' } },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+        ITEM_ABSENT,
+      ),
+    );
   }
 
   /**
@@ -1747,11 +1720,6 @@ export class Db {
 
   // ----- weekly run: USER#<id> / WEEK#<yyyy-ww> -----
 
-  async getWeek(userId: number, weekKey: string): Promise<RunState | null> {
-    const item = await this.getItem(weekKeyOf(userId, weekKey), true);
-    return item ? toRunState(item) : null;
-  }
-
   /** The run with its bookkeeping (lock version, request ids, counters, free pack, Legendary offer). */
   async getWeekItem(userId: number, weekKey: string): Promise<WeekItem | null> {
     const item = await this.getItem(weekKeyOf(userId, weekKey), true);
@@ -1774,20 +1742,16 @@ export class Db {
     if (credit.review) {
       add.reviews = 1;
     }
-    try {
-      const attributes = await this.update(
+    const written: { attributes?: Attrs } = {};
+    const applied = await this.conditionalWrite(async () => {
+      written.attributes = await this.update(
         'WEEK',
         weekKeyOf(userId, weekKey),
         { add },
-        { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } },
+        ITEM_EXISTS,
       );
-      return attributes ? toWeekItem(attributes) : null;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return null;
-      }
-      throw error;
-    }
+    });
+    return applied && written.attributes ? toWeekItem(written.attributes) : null;
   }
 
   /**
@@ -1831,36 +1795,21 @@ export class Db {
       names['#c2'] = 'act';
       values[':c2'] = expect.act;
     }
-    try {
-      await this.update(
+    return this.conditionalWrite(() =>
+      this.update(
         'WEEK',
         weekKeyOf(userId, weekKey),
         { set, add: { version: 1 }, remove },
         { expression: clauses.join(' AND '), names, values },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+      ),
+    );
   }
 
   /** Create the week (rollover). Returns false when it already exists. */
   async createWeek(userId: number, run: RunState): Promise<boolean> {
-    try {
-      await this.put('WEEK', weekKeyOf(userId, run.weekKey), runToAttributes(run), {
-        expression: 'attribute_not_exists(#c0)',
-        names: { '#c0': 'PK' },
-      });
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+    return this.conditionalWrite(() =>
+      this.put('WEEK', weekKeyOf(userId, run.weekKey), runToAttributes(run), ITEM_ABSENT),
+    );
   }
 
   /**
@@ -1883,20 +1832,9 @@ export class Db {
       }
     }
     const add: Attrs = patch.addWeeklyXp ? { weekly_xp: patch.addWeeklyXp } : {};
-    try {
-      await this.update(
-        'WEEK',
-        weekKeyOf(userId, weekKey),
-        { set, add, remove },
-        { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } },
-      );
-      return true;
-    } catch (error) {
-      if (isConditionalCheckFailed(error)) {
-        return false;
-      }
-      throw error;
-    }
+    return this.conditionalWrite(() =>
+      this.update('WEEK', weekKeyOf(userId, weekKey), { set, add, remove }, ITEM_EXISTS),
+    );
   }
 }
 
@@ -1987,7 +1925,7 @@ function runToAttributes(run: RunState): Attrs {
     attributes.act = run.act;
   }
   if (run.shop !== null) {
-    attributes.shop = JSON.parse(JSON.stringify(run.shop)) as unknown;
+    attributes.shop = clean(run.shop);
   }
   return attributes;
 }
@@ -2019,6 +1957,6 @@ function toWeekItem(item: Attrs): WeekItem {
     reviews: num(item, 'reviews', 0),
     freePack:
       freePack === 'pledge' || freePack === 'charm' || freePack === 'mogul' ? freePack : null,
-    legendary: isPlainRecord(item.legendary) ? (item.legendary as unknown as Charm) : null,
+    legendary: isRecord(item.legendary) ? (item.legendary as unknown as Charm) : null,
   };
 }

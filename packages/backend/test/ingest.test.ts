@@ -829,7 +829,7 @@ describe('ingest: failures and concurrency', () => {
     );
     expect(profileWrites.length).toBeGreaterThan(3);
     // The week got both events' XP exactly once, whatever the interleaving.
-    expect((await h.db.getWeek(AUTHOR_ID, '2026-46'))?.weeklyXp).toBe(120);
+    expect((await h.db.getWeekItem(AUTHOR_ID, '2026-46'))?.run.weeklyXp).toBe(120);
   });
 
   it('stores nothing from the payload in the logs when a delivery fails', async () => {

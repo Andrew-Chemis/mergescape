@@ -13,10 +13,8 @@ import { applyFeatEvaluation, recordWorldEvent } from '@mergescape/shared';
 import type { FeatEvaluation, FeatUnlock, PlayerState, WorldEvent } from '@mergescape/shared';
 import { VersionConflictError } from './db';
 import type { Db } from './db';
+import { RETRY, versionedWrite, withVersionRetry } from './optimistic';
 import { depthPatch, toPlayerState } from './player';
-
-/** Retries of one optimistic read-modify-write before giving up. */
-const MAX_ATTEMPTS = 6;
 
 /**
  * Apply a Feat evaluation to the player, and settle what its rewards set off. A pet that a Feat awards can
@@ -49,9 +47,7 @@ export async function writeFeats(
   nowMs: number,
   source: string,
 ): Promise<void> {
-  for (const feat of unlocked) {
-    await db.putFeat(userId, feat.id, nowMs, source);
-  }
+  await Promise.all(unlocked.map((feat) => db.putFeat(userId, feat.id, nowMs, source)));
 }
 
 /**
@@ -67,7 +63,7 @@ export async function settleWorld(
   nowMs: number,
   source: string,
 ): Promise<FeatUnlock[]> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+  const unlocked = await withVersionRetry<FeatUnlock[]>(async () => {
     const profile = await db.getProfile(userId, true);
     if (!profile) {
       return [];
@@ -78,16 +74,14 @@ export async function settleWorld(
     if (Object.keys(patch).length === 0) {
       return [];
     }
-    try {
-      await db.saveProfile(userId, profile.version, patch);
-    } catch (error) {
-      if (error instanceof VersionConflictError) {
-        continue;
-      }
-      throw error;
+    if (!(await versionedWrite(() => db.saveProfile(userId, profile.version, patch)))) {
+      return RETRY;
     }
     await writeFeats(db, userId, settled.unlocked, nowMs, source);
     return settled.unlocked;
+  });
+  if (unlocked === RETRY) {
+    throw new VersionConflictError();
   }
-  throw new VersionConflictError();
+  return unlocked;
 }

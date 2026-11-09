@@ -41,9 +41,9 @@ import type {
   RunState,
   WeeklyStreakEvent,
 } from '@mergescape/shared';
-import { VersionConflictError } from './db';
 import type { Db, EventRow, ProfileItem, ProfilePatch, WeekItem } from './db';
 import { applyFeats, writeFeats } from './feat-flow';
+import { RETRY, versionedWrite, withVersionRetry } from './optimistic';
 import { depthPatch, runWithScorerState, toPlayerState } from './player';
 import { vocationFor } from './vocation';
 import { weeksBetween } from './weeks';
@@ -51,9 +51,6 @@ import { weeksBetween } from './weeks';
 /** The weekly streak needs "at least one merged PR or three reviews that week" (types.ts, WeeklyStreakEvent). */
 export const STREAK_MIN_MERGES = 1;
 export const STREAK_MIN_REVIEWS = 3;
-
-/** Retries of one optimistic read-modify-write before giving up. */
-const MAX_ATTEMPTS = 6;
 
 export interface RunContext {
   db: Db;
@@ -225,12 +222,15 @@ export function planRollover(
  */
 export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled | null> {
   const weekKey = isoWeekKey(ctx.now);
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const profile = await ctx.db.getProfile(userId, true);
+  const rolled = await withVersionRetry<Rolled | null>(async () => {
+    // The week key depends only on the clock, so the two reads need not wait for each other.
+    const [profile, existing] = await Promise.all([
+      ctx.db.getProfile(userId, true),
+      ctx.db.getWeekItem(userId, weekKey),
+    ]);
     if (!profile) {
       return null;
     }
-    const existing = await ctx.db.getWeekItem(userId, weekKey);
     const profileRolled = profile.runWeek === weekKey;
     if (existing && profileRolled) {
       return { profile, week: existing };
@@ -243,28 +243,31 @@ export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled
     const seed = existing?.run.shopSeed ?? ctx.newSeed();
     const plan = planRollover(profile, previous, seed, ctx.now, profileRolled);
     if (!existing && !(await ctx.db.createWeek(userId, plan.run))) {
-      continue; // someone else created it first: start over with their seed
+      return RETRY; // someone else created it first: start over with their seed
     }
-    if (plan.profilePatch) {
+    const { profilePatch } = plan;
+    if (profilePatch) {
       if (plan.streakRow) {
         await ctx.db.putEvent(plan.streakRow);
       }
-      try {
-        await ctx.db.saveProfile(userId, profile.version, plan.profilePatch, {
+      const written = await versionedWrite(() =>
+        ctx.db.saveProfile(userId, profile.version, profilePatch, {
           expression: 'attribute_not_exists(#r) OR #r <> :r',
           names: { '#r': 'run_week' },
           values: { ':r': weekKey },
-        });
+        }),
+      );
+      if (written) {
         await writeFeats(ctx.db, userId, plan.unlocked, ctx.now, `rollover-${weekKey}`);
-      } catch (error) {
-        if (!(error instanceof VersionConflictError)) {
-          throw error;
-        }
       }
     }
-    // Loop to read the result back: it also covers a writer that beat us to the profile.
+    // Go round again to read the result back: it also covers a writer that beat us to the profile.
+    return RETRY;
+  });
+  if (rolled === RETRY) {
+    throw new Error('Could not start the run');
   }
-  throw new Error('Could not start the run');
+  return rolled;
 }
 
 /**
@@ -274,7 +277,7 @@ export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled
  * with no profile.
  */
 export async function loadCurrent(ctx: RunContext, userId: number): Promise<Current | null> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+  const current = await withVersionRetry<Current | null>(async () => {
     const rolled = await ensureRun(ctx, userId);
     if (!rolled) {
       return null;
@@ -290,19 +293,17 @@ export async function loadCurrent(ctx: RunContext, userId: number): Promise<Curr
       return { profile, week, player: base, run };
     }
 
-    if (boardChanged) {
-      try {
-        await ctx.db.saveProfile(userId, profile.version, {
+    if (
+      boardChanged &&
+      !(await versionedWrite(() =>
+        ctx.db.saveProfile(userId, profile.version, {
           charms: board.player.charms,
           mogulBenched: board.player.moguls.benched,
           mogulBoardWeek: board.player.moguls.boardWeek,
-        });
-      } catch (error) {
-        if (error instanceof VersionConflictError) {
-          continue;
-        }
-        throw error;
-      }
+        }),
+      ))
+    ) {
+      return RETRY;
     }
     if (
       playedChanged &&
@@ -313,9 +314,13 @@ export async function loadCurrent(ctx: RunContext, userId: number): Promise<Curr
         { played: auto.run.played },
       ))
     ) {
-      continue;
+      return RETRY;
     }
-    // Loop to read the settled state back.
+    // Go round again to read the settled state back.
+    return RETRY;
+  });
+  if (current === RETRY) {
+    throw new Error('The run kept changing');
   }
-  throw new Error('The run kept changing');
+  return current;
 }

@@ -3,27 +3,20 @@
  * opening Charm packs, starting and collecting Forge orders, buying station upgrades and cape colours,
  * equipping gear and pets, and pinning Feats, plus the one setting a player has (whether the public badge
  * may show them, Requirement 11.4). Each takes a client request id and either applies once or
- * answers the same way again, exactly as the shop does (`mutations.ts`):
+ * answers the same way again, exactly as the shop does (`mutations.ts`), through the one write protocol of
+ * `idempotent.ts`. What is specific to these requests:
  *
- *   1. the `WEEK#` write comes first and is conditional on the week's `version`. It is the lock between two
- *      requests of one player and records the request id, which is what makes a replay a no-op;
- *   2. an expedition or Forge order that is being collected is claimed next, with one conditional write
- *      that flips `collected` from false to true on its `EXPEDITION#` / `JOB#` item and stores what the
- *      roll made. Of two collects of one trip exactly one passes the flip, so the loot is rolled and stored
- *      once;
- *   3. the profile write follows, conditional on the profile `version` (a scored event may have landed in
- *      between). If it conflicts, the request is planned again on the fresh profile. If it fails now (another
- *      request collected the same trip, or sent one first) step 1 is undone and the request answers 409, or,
- *      when the profile already holds the result, answers it without writing again;
- *   4. the durable records follow the profile write: the `EXPEDITION#` / `JOB#` item of a trip or order that
- *      was started, and a `FEAT#` item per Feat the request unlocked.
+ *   - an expedition or Forge order that is being collected is claimed after the week lock, with one
+ *     conditional write that flips `collected` from false to true on its `EXPEDITION#` / `JOB#` item and
+ *     stores what the roll made. Of two collects of one trip exactly one passes the flip, so the loot is
+ *     rolled and stored once;
+ *   - the durable records follow the profile write: the `EXPEDITION#` / `JOB#` item of a trip or order that
+ *     was started, and a `FEAT#` item per Feat the request unlocked.
  *
- * The profile is the authority for what the player has, so a crash between steps leaves a state that a
- * retry completes: a claimed expedition whose profile write never happened is applied by the next collect
- * (the claim fails, the loot rolled again from the same seed is identical, and the guarded profile write
- * applies it once).
+ * A claimed expedition whose profile write never happened is applied by the next collect (the claim fails,
+ * the loot rolled again from the same seed is identical, and the guarded profile write applies it once).
  *
- * Every rule is a shared pure function (`plan` below only chooses which one); this module orders the writes.
+ * Every rule is a shared pure function (`plan` below only chooses which one).
  */
 import {
   buyUpgrade,
@@ -34,7 +27,6 @@ import {
   forgeOf,
   openLootPack,
   pinFeat,
-  playerWithRun,
   recordWorldEvent,
   sendExpedition,
   setCapeColor,
@@ -56,18 +48,13 @@ import type {
   StationId,
   UpgradeId,
 } from '@mergescape/shared';
-import { VersionConflictError } from './db';
 import type { ProfilePatch } from './db';
 import { applyFeats, writeFeats } from './feat-flow';
-import type { Logger } from './log';
-import { MAX_REQUEST_IDS } from './mutations';
-import { depthPatch, runWithScorerState, shopPatch, toPlayerState } from './player';
-import { loadCurrent } from './runs';
-import type { Current, RunContext } from './runs';
+import { runIdempotentMutation } from './idempotent';
+import type { MutationContext, Plan, Refusal } from './idempotent';
+import { depthPatch, shopPatch } from './player';
+import type { Current } from './runs';
 import { randomSeed } from './seed';
-
-/** Retries of the week lock, and of the profile write, before giving up. */
-const MAX_ATTEMPTS = 6;
 
 export type DepthRequest =
   | { type: 'expedition_send'; region: RegionId; choice: ExpeditionChoice }
@@ -83,8 +70,7 @@ export type DepthRequest =
   | { type: 'pin'; featId: string; pinned: boolean }
   | { type: 'settings'; badgePublic: boolean };
 
-export interface DepthContext extends RunContext {
-  log: Logger;
+export interface DepthContext extends MutationContext {
   /** The seed of an expedition or Forge order started by this request (a random uint32 in production). */
   seed?: () => number;
 }
@@ -102,10 +88,7 @@ export interface DepthResult {
   featsUnlocked: string[];
 }
 
-export type DepthOutcome =
-  | { status: 200; current: Current; result: DepthResult }
-  | { status: 404; error: string }
-  | { status: 409; error: string };
+export type DepthOutcome = { status: 200; current: Current; result: DepthResult } | Refusal;
 
 /** The writes that go with a planned change, besides the profile. */
 interface Effects {
@@ -121,9 +104,13 @@ interface Effects {
   unlocked: FeatUnlock[];
 }
 
-type Planned =
-  | { ok: true; player: PlayerState; effects: Effects; result: DepthResult }
-  | { ok: false; status: 404 | 409; error: string };
+/** What a depth plan carries beside the player it changes. */
+interface Change {
+  effects: Effects;
+  result: DepthResult;
+}
+
+type Planned = Plan<Change>;
 
 const NO_EFFECTS: Effects = {
   sent: null,
@@ -154,6 +141,10 @@ function change(
     result: { ...NO_RESULT, ...parts.result },
   };
 }
+
+/** A shared rule that only changes the player: the new player, or the rule's error as a 409. */
+const done = (result: { ok: true; player: PlayerState } | { ok: false; error: string }): Planned =>
+  result.ok ? change(result.player) : fail(409, result.error);
 
 /** Apply a request to a player with the shared rules. Pure; `seed` fixes any roll the request starts. */
 export function plan(
@@ -202,10 +193,8 @@ export function plan(
         result: { expedition: collected.expedition, loot: collected.loot, applied: true },
       });
     }
-    case 'pack_open': {
-      const opened = openLootPack(player, request.seed, request.charmId);
-      return opened.ok ? change(opened.player) : fail(409, opened.error);
-    }
+    case 'pack_open':
+      return done(openLootPack(player, request.seed, request.charmId));
     case 'forge_start': {
       const started = startJob(player, request.recipeId, now, {
         seed,
@@ -227,34 +216,23 @@ export function plan(
           })
         : change(player, { result: { piece: collected.piece } });
     }
-    case 'forge_upgrade': {
-      const bought = buyUpgrade(player, request.upgrade);
-      return bought.ok ? change(bought.player) : fail(409, bought.error);
-    }
+    case 'forge_upgrade':
+      return done(buyUpgrade(player, request.upgrade));
     case 'forge_dye': {
       const dyed = setCapeColor(player, request.capeColor);
       // The contract names the missing upgrade `dyes_required`.
       return dyed.ok ? change(dyed.player) : fail(409, 'dyes_required');
     }
-    case 'equip': {
-      const worn = equipGear(player, request.pieceId);
-      return worn.ok ? change(worn.player) : fail(409, worn.error);
-    }
-    case 'unequip': {
-      const bare = unequipGear(player, request.slot);
-      return bare.ok ? change(bare.player) : fail(409, bare.error);
-    }
-    case 'equip_pet': {
-      const worn = equipPet(player, request.petId);
-      return worn.ok ? change(worn.player) : fail(409, worn.error);
-    }
-    case 'pin': {
-      if (!request.pinned) {
-        return change(unpinFeat(player, request.featId));
-      }
-      const pinned = pinFeat(player, request.featId);
-      return pinned.ok ? change(pinned.player) : fail(409, pinned.error);
-    }
+    case 'equip':
+      return done(equipGear(player, request.pieceId));
+    case 'unequip':
+      return done(unequipGear(player, request.slot));
+    case 'equip_pet':
+      return done(equipPet(player, request.petId));
+    case 'pin':
+      return request.pinned
+        ? done(pinFeat(player, request.featId))
+        : change(unpinFeat(player, request.featId));
     case 'settings':
       // A value, not a step: setting it twice is the same as setting it once.
       return change({ ...player, badgePublic: request.badgePublic });
@@ -301,124 +279,42 @@ export async function mutateDepth(
   request: DepthRequest,
 ): Promise<DepthOutcome> {
   const seed = (ctx.seed ?? randomSeed)();
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const current = await loadCurrent(ctx, userId);
-    if (!current) {
-      return { status: 404, error: 'no_profile' };
-    }
-    if (current.week.requestIds.includes(requestId)) {
-      return { status: 200, current, result: replayResult(request, current.player) };
-    }
-
-    const planned = plan(request, current.player, ctx.now, seed);
-    if (!planned.ok) {
-      return planned;
-    }
-    if (Object.keys(patchOf(current.player, planned.player)).length === 0) {
-      // Nothing to change (a repeat collect, unpinning what is not pinned): answer without a write.
-      return { status: 200, current, result: planned.result };
-    }
-
-    // Step 1: the week write, which is the lock and the replay record.
-    const requestIds = [...current.week.requestIds, requestId].slice(-MAX_REQUEST_IDS);
-    const { weekKey } = current.run;
-    if (
-      !(await ctx.db.saveWeek(userId, weekKey, { version: current.week.version }, { requestIds }))
-    ) {
-      continue;
-    }
-    const undo = async (): Promise<void> => {
-      // Put the week back as it was (it is still the version our write made it).
-      const restored = await ctx.db.saveWeek(
-        userId,
-        weekKey,
-        { version: current.week.version + 1 },
-        { requestIds: current.week.requestIds },
-      );
-      if (!restored) {
-        ctx.log.error('depth.undo_failed', { userId });
+  const outcome = await runIdempotentMutation<Change>(ctx, userId, requestId, {
+    name: 'depth',
+    plan: (player) => plan(request, player, ctx.now, seed),
+    profilePatch: patchOf,
+    // Step 2: claim the loot or the piece, once.
+    async beforeProfile({ effects }) {
+      if (effects.collectedTrip) {
+        await ctx.db.claimExpedition(userId, effects.collectedTrip, ctx.now);
       }
-    };
-
-    let final = planned;
-    let wrote = false;
-    try {
-      // Step 2: claim the loot or the piece, once.
-      if (planned.effects.collectedTrip) {
-        await ctx.db.claimExpedition(userId, planned.effects.collectedTrip, ctx.now);
+      if (effects.collectedJob) {
+        await ctx.db.claimJob(userId, effects.collectedJob, ctx.now);
       }
-      if (planned.effects.collectedJob) {
-        await ctx.db.claimJob(userId, planned.effects.collectedJob, ctx.now);
-      }
-
-      // Step 3: the profile write, planned again on the fresh profile if a scored event landed in between.
-      const playerOf = (fresh: Parameters<typeof toPlayerState>[0]): PlayerState =>
-        playerWithRun(toPlayerState(fresh), runWithScorerState(current.run, fresh));
-      let expected = current.profile.version;
-      let from = current.player;
-      for (let tries = 0; ; tries += 1) {
-        const patch = patchOf(from, final.player);
-        if (Object.keys(patch).length === 0) {
-          break;
-        }
-        try {
-          await ctx.db.saveProfile(userId, expected, patch);
-          wrote = true;
-          break;
-        } catch (error) {
-          if (!(error instanceof VersionConflictError)) {
-            throw error;
-          }
-        }
-        const fresh = await ctx.db.getProfile(userId, true);
-        if (!fresh) {
-          await undo();
-          return { status: 404, error: 'no_profile' };
-        }
-        const again = plan(request, playerOf(fresh), ctx.now, seed);
-        if (!again.ok || tries + 1 >= MAX_ATTEMPTS) {
-          await undo();
-          return again.ok
-            ? { status: 409, error: 'conflict' }
-            : { status: again.status, error: again.error };
-        }
-        expected = fresh.version;
-        from = playerOf(fresh);
-        final = again;
-      }
-    } catch (error) {
-      await undo();
-      throw error;
-    }
-
-    // Step 4: the records. The profile already holds all of it, so a failure here is logged, not repeated.
-    if (wrote) {
-      try {
-        if (final.effects.sent) {
-          await ctx.db.putExpedition(userId, final.effects.sent);
-        }
-        if (final.effects.started) {
-          await ctx.db.putJob(userId, final.effects.started);
-        }
-        await writeFeats(ctx.db, userId, final.effects.unlocked, ctx.now, sourceOf(final.effects));
-      } catch (error) {
-        ctx.log.error('depth.records_failed', { userId }, error);
-      }
-    }
-
-    const settled = await loadCurrent(ctx, userId);
-    if (!settled) {
-      return { status: 404, error: 'no_profile' };
-    }
-    return {
-      status: 200,
-      current: settled,
-      result: {
-        ...final.result,
-        applied: wrote && final.result.applied,
-        featsUnlocked: wrote ? final.effects.unlocked.map((feat) => feat.id) : [],
-      },
-    };
+    },
+    // Step 4: the records, independent of one another.
+    async afterProfile({ effects }) {
+      await Promise.all([
+        effects.sent ? ctx.db.putExpedition(userId, effects.sent) : null,
+        effects.started ? ctx.db.putJob(userId, effects.started) : null,
+        writeFeats(ctx.db, userId, effects.unlocked, ctx.now, sourceOf(effects)),
+      ]);
+    },
+  });
+  if (outcome.status !== 200) {
+    return outcome;
   }
-  return { status: 409, error: 'conflict' };
+  const { current, planned, wrote } = outcome;
+  if (planned === null) {
+    return { status: 200, current, result: replayResult(request, current.player) };
+  }
+  return {
+    status: 200,
+    current,
+    result: {
+      ...planned.result,
+      applied: wrote && planned.result.applied,
+      featsUnlocked: wrote ? planned.effects.unlocked.map((feat) => feat.id) : [],
+    },
+  };
 }

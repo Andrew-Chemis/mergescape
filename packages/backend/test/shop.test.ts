@@ -9,7 +9,7 @@ import type { Charm } from '@mergescape/shared';
 import { describe, expect, it } from 'vitest';
 import type { MeResponse, MutationResponse, WeekSummary } from '../src/api-types';
 import { MAX_REQUEST_BYTES } from '../src/handlers/api';
-import { MAX_REQUEST_IDS } from '../src/mutations';
+import { MAX_REQUEST_IDS } from '../src/idempotent';
 import { apiRequest, PAGES_ORIGIN } from './api-harness';
 import { DAY, makeGame, playLife } from './game-harness';
 import type { Game, Reply } from './game-harness';
@@ -337,7 +337,7 @@ describe('POST /pledges/play', () => {
       'tidy',
       'big-game-hunter',
     ]);
-    expect((await g.db.getWeek(AUTHOR_ID, '2026-46'))?.played).toHaveLength(3);
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-46'))?.run.played).toHaveLength(3);
     const writes = g.fake.calls.length;
     expect(await week(g)).toEqual(wednesday);
     // Nothing left to settle: the second read is reads only.
@@ -430,6 +430,43 @@ describe('two requests at once', () => {
     const retry = await g.post('/shop/buy', request);
     expect(retry.status).toBe(200);
     expect(result(retry).me.gold).toBe(20);
+  });
+
+  it('puts the shelf back when the profile write fails, so the same request can be sent again', async () => {
+    const g = await openShop(100);
+    const request = { requestId: rid(), kind: 'charm', index: 0 };
+    g.intercept.api = (input) => {
+      const names = Object.values(input.ExpressionAttributeNames ?? {});
+      if (input.Key?.SK === 'PROFILE' && names.includes('charms')) {
+        throw new Error('the table is having a moment');
+      }
+    };
+    const failed = await g.post('/shop/buy', request);
+    g.intercept.api = undefined;
+    expect(failed.status).toBe(500);
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-46'))?.requestIds).toEqual([]);
+    expect((await week(g)).shop?.charms.some((slot) => slot.sold)).toBe(false);
+    const retry = await g.post('/shop/buy', request);
+    expect(retry.status).toBe(200);
+    expect(result(retry).me.gold).toBe(60);
+  });
+
+  it('answers 404 and logs when the player is deleted between the week lock and the profile write', async () => {
+    const g = await openShop(100);
+    let raced = false;
+    g.intercept.api = async (input) => {
+      const names = Object.values(input.ExpressionAttributeNames ?? {});
+      if (!raced && input.Key?.SK === 'PROFILE' && names.includes('charms')) {
+        raced = true;
+        await g.db.deleteUser(AUTHOR_ID);
+      }
+    };
+    const reply = await g.post('/shop/buy', { requestId: rid(), kind: 'charm', index: 0 });
+    g.intercept.api = undefined;
+    expect(raced).toBe(true);
+    expect(reply).toEqual({ status: 404, body: { error: 'no_profile' } });
+    // The week went with the player, so there was nothing left to put back.
+    expect(g.logs.join('\n')).toContain('mutation.undo_failed');
   });
 });
 

@@ -36,7 +36,22 @@ export function assertInstant(value: string, what: string): string {
   return value;
 }
 
-export const userPk = (userId: number): string => `USER#${assertId(userId, 'user id')}`;
+/** Partition-key prefix of every item a player owns. */
+export const USER_PK_PREFIX = 'USER#';
+
+export const userPk = (userId: number): string => `${USER_PK_PREFIX}${assertId(userId, 'user id')}`;
+
+const USER_PK = /^USER#(\d+)$/;
+
+/** The id in a `USER#<id>` partition key; null for any other key (or an id that is not a safe integer). */
+export function userIdFromPk(pk: string): number | null {
+  const digits = USER_PK.exec(pk)?.[1];
+  const id = Number(digits);
+  return digits !== undefined && Number.isSafeInteger(id) ? id : null;
+}
+
+/** GSI1 partition of a login (matched case-insensitively): the badge finds a player by it. */
+export const loginPk = (login: string): string => `LOGIN#${login.toLowerCase()}`;
 
 export const prPk = (repoId: number, number: number): string =>
   `PR#${assertId(repoId, 'repo id')}#${assertId(number, 'PR number')}`;

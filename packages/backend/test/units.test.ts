@@ -2,14 +2,18 @@ import { GetParameterCommand } from '@aws-sdk/client-ssm';
 import type { GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
+import { VersionConflictError } from '../src/db';
 import type { PRBundle } from '../src/db';
 import { header, json, rawBody, redirect } from '../src/http';
+import { loginPk, userIdFromPk, userPk } from '../src/keys';
 import { createLogger } from '../src/log';
 import { createEmfMetrics, createRecordingMetrics } from '../src/metrics';
+import { MAX_ATTEMPTS, RETRY, versionedWrite, withVersionRetry } from '../src/optimistic';
 import { buildPRState } from '../src/pr-state';
 import { createSecrets, SECRET_CACHE_MS, SecretUnavailableError } from '../src/secrets';
 import type { SsmLike } from '../src/secrets';
 import { verifyWebhookSignature } from '../src/signature';
+import { displayWeekKey, weeksBetween } from '../src/weeks';
 import { delivery, sign } from './webhooks';
 
 describe('verifyWebhookSignature', () => {
@@ -344,5 +348,70 @@ describe('buildPRState', () => {
       stats: { additions: 5, deletions: 6, changedFiles: 1, commits: 1 },
     };
     expect(buildPRState(empty, withStats)).toMatchObject({ additions: 5, deletions: 6 });
+  });
+});
+
+describe('partition keys', () => {
+  it('reads the player id back out of a USER# key, and nothing else', () => {
+    expect(userIdFromPk(userPk(42))).toBe(42);
+    expect(userIdFromPk('USER#0')).toBe(0);
+    for (const other of ['PR#1#2', 'USER#', 'USER#-5', 'USER#12x', 'USER#1e3', 'user#1', '']) {
+      expect(userIdFromPk(other), other).toBeNull();
+    }
+    expect(userIdFromPk(`USER#${'9'.repeat(20)}`)).toBeNull();
+  });
+
+  it('puts a login in its GSI1 partition in lower case', () => {
+    expect(loginPk('Octo-Cat')).toBe('LOGIN#octo-cat');
+  });
+});
+
+describe('week keys', () => {
+  it('counts whole weeks between stored keys, across a year end', () => {
+    expect(weeksBetween('2026-46', '2026-46')).toBe(0);
+    expect(weeksBetween('2026-46', '2026-48')).toBe(2);
+    expect(weeksBetween('2025-52', '2026-02')).toBe(2);
+  });
+
+  it('refuses a key that is not a week key', () => {
+    expect(() => weeksBetween('2026-W46', '2026-47')).not.toThrow();
+    expect(() => weeksBetween('later', '2026-47')).toThrow(RangeError);
+    expect(() => weeksBetween('2026-47', '2026-60')).toThrow(RangeError);
+  });
+
+  it('spells the week the way the contract does', () => {
+    expect(displayWeekKey('2026-46')).toBe('2026-W46');
+  });
+});
+
+describe('optimistic retries', () => {
+  it('runs an attempt again while it asks to, then returns what it settled on', async () => {
+    let tries = 0;
+    const settled = await withVersionRetry(() => {
+      tries += 1;
+      return Promise.resolve(tries < 3 ? RETRY : 'done');
+    });
+    expect(settled).toBe('done');
+    expect(tries).toBe(3);
+  });
+
+  it('gives up with RETRY after the given number of attempts (6 by default)', async () => {
+    let tries = 0;
+    const attempt = (): Promise<typeof RETRY> => {
+      tries += 1;
+      return Promise.resolve(RETRY);
+    };
+    expect(await withVersionRetry(attempt, 2)).toBe(RETRY);
+    expect(tries).toBe(2);
+    tries = 0;
+    expect(await withVersionRetry(attempt)).toBe(RETRY);
+    expect(tries).toBe(MAX_ATTEMPTS);
+    expect(MAX_ATTEMPTS).toBe(6);
+  });
+
+  it('treats a lost version check as false and lets every other error through', async () => {
+    expect(await versionedWrite(() => Promise.resolve())).toBe(true);
+    expect(await versionedWrite(() => Promise.reject(new VersionConflictError()))).toBe(false);
+    await expect(versionedWrite(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
   });
 });

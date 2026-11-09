@@ -45,6 +45,7 @@ import {
   GEAR_SLOTS,
   isCapeColor,
   isExpeditionChoice,
+  isRecord,
   isRegionId,
   lootPackOptions,
   STATION_IDS,
@@ -61,12 +62,13 @@ import { BADGE_CACHE_CONTROL, BADGE_CONTENT_TYPE, renderBadge } from '../badge';
 import type { Config } from '../config';
 import type { Db } from '../db';
 import { mutateDepth } from '../depth';
-import type { DepthRequest } from '../depth';
+import type { DepthContext, DepthRequest, DepthResult } from '../depth';
 import { authorizeUrl, SignInError, signInWithCode } from '../github';
 import type { FetchLike } from '../github';
 import { header, json, rawBody, redirect } from '../http';
 import type { FunctionUrlEvent, FunctionUrlResult } from '../http';
 import { signSessionToken, verifySessionToken } from '../jwt';
+import type { Refusal } from '../idempotent';
 import { GITHUB_LOGIN } from '../keys';
 import type { Logger } from '../log';
 import { getRuntime } from '../runtime';
@@ -75,7 +77,7 @@ import type { RolloverEvent, RolloverResult } from '../rollover';
 import { mutate } from '../mutations';
 import type { MutationRequest } from '../mutations';
 import { loadCurrent } from '../runs';
-import type { RunContext } from '../runs';
+import type { Current, RunContext } from '../runs';
 import { randomSeed } from '../seed';
 import type { Secrets } from '../secrets';
 import type {
@@ -84,6 +86,7 @@ import type {
   ForgeCollectResponse,
   InstallationsResponse,
   LogResponse,
+  MeResponse,
   MeResult,
   MutationResponse,
   PackOptionsResponse,
@@ -129,57 +132,6 @@ const BADGE_PATH = /^\/badge\/([^/]+)\.svg$/;
 /** `GET /packs/:seed`: one path segment after `/packs/`. */
 const PACK_PATH = /^\/packs\/([^/]+)$/;
 
-type DepthHandler =
-  | 'expedition_send'
-  | 'expedition_collect'
-  | 'pack_open'
-  | 'forge_start'
-  | 'forge_collect'
-  | 'forge_upgrade'
-  | 'gear_equip'
-  | 'feat_pin'
-  | 'settings';
-
-type Route =
-  | {
-      kind: 'get';
-      handler:
-        | 'me'
-        | 'week'
-        | 'log'
-        | 'installations'
-        | 'export'
-        | 'expedition'
-        | 'forge'
-        | 'feats'
-        | 'pack';
-    }
-  | {
-      kind: 'post';
-      handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' | 'delete' | DepthHandler;
-    };
-
-type MutationHandler = Exclude<
-  Extract<Route, { kind: 'post' }>['handler'],
-  'delete' | DepthHandler
->;
-
-const DEPTH_HANDLERS: ReadonlySet<string> = new Set<DepthHandler>([
-  'expedition_send',
-  'expedition_collect',
-  'pack_open',
-  'forge_start',
-  'forge_collect',
-  'forge_upgrade',
-  'gear_equip',
-  'feat_pin',
-  'settings',
-]);
-
-function isDepthHandler(handler: string): handler is DepthHandler {
-  return DEPTH_HANDLERS.has(handler);
-}
-
 /** The sort-key prefix of each group of `USER#` items in the export; anything else goes to `other`. */
 const EXPORT_GROUPS = [
   ['EVT#', 'events'],
@@ -189,184 +141,244 @@ const EXPORT_GROUPS = [
   ['JOB#', 'jobs'],
 ] as const;
 
-const ROUTES: Readonly<Record<string, Route>> = {
-  '/me': { kind: 'get', handler: 'me' },
-  '/week': { kind: 'get', handler: 'week' },
-  '/log': { kind: 'get', handler: 'log' },
-  '/installations': { kind: 'get', handler: 'installations' },
-  '/shop/buy': { kind: 'post', handler: 'buy' },
-  '/shop/pick': { kind: 'post', handler: 'pick' },
-  '/shop/reroll': { kind: 'post', handler: 'reroll' },
-  '/shop/sell': { kind: 'post', handler: 'sell' },
-  '/shrine/remove': { kind: 'post', handler: 'shrine' },
-  '/pledges/play': { kind: 'post', handler: 'play' },
-  '/export': { kind: 'get', handler: 'export' },
-  '/delete': { kind: 'post', handler: 'delete' },
-  '/expedition': { kind: 'get', handler: 'expedition' },
-  '/expedition/send': { kind: 'post', handler: 'expedition_send' },
-  '/expedition/collect': { kind: 'post', handler: 'expedition_collect' },
-  '/packs/open': { kind: 'post', handler: 'pack_open' },
-  '/forge': { kind: 'get', handler: 'forge' },
-  '/forge/start': { kind: 'post', handler: 'forge_start' },
-  '/forge/collect': { kind: 'post', handler: 'forge_collect' },
-  '/forge/upgrade': { kind: 'post', handler: 'forge_upgrade' },
-  '/gear/equip': { kind: 'post', handler: 'gear_equip' },
-  '/feats': { kind: 'get', handler: 'feats' },
-  '/feats/pin': { kind: 'post', handler: 'feat_pin' },
-  '/settings': { kind: 'post', handler: 'settings' },
-};
+type ExportGroup = (typeof EXPORT_GROUPS)[number][1];
 
-/** `GET /packs/:seed` is the one route with a path parameter. */
-const PACK_ROUTE: Route = { kind: 'get', handler: 'pack' };
+// ---------------------------------------------------------------------------------------------
+// Request bodies
+// ---------------------------------------------------------------------------------------------
 
-/** The request id and the typed request in a depth-layer body, or null when the body is not valid. */
-function parseDepth(
-  handler: DepthHandler,
-  body: Record<string, unknown>,
-): { requestId: string; request: DepthRequest } | null {
-  const requestId = body.requestId;
-  if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) {
-    return null;
-  }
-  const text = (value: unknown): string | null =>
-    typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
-  const member = <T extends string>(value: unknown, allowed: readonly T[]): T | null =>
-    allowed.find((candidate) => candidate === value) ?? null;
-  const done = (request: DepthRequest): { requestId: string; request: DepthRequest } => ({
-    requestId,
-    request,
-  });
-  switch (handler) {
-    case 'expedition_send': {
-      const { region, choice } = body;
-      return isRegionId(region) && isExpeditionChoice(choice)
-        ? done({ type: 'expedition_send', region, choice })
-        : null;
-    }
-    case 'expedition_collect':
-      return done({ type: 'expedition_collect' });
-    case 'pack_open': {
-      const { seed } = body;
-      const charmId = text(body.charmId);
-      return typeof seed === 'number' &&
-        Number.isInteger(seed) &&
-        seed >= 0 &&
-        seed <= MAX_SEED &&
-        charmId !== null
-        ? done({ type: 'pack_open', seed, charmId })
-        : null;
-    }
-    case 'forge_start': {
-      const { recipeId } = body;
-      if (typeof recipeId !== 'string' || !RECIPE_ID.test(recipeId)) {
-        return null;
-      }
-      if (body.pieceId === undefined) {
-        return done({ type: 'forge_start', recipeId });
-      }
-      const pieceId = text(body.pieceId);
-      return pieceId === null ? null : done({ type: 'forge_start', recipeId, pieceId });
-    }
-    case 'forge_collect': {
-      const station: StationId | null = member(body.station, STATION_IDS);
-      return station === null ? null : done({ type: 'forge_collect', station });
-    }
-    case 'forge_upgrade': {
-      // Either an upgrade to buy or a cape colour to choose (null for the natural cape), never both.
-      const dyeing = Object.hasOwn(body, 'capeColor');
-      if (dyeing === (body.upgrade !== undefined)) {
-        return null;
-      }
-      if (dyeing) {
-        const color = body.capeColor;
-        return color === null || isCapeColor(color)
-          ? done({ type: 'forge_dye', capeColor: color as CapeColor | null })
-          : null;
-      }
-      const upgrade: UpgradeId | null = member(body.upgrade, UPGRADE_IDS);
-      return upgrade === null ? null : done({ type: 'forge_upgrade', upgrade });
-    }
-    case 'gear_equip': {
-      // Exactly one of: a piece to wear, a slot to take off, a pet to wear.
-      const given = ['pieceId', 'unequip', 'petId'].filter((name) => body[name] !== undefined);
-      if (given.length !== 1) {
-        return null;
-      }
-      if (given[0] === 'unequip') {
-        const slot: GearSlot | null = member(body.unequip, GEAR_SLOTS);
-        return slot === null ? null : done({ type: 'unequip', slot });
-      }
-      const id = text(given[0] === 'pieceId' ? body.pieceId : body.petId);
-      if (id === null) {
-        return null;
-      }
-      return given[0] === 'pieceId'
-        ? done({ type: 'equip', pieceId: id })
-        : done({ type: 'equip_pet', petId: id });
-    }
-    case 'feat_pin': {
-      const featId = text(body.featId);
-      return featId === null || typeof body.pinned !== 'boolean'
-        ? null
-        : done({ type: 'pin', featId, pinned: body.pinned });
-    }
-    case 'settings':
-      return typeof body.badgePublic === 'boolean'
-        ? done({ type: 'settings', badgePublic: body.badgePublic })
-        : null;
-  }
+type Body = Record<string, unknown>;
+
+/** Reads a typed request out of a body, or null when the body is not valid. */
+type Parser<R> = (body: Body) => R | null;
+
+/** The client's request id in a mutation body, or null when it is missing or not a UUID-like token. */
+function parseRequestId(body: Body): string | null {
+  const { requestId } = body;
+  return typeof requestId === 'string' && REQUEST_ID.test(requestId) ? requestId : null;
 }
 
-/** The request id and the typed request in a mutation body, or null when the body is not valid. */
-function parseMutation(
-  handler: MutationHandler,
-  body: Record<string, unknown>,
-): { requestId: string; request: MutationRequest } | null {
-  const requestId = body.requestId;
-  if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) {
+/** A content id (a Charm, Pledge, piece, Feat or pet id) as a short URL-safe token. */
+function text(value: unknown): string | null {
+  return typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
+}
+
+/** A small whole number from `min` to 99 (a shelf slot or a pack option). */
+function whole(value: unknown, min: number): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= 99
+    ? value
+    : null;
+}
+
+function member<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  return allowed.find((candidate) => candidate === value) ?? null;
+}
+
+// The shop, shrine and Pledge requests (`mutations.ts`).
+
+const parseBuy: Parser<MutationRequest> = (body) => {
+  const kind = BUY_KINDS.find((candidate) => candidate === body.kind);
+  if (kind === undefined) {
     return null;
   }
-  const index = body.index;
-  const option = body.option;
-  const text = (value: unknown): string | null =>
-    typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
-  const whole = (value: unknown, min: number): number | null =>
-    typeof value === 'number' && Number.isInteger(value) && value >= min && value <= 99
-      ? value
+  if (kind === 'voucher' || kind === 'legendary') {
+    return { type: 'buy', kind };
+  }
+  const index = whole(body.index, 0);
+  return index === null ? null : { type: 'buy', kind, index };
+};
+
+const parsePick: Parser<MutationRequest> = (body) => {
+  const index = whole(body.index, -1);
+  const option = whole(body.option, 0);
+  return index === null || option === null ? null : { type: 'pick', index, option };
+};
+
+const parseReroll: Parser<MutationRequest> = () => ({ type: 'reroll' });
+
+const parseSell: Parser<MutationRequest> = (body) => {
+  const charmId = text(body.charmId);
+  return charmId === null ? null : { type: 'sell', charmId };
+};
+
+const parsePledge =
+  (type: 'shrine' | 'play'): Parser<MutationRequest> =>
+  (body) => {
+    const pledgeId = text(body.pledgeId);
+    return pledgeId === null ? null : { type, pledgeId };
+  };
+
+// The depth-layer requests (`depth.ts`).
+
+const parseExpeditionSend: Parser<DepthRequest> = ({ region, choice }) =>
+  isRegionId(region) && isExpeditionChoice(choice)
+    ? { type: 'expedition_send', region, choice }
+    : null;
+
+const parseExpeditionCollect: Parser<DepthRequest> = () => ({ type: 'expedition_collect' });
+
+const parsePackOpen: Parser<DepthRequest> = ({ seed, charmId: rawCharmId }) => {
+  const charmId = text(rawCharmId);
+  return typeof seed === 'number' &&
+    Number.isInteger(seed) &&
+    seed >= 0 &&
+    seed <= MAX_SEED &&
+    charmId !== null
+    ? { type: 'pack_open', seed, charmId }
+    : null;
+};
+
+const parseForgeStart: Parser<DepthRequest> = ({ recipeId, pieceId: rawPieceId }) => {
+  if (typeof recipeId !== 'string' || !RECIPE_ID.test(recipeId)) {
+    return null;
+  }
+  if (rawPieceId === undefined) {
+    return { type: 'forge_start', recipeId };
+  }
+  const pieceId = text(rawPieceId);
+  return pieceId === null ? null : { type: 'forge_start', recipeId, pieceId };
+};
+
+const parseForgeCollect: Parser<DepthRequest> = (body) => {
+  const station: StationId | null = member(body.station, STATION_IDS);
+  return station === null ? null : { type: 'forge_collect', station };
+};
+
+const parseForgeUpgrade: Parser<DepthRequest> = (body) => {
+  // Either an upgrade to buy or a cape colour to choose (null for the natural cape), never both.
+  const dyeing = Object.hasOwn(body, 'capeColor');
+  if (dyeing === (body.upgrade !== undefined)) {
+    return null;
+  }
+  if (dyeing) {
+    const color = body.capeColor;
+    return color === null || isCapeColor(color)
+      ? { type: 'forge_dye', capeColor: color as CapeColor | null }
       : null;
-  switch (handler) {
-    case 'buy': {
-      const kind = BUY_KINDS.find((candidate) => candidate === body.kind);
-      if (kind === undefined) {
-        return null;
-      }
-      if (kind === 'voucher' || kind === 'legendary') {
-        return { requestId, request: { type: 'buy', kind } };
-      }
-      const slot = whole(index, 0);
-      return slot === null ? null : { requestId, request: { type: 'buy', kind, index: slot } };
-    }
-    case 'pick': {
-      const slot = whole(index, -1);
-      const chosen = whole(option, 0);
-      return slot === null || chosen === null
-        ? null
-        : { requestId, request: { type: 'pick', index: slot, option: chosen } };
-    }
-    case 'reroll':
-      return { requestId, request: { type: 'reroll' } };
-    case 'sell': {
-      const charmId = text(body.charmId);
-      return charmId === null ? null : { requestId, request: { type: 'sell', charmId } };
-    }
-    case 'shrine':
-    case 'play': {
-      const pledgeId = text(body.pledgeId);
-      return pledgeId === null
-        ? null
-        : { requestId, request: { type: handler === 'shrine' ? 'shrine' : 'play', pledgeId } };
+  }
+  const upgrade: UpgradeId | null = member(body.upgrade, UPGRADE_IDS);
+  return upgrade === null ? null : { type: 'forge_upgrade', upgrade };
+};
+
+const parseGearEquip: Parser<DepthRequest> = (body) => {
+  // Exactly one of: a piece to wear, a slot to take off, a pet to wear.
+  const given = ['pieceId', 'unequip', 'petId'].filter((name) => body[name] !== undefined);
+  if (given.length !== 1) {
+    return null;
+  }
+  if (given[0] === 'unequip') {
+    const slot: GearSlot | null = member(body.unequip, GEAR_SLOTS);
+    return slot === null ? null : { type: 'unequip', slot };
+  }
+  const id = text(given[0] === 'pieceId' ? body.pieceId : body.petId);
+  if (id === null) {
+    return null;
+  }
+  return given[0] === 'pieceId' ? { type: 'equip', pieceId: id } : { type: 'equip_pet', petId: id };
+};
+
+const parseFeatPin: Parser<DepthRequest> = (body) => {
+  const featId = text(body.featId);
+  return featId === null || typeof body.pinned !== 'boolean'
+    ? null
+    : { type: 'pin', featId, pinned: body.pinned };
+};
+
+const parseSettings: Parser<DepthRequest> = (body) =>
+  typeof body.badgePublic === 'boolean'
+    ? { type: 'settings', badgePublic: body.badgePublic }
+    : null;
+
+// What each depth route answers beyond `me` (docs/api-contract.md); every other one answers `{ me }`.
+
+/** The trip a send or collect answers with: the plan always holds one, and a replay reads it from the profile. */
+const tripOf = (result: DepthResult): ExpeditionState => result.expedition as ExpeditionState;
+
+const answerSend = (me: MeResponse, result: DepthResult): ExpeditionSendResponse => ({
+  me,
+  expedition: tripOf(result),
+});
+
+const answerCollect = (me: MeResponse, result: DepthResult): ExpeditionCollectResponse => ({
+  me,
+  expedition: tripOf(result),
+  loot: result.loot,
+  applied: result.applied,
+  featsUnlocked: result.featsUnlocked,
+});
+
+const answerForgeCollect = (me: MeResponse, result: DepthResult): ForgeCollectResponse => ({
+  me,
+  piece: result.piece,
+  applied: result.applied,
+});
+
+const answerMe = (me: MeResponse): MeResult => ({ me });
+
+// ---------------------------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------------------------
+
+/** What a route handler is given: the signed-in player, the request, and the path parameter if any. */
+interface Call {
+  userId: number;
+  event: FunctionUrlEvent;
+  /** The capture group of a route's pattern; empty for an exact path. */
+  param: string;
+}
+
+interface Route {
+  method: 'GET' | 'POST';
+  /** An exact path, or a pattern with one capture group (`GET /packs/:seed` is the only one). */
+  path: string | RegExp;
+  handle: (call: Call) => Promise<FunctionUrlResult>;
+}
+
+const get = (path: string | RegExp, handle: Route['handle']): Route => ({
+  method: 'GET',
+  path,
+  handle,
+});
+
+const post = (path: string, handle: Route['handle']): Route => ({ method: 'POST', path, handle });
+
+/** The route for a path, and its path parameter. An exact path wins over a pattern. */
+function matchRoute(
+  routes: readonly Route[],
+  path: string,
+): { route: Route; param: string } | undefined {
+  const exact = routes.find((route) => route.path === path);
+  if (exact) {
+    return { route: exact, param: '' };
+  }
+  for (const route of routes) {
+    const param = route.path instanceof RegExp ? route.path.exec(path)?.[1] : undefined;
+    if (param !== undefined) {
+      return { route, param };
     }
   }
+  return undefined;
+}
+
+/** The answer for a mutation that was refused: its status and error code. */
+const refused = ({ status, error }: Refusal): FunctionUrlResult => json(status, { error });
+
+/** The JSON object in a request body: `handle` runs on it, or the 413 / 400 answer is sent instead. */
+async function withJsonBody(
+  event: FunctionUrlEvent,
+  handle: (body: Body) => Promise<FunctionUrlResult>,
+): Promise<FunctionUrlResult> {
+  const raw = rawBody(event, MAX_REQUEST_BYTES);
+  if (raw === 'too_large') {
+    return json(413, { error: 'payload_too_large' });
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw.toString('utf8'));
+  } catch {
+    return json(400, { error: 'invalid_json' });
+  }
+  return isRecord(body) ? handle(body) : json(400, { error: 'invalid_request' });
 }
 
 export interface ApiDeps {
@@ -473,144 +485,75 @@ export function createApiHandler(
     return { db, now: now(), newSeed: deps.newSeed ?? randomSeed };
   }
 
-  async function me(userId: number): Promise<FunctionUrlResult> {
+  /** Answer for the player's current state, or 404 when they have no profile. */
+  async function withCurrent(
+    userId: number,
+    respond: (current: Current, now: number) => FunctionUrlResult | Promise<FunctionUrlResult>,
+  ): Promise<FunctionUrlResult> {
     const context = runContext();
     const current = await loadCurrent(context, userId);
-    return current
-      ? json(200, toMeResponse(current, context.now))
-      : json(404, { error: 'no_profile' });
+    return current ? respond(current, context.now) : json(404, { error: 'no_profile' });
   }
 
-  async function week(userId: number): Promise<FunctionUrlResult> {
-    const context = runContext();
-    const current = await loadCurrent(context, userId);
-    return current
-      ? json(200, toWeekSummary(current, context.now))
-      : json(404, { error: 'no_profile' });
-  }
+  /** A GET route that answers with a view of the player's current state. */
+  const view = (
+    path: string,
+    build: (current: Current, now: number, userId: number) => unknown,
+  ): Route =>
+    get(path, ({ userId }) =>
+      withCurrent(userId, async (current, at) => json(200, await build(current, at, userId))),
+    );
 
-  /** The JSON object in a request body, or the 413 / 400 answer to send instead. */
-  function jsonBody(
+  /**
+   * What every mutation route does around the mutation itself: read the body, take the request id and the
+   * typed request out of it (400 when either is invalid), and run `run` with the context the mutation needs.
+   */
+  function runMutation<R>(
     event: FunctionUrlEvent,
-  ): { body: Record<string, unknown> } | { refusal: FunctionUrlResult } {
-    const raw = rawBody(event, MAX_REQUEST_BYTES);
-    if (raw === 'too_large') {
-      return { refusal: json(413, { error: 'payload_too_large' }) };
-    }
-    let body: unknown;
-    try {
-      body = JSON.parse(raw.toString('utf8'));
-    } catch {
-      return { refusal: json(400, { error: 'invalid_json' }) };
-    }
-    return typeof body === 'object' && body !== null && !Array.isArray(body)
-      ? { body: body as Record<string, unknown> }
-      : { refusal: json(400, { error: 'invalid_request' }) };
-  }
-
-  async function mutation(
-    userId: number,
-    event: FunctionUrlEvent,
-    handler: MutationHandler,
+    parse: Parser<R>,
+    run: (context: DepthContext, requestId: string, request: R) => Promise<FunctionUrlResult>,
   ): Promise<FunctionUrlResult> {
-    const read = jsonBody(event);
-    if ('refusal' in read) {
-      return read.refusal;
-    }
-    const parsed = parseMutation(handler, read.body);
-    if (parsed === null) {
-      return json(400, { error: 'invalid_request' });
-    }
-    const context = { ...runContext(), log };
-    const outcome = await mutate(context, userId, parsed.requestId, parsed.request);
-    if (outcome.status === 404) {
-      return json(404, { error: 'no_profile' });
-    }
-    if (outcome.status === 409) {
-      return json(409, { error: outcome.error });
-    }
-    const response: MutationResponse = {
-      me: toMeResponse(outcome.current, context.now),
-      week: toWeekSummary(outcome.current, context.now),
-    };
-    return json(200, response);
+    return withJsonBody(event, async (body) => {
+      const requestId = parseRequestId(body);
+      const request = parse(body);
+      if (requestId === null || request === null) {
+        return json(400, { error: 'invalid_request' });
+      }
+      const context = { ...runContext(), log, ...(deps.rollSeed ? { seed: deps.rollSeed } : {}) };
+      return run(context, requestId, request);
+    });
   }
 
-  /** The depth-layer mutations (expeditions, packs, the Forge, gear, Feats): see `depth.ts`. */
-  async function depthMutation(
-    userId: number,
-    event: FunctionUrlEvent,
-    handler: DepthHandler,
-  ): Promise<FunctionUrlResult> {
-    const read = jsonBody(event);
-    if ('refusal' in read) {
-      return read.refusal;
-    }
-    const parsed = parseDepth(handler, read.body);
-    if (parsed === null) {
-      return json(400, { error: 'invalid_request' });
-    }
-    const context = { ...runContext(), log, ...(deps.rollSeed ? { seed: deps.rollSeed } : {}) };
-    const outcome = await mutateDepth(context, userId, parsed.requestId, parsed.request);
-    if (outcome.status !== 200) {
-      return json(outcome.status, { error: outcome.error });
-    }
-    const me = toMeResponse(outcome.current, context.now);
-    const { result } = outcome;
-    switch (handler) {
-      case 'expedition_send': {
-        const body: ExpeditionSendResponse = {
-          me,
-          expedition: result.expedition as ExpeditionState,
+  /** A shop, shrine or Pledge route (`mutations.ts`): it answers the new profile and week. */
+  const shopRoute = (path: string, parse: Parser<MutationRequest>): Route =>
+    post(path, ({ userId, event }) =>
+      runMutation(event, parse, async (context, requestId, request) => {
+        const outcome = await mutate(context, userId, requestId, request);
+        if (outcome.status !== 200) {
+          return refused(outcome);
+        }
+        const body: MutationResponse = {
+          me: toMeResponse(outcome.current, context.now),
+          week: toWeekSummary(outcome.current, context.now),
         };
         return json(200, body);
-      }
-      case 'expedition_collect': {
-        const body: ExpeditionCollectResponse = {
-          me,
-          expedition: result.expedition as ExpeditionState,
-          loot: result.loot,
-          applied: result.applied,
-          featsUnlocked: result.featsUnlocked,
-        };
-        return json(200, body);
-      }
-      case 'forge_collect': {
-        const body: ForgeCollectResponse = { me, piece: result.piece, applied: result.applied };
-        return json(200, body);
-      }
-      default: {
-        const body: MeResult = { me };
-        return json(200, body);
-      }
-    }
-  }
+      }),
+    );
 
-  async function expeditionView(userId: number): Promise<FunctionUrlResult> {
-    const context = runContext();
-    const current = await loadCurrent(context, userId);
-    return current
-      ? json(200, toExpeditionView(current, context.now))
-      : json(404, { error: 'no_profile' });
-  }
-
-  async function forgeView(userId: number): Promise<FunctionUrlResult> {
-    const context = runContext();
-    const current = await loadCurrent(context, userId);
-    return current
-      ? json(200, toForgeView(current, context.now))
-      : json(404, { error: 'no_profile' });
-  }
-
-  async function featsView(userId: number): Promise<FunctionUrlResult> {
-    const context = runContext();
-    const current = await loadCurrent(context, userId);
-    if (!current) {
-      return json(404, { error: 'no_profile' });
-    }
-    // The unlock dates are the `FEAT#` records, written once when each Feat unlocked.
-    return json(200, toFeatsView(current, context.now, await db.listFeatUnlocks(userId)));
-  }
+  /** A depth-layer route (expeditions, packs, the Forge, gear, Feats): see `depth.ts`. */
+  const depthRoute = (
+    path: string,
+    parse: Parser<DepthRequest>,
+    answer: (me: MeResponse, result: DepthResult) => object = answerMe,
+  ): Route =>
+    post(path, ({ userId, event }) =>
+      runMutation(event, parse, async (context, requestId, request) => {
+        const outcome = await mutateDepth(context, userId, requestId, request);
+        return outcome.status === 200
+          ? json(200, answer(toMeResponse(outcome.current, context.now), outcome.result))
+          : refused(outcome);
+      }),
+    );
 
   /** `GET /packs/:seed`: the 3 Charms of an unopened pack (a pure function of the seed, kept by the player). */
   async function packOptions(userId: number, rawSeed: string): Promise<FunctionUrlResult> {
@@ -618,15 +561,13 @@ export function createApiHandler(
     if (!Number.isSafeInteger(seed) || seed > MAX_SEED) {
       return json(400, { error: 'invalid_request' });
     }
-    const current = await loadCurrent(runContext(), userId);
-    if (!current) {
-      return json(404, { error: 'no_profile' });
-    }
-    if (!(current.player.charmPacks ?? []).includes(seed)) {
-      return json(409, { error: 'no_such_pack' });
-    }
-    const body: PackOptionsResponse = { options: lootPackOptions(seed) };
-    return json(200, body);
+    return withCurrent(userId, ({ player }) => {
+      if (!(player.charmPacks ?? []).includes(seed)) {
+        return json(409, { error: 'no_such_pack' });
+      }
+      const body: PackOptionsResponse = { options: lootPackOptions(seed) };
+      return json(200, body);
+    });
   }
 
   async function combatLog(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
@@ -655,9 +596,8 @@ export function createApiHandler(
     if (!profile) {
       return json(404, { error: 'no_profile' });
     }
-    const found = await Promise.all(
-      profile.installations.map((id) => db.getInstallation(id, now())),
-    );
+    const at = now();
+    const found = await Promise.all(profile.installations.map((id) => db.getInstallation(id, at)));
     // An installation the webhook has not reported (or that was deleted) has nothing to show.
     const body: InstallationsResponse = {
       installations: found.flatMap((item) =>
@@ -705,19 +645,16 @@ export function createApiHandler(
     if (!profile) {
       return json(404, { error: 'no_profile' });
     }
-    const groups: Record<string, Record<string, unknown>[]> = {
-      events: [],
-      weeks: [],
-      feats: [],
-      expeditions: [],
-      jobs: [],
-    };
-    const other: Record<string, unknown>[] = [];
+    type Item = Record<string, unknown>;
+    const groups = Object.fromEntries(
+      EXPORT_GROUPS.map(([, name]) => [name, [] as Item[]]),
+    ) as Record<ExportGroup, Item[]>;
+    const other: Item[] = [];
     for (const item of items) {
       const sk = String(item.SK);
       const group = EXPORT_GROUPS.find(([prefix]) => sk.startsWith(prefix));
       if (group) {
-        groups[group[1]]?.push(item);
+        groups[group[1]].push(item);
       } else if (sk !== 'PROFILE') {
         other.push(item);
       }
@@ -763,28 +700,55 @@ export function createApiHandler(
     userId: number,
     event: FunctionUrlEvent,
   ): Promise<FunctionUrlResult> {
-    const read = jsonBody(event);
-    if ('refusal' in read) {
-      return read.refusal;
-    }
-    const { requestId, confirmLogin } = read.body;
-    if (
-      typeof requestId !== 'string' ||
-      !REQUEST_ID.test(requestId) ||
-      typeof confirmLogin !== 'string' ||
-      confirmLogin.length > 100
-    ) {
-      return json(400, { error: 'invalid_request' });
-    }
-    const profile = await db.getProfile(userId, true);
-    if (profile && confirmLogin.toLowerCase() !== profile.login.toLowerCase()) {
-      return json(400, { error: 'confirm_mismatch' });
-    }
-    await db.deleteUser(userId);
-    return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+    return withJsonBody(event, async (body) => {
+      const { confirmLogin } = body;
+      if (
+        parseRequestId(body) === null ||
+        typeof confirmLogin !== 'string' ||
+        confirmLogin.length > 100
+      ) {
+        return json(400, { error: 'invalid_request' });
+      }
+      const profile = await db.getProfile(userId, true);
+      if (profile && confirmLogin.toLowerCase() !== profile.login.toLowerCase()) {
+        return json(400, { error: 'confirm_mismatch' });
+      }
+      await db.deleteUser(userId);
+      return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+    });
   }
 
   // ----- router -----
+
+  const routes: readonly Route[] = [
+    view('/me', toMeResponse),
+    view('/week', toWeekSummary),
+    get('/log', ({ userId, event }) => combatLog(userId, event)),
+    get('/installations', ({ userId }) => installations(userId)),
+    get('/export', ({ userId, event }) => exportData(userId, event)),
+    view('/expedition', toExpeditionView),
+    view('/forge', toForgeView),
+    view('/feats', async (current, at, userId) =>
+      toFeatsView(current, at, await db.listFeatUnlocks(userId)),
+    ),
+    get(PACK_PATH, ({ userId, param }) => packOptions(userId, param)),
+    shopRoute('/shop/buy', parseBuy),
+    shopRoute('/shop/pick', parsePick),
+    shopRoute('/shop/reroll', parseReroll),
+    shopRoute('/shop/sell', parseSell),
+    shopRoute('/shrine/remove', parsePledge('shrine')),
+    shopRoute('/pledges/play', parsePledge('play')),
+    depthRoute('/expedition/send', parseExpeditionSend, answerSend),
+    depthRoute('/expedition/collect', parseExpeditionCollect, answerCollect),
+    depthRoute('/packs/open', parsePackOpen),
+    depthRoute('/forge/start', parseForgeStart),
+    depthRoute('/forge/collect', parseForgeCollect, answerForgeCollect),
+    depthRoute('/forge/upgrade', parseForgeUpgrade),
+    depthRoute('/gear/equip', parseGearEquip),
+    depthRoute('/feats/pin', parseFeatPin),
+    depthRoute('/settings', parseSettings),
+    post('/delete', ({ userId, event }) => deleteAccount(userId, event)),
+  ];
 
   return async (event) => {
     const method = event.requestContext.http.method;
@@ -814,51 +778,19 @@ export function createApiHandler(
         // Function URL CORS answers preflights itself; this is the fallback if one reaches the code.
         return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
       }
-      const packSeed = PACK_PATH.exec(path)?.[1];
-      const route = Object.hasOwn(ROUTES, path)
-        ? ROUTES[path]
-        : packSeed !== undefined
-          ? PACK_ROUTE
-          : undefined;
-      if (route === undefined) {
+      const matched = matchRoute(routes, path);
+      if (matched === undefined) {
         return json(404, { error: 'not_found' });
       }
-      const allowed = route.kind === 'get' ? 'GET' : 'POST';
-      if (method !== allowed) {
-        return json(405, { error: 'method_not_allowed' }, { allow: allowed });
+      const { route, param } = matched;
+      if (method !== route.method) {
+        return json(405, { error: 'method_not_allowed' }, { allow: route.method });
       }
       const userId = await authenticate(event);
       if (userId === null) {
         return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
       }
-      if (route.kind === 'post') {
-        if (route.handler === 'delete') {
-          return await deleteAccount(userId, event);
-        }
-        return isDepthHandler(route.handler)
-          ? await depthMutation(userId, event, route.handler)
-          : await mutation(userId, event, route.handler);
-      }
-      switch (route.handler) {
-        case 'me':
-          return await me(userId);
-        case 'week':
-          return await week(userId);
-        case 'log':
-          return await combatLog(userId, event);
-        case 'installations':
-          return await installations(userId);
-        case 'export':
-          return await exportData(userId, event);
-        case 'expedition':
-          return await expeditionView(userId);
-        case 'forge':
-          return await forgeView(userId);
-        case 'feats':
-          return await featsView(userId);
-        case 'pack':
-          return await packOptions(userId, packSeed ?? '');
-      }
+      return await route.handle({ userId, event, param });
     } catch (error) {
       log.error('api.failed', {}, error);
       return json(500, { error: 'internal_error' });

@@ -4,6 +4,8 @@
  * before it is sent, so an attribute outside the list can never reach the table, whatever the caller does.
  */
 
+import { USER_PK_PREFIX } from './keys';
+
 export type ItemKind =
   | 'PROFILE'
   | 'EVENT'
@@ -240,7 +242,7 @@ export function assertItemAllowed(kind: ItemKind, item: Readonly<Record<string, 
 
 /** Which item type a stored item is, from its keys; null for an unrecognised shape. */
 export function classifyItem(pk: string, sk: string): ItemKind | null {
-  if (pk.startsWith('USER#')) {
+  if (pk.startsWith(USER_PK_PREFIX)) {
     if (sk === 'PROFILE') {
       return 'PROFILE';
     }
