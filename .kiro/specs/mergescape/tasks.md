@@ -51,27 +51,27 @@ Conventions for the implementer:
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.7_
   - Verify: `sam validate --lint` passes; `sam build` succeeds; a deploy to a sandbox account creates all resources; `cfn-nag` or `checkov` shows no high findings.
 
-- [ ] 6. **[v0]** Backend: DynamoDB repository layer
+- [x] 6. **[v0]** Backend: DynamoDB repository layer
   - `db.ts` with typed accessors for every item type in design.md §9.1: profile get/update (atomic add on XP, skill XP, gold), event put, PR meta upsert (conditional on not regressing `merged`), installation upsert/delete, delivery dedupe put (`attribute_not_exists(PK)` + TTL 7 d), OAuth state put/consume, week get/update.
   - Schema guard: a runtime allow-list of attribute names per item type, enforced before every write; throws on violation.
   - Integration tests against DynamoDB Local (docker) using the same table definition as the SAM template.
   - _Requirements: 1.5, 1.6, 1.7, 3.5_
   - Verify: dedupe second put fails with ConditionalCheckFailed; schema guard test fails on an extra attribute; all accessors covered.
 
-- [ ] 7. **[v0]** Backend: ingest handler
+- [x] 7. **[v0]** Backend: ingest handler
   - `handlers/ingest.ts`: read raw body; reject >256 KB with 413; verify signature (timing-safe) else 401; dedupe by delivery id (200 on duplicate); normalise; for each `GameEvent`: resolve actor → player (drop and count if unlinked or installation not accessible); load player + PR state; `score()`; write EVT item, update PR item, atomically add XP/skill XP/gold, update counters; respond 200. Error-only logging. Metrics: `events_scored`, `dropped_unlinked`, `dropped_bot`, `duplicates`.
   - Installation events update the `INSTALL#` items.
   - _Requirements: 1.2, 1.3, 1.4, 1.5, 2.5, 2.6, 2.7, 3.6_
   - Verify: integration test drives the handler with signed fixture deliveries end-to-end into DynamoDB Local and asserts resulting profile XP equals the scorer's output; wrong signature writes nothing; replay writes nothing; body >256 KB → 413.
 
-- [ ] 8. **[v0]** Backend: auth and session
+- [x] 8. **[v0]** Backend: auth and session
   - `handlers/api.ts` router with routes `GET /auth/login` (redirect with state), `GET /auth/callback` (exchange code, fetch `/user` and `/user/installations`, discard token, upsert profile, issue JWT, redirect to client with token in fragment), `GET /me`, `GET /log?cursor=`, `GET /installations`.
   - JWT helper: HS256, 7 d, `iss`/`aud`, key from SSM cached 15 min.
   - CORS: Function URL config plus explicit `Origin` check returning 403 otherwise.
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 12.3, 12.5_
   - Verify: tests for state expiry/single use, token verification failures (bad sig, wrong aud, expired), Origin check; a mocked GitHub exchange proves no token is written to the table.
 
-- [ ] 9. **[v0]** Client: app shell, sprites, Town, Combat Log, Character
+- [x] 9. **[v0]** Client: app shell, sprites, Town, Combat Log, Character
   - Design tokens and layout from the mock page (`mocks.html` in this folder; tokens: dark stone background, wood-framed panels, Pixelify Sans for headings, IBM Plex Sans body, IBM Plex Mono numbers).
   - `sprites.ts`: 16×16 palette-indexed definitions for hero (7 palettes), Merge Goblin, Nitpick Imp, Flaky Test Wraith, Legacy Golem, Rebase Hydra, Scope Creep, Release Dragon, Silent Monolith, six Moguls, three Charm icons; renderer to inline SVG with `shape-rendering: crispEdges`.
   - Screens: Landing (sign-in + 3 steps + privacy promise), Town (scene, act bar, last kill, Pledge hand placeholder, shop banner placeholder), Combat Log (paginated rows with breakdown expansion), Character (XP bar with exact numbers, 4 skills, Charm slots, gear tier).
@@ -88,26 +88,26 @@ Conventions for the implementer:
 
 ---
 
-- [ ] 11. **[v1]** Shared: Charms
+- [x] 11. **[v1]** Shared: Charms
   - `charms.ts`: definitions for the nine Charms (id, name, rarity, power, condition function over `(event, player, pr, now)`), slot logic, duplicate stacking and auto-sell.
   - Wire into `score()` Power calculation; cap Power at 8.
   - _Requirements: 9.1, 4.5_
   - Verify: one test per Charm proving its condition and contribution; Power cap test.
 
-- [ ] 12. **[v1]** Shared: Pledges and Vouchers
+- [x] 12. **[v1]** Shared: Pledges and Vouchers
   - `pledges.ts`: six Pledge definitions with progress evaluators and one-time completion bonuses; deck model; draw of 5; play up to 3; auto-play rule.
   - `vouchers.ts`: six Vouchers with their effects (Charm Belt slot, Cheaper Re-rolls, Scout's Eye, Deep Pockets, Shrine Pass, Overclock exponent 1.65 applying only to later events).
   - _Requirements: 9.2, 9.3, 9.4, 9.5, 9.6, 4.6_
   - Verify: Pledge completion applies exactly once; Overclock changes Zone only for events after purchase time.
 
-- [ ] 13. **[v1]** Shared: Moguls
+- [x] 13. **[v1]** Shared: Moguls
   - `moguls.ts`: six Moguls with modifier functions applied inside `score()` when the event falls in the Boss act window (or all week where the modifier says so), per design.md §6.2.
   - Selection without repeats across six weeks (stored as a shuffled bag on the profile).
   - Copy review: assert no real names, company names or trademarks in `moguls.ts` and the Bestiary copy (a test with a denylist of obvious real names is acceptable).
   - _Requirements: 7.1, 7.2, 7.4, 7.5_
   - Verify: one test per modifier; bag selection test over 12 weeks shows each Mogul exactly twice.
 
-- [ ] 14. **[v1]** Shared: run, economy, shop
+- [x] 14. **[v1]** Shared: run, economy, shop
   - `run.ts`: week key (ISO week, UTC), act targets from 8-week median with the flat-2,000 and 2× rules, act clearing on XP cross, Renown increment, biome from Renown.
   - `economy.ts`: the only module that mutates gold: points→gold, act payouts, interest with cap, purchases, sells. Export a single `applyGoldDelta` used everywhere.
   - `shop.ts`: seeded RNG (store seed on the week item), stock generation with rarity weights, pack generation (3 options), re-roll pricing, voucher availability, purchase validation.
