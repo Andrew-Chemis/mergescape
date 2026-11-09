@@ -11,10 +11,16 @@ allowBuilds:
 
 # Single source of truth for pinned tool versions. Packages reference these as `catalog:`.
 catalog:
+  '@aws-sdk/client-dynamodb': 3.1164.0
+  '@aws-sdk/client-ssm': 3.1164.0
+  '@aws-sdk/lib-dynamodb': 3.1164.0
   '@eslint/js': 10.0.1
   '@sveltejs/vite-plugin-svelte': 7.3.1
+  '@types/aws-lambda': 8.10.164
+  '@types/node': 22.20.5
   esbuild: 0.28.2
   eslint: 10.14.0
+  jose: 6.2.13
   prettier: 3.9.10
   svelte: 5.57.3
   svelte-check: 4.7.8

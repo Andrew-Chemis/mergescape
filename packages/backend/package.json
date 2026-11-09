@@ -10,13 +10,21 @@
     }
   },
   "scripts": {
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@mergescape/shared": "workspace:*"
+    "@aws-sdk/client-dynamodb": "catalog:",
+    "@aws-sdk/client-ssm": "catalog:",
+    "@aws-sdk/lib-dynamodb": "catalog:",
+    "@mergescape/shared": "workspace:*",
+    "jose": "catalog:"
   },
   "devDependencies": {
-    "typescript": "catalog:"
+    "@types/aws-lambda": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }
