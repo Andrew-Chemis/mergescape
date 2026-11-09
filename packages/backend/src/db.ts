@@ -200,6 +200,8 @@ export interface InstallationItem {
   accountId: number;
   repoIds: number[];
   suspended: boolean;
+  /** Tombstoned by `installation.deleted` and waiting for the TTL sweep to remove it. */
+  deleted: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -841,21 +843,19 @@ export class Db {
 
   // ----- installations: INSTALL#<id> / META -----
 
-  /** The installation, or null when it is unknown or tombstoned (deleted, awaiting TTL removal). */
+  /** The installation, or null when it was never seen (or its tombstone has been swept). */
   async getInstallation(installationId: number, nowMs: number): Promise<InstallationItem | null> {
     const item = await this.getItem(installKey(installationId), false);
     if (!item) {
       return null;
     }
     const ttl = numOrNull(item, 'ttl');
-    if (ttl !== null && ttl <= seconds(nowMs)) {
-      return null;
-    }
     return {
       id: installationId,
       accountId: num(item, 'account_id', 0),
       repoIds: numberList(item.repo_ids),
       suspended: bool(item, 'suspended', false),
+      deleted: ttl !== null && ttl <= seconds(nowMs),
     };
   }
 
@@ -914,8 +914,8 @@ export class Db {
 
   /**
    * `installation.deleted`: remove the mapping. The ingest role has no DeleteItem, so the item is
-   * tombstoned instead (repo ids dropped, suspended, `ttl = now`): readers treat it as absent at once
-   * (`getInstallation`) and DynamoDB's TTL sweep deletes it within about two days.
+   * tombstoned instead (repo ids dropped, suspended, `ttl = now`): `getInstallation` reports it as
+   * `deleted` at once and DynamoDB's TTL sweep removes it within about two days.
    */
   async removeInstallation(installationId: number, nowMs: number): Promise<void> {
     await this.update('INSTALL', installKey(installationId), {

@@ -394,6 +394,7 @@ describe('installations', () => {
       accountId: 5005005,
       repoIds: [1, 2, 3],
       suspended: false,
+      deleted: false,
     });
 
     await db.changeInstallationRepos({
@@ -416,13 +417,21 @@ describe('installations', () => {
     expect((await db.getInstallation(777001, NOW))?.suspended).toBe(true);
 
     await db.removeInstallation(777001, NOW);
-    expect(await db.getInstallation(777001, NOW)).toBeNull();
+    expect(await db.getInstallation(777001, NOW)).toMatchObject({
+      deleted: true,
+      suspended: true,
+      repoIds: [],
+    });
     expect(fake.size).toBe(1);
     auditSchema(fake);
 
     // Reinstalling clears the tombstone.
     await db.upsertInstallation({ id: 777001, accountId: 5005005, repoIds: [], suspended: false });
-    expect(await db.getInstallation(777001, NOW)).toMatchObject({ suspended: false, repoIds: [] });
+    expect(await db.getInstallation(777001, NOW)).toMatchObject({
+      suspended: false,
+      deleted: false,
+      repoIds: [],
+    });
   });
 
   it('is physically removed by the TTL sweep after deletion, using only Put/Get/Update/Query', async () => {
