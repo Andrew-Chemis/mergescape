@@ -1335,6 +1335,92 @@ describe('GET /feats and POST /feats/pin', () => {
 // Requests in general, export and delete
 // ---------------------------------------------------------------------------------------------
 
+describe('POST /settings (the public badge, Requirement 11.4)', () => {
+  const badgeOf = async (g: Game) =>
+    (await g.api(apiRequest({ path: '/badge/player-1001001.svg', origin: null }))).body ?? '';
+
+  it('starts public, turns the badge off and on, and answers with the profile each time', async () => {
+    const g = await newcomer();
+    expect((await me(g)).badgePublic).toBe(true);
+    const off = await g.post('/settings', { requestId: rid(), badgePublic: false });
+    expect(off.status).toBe(200);
+    expect(meOf(off).badgePublic).toBe(false);
+    expect((await me(g)).badgePublic).toBe(false);
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.badgePublic).toBe(false);
+    const on = await g.post('/settings', { requestId: rid(), badgePublic: true });
+    expect(meOf(on).badgePublic).toBe(true);
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.badgePublic).toBe(true);
+    auditSchema(g.fake);
+  });
+
+  it('keeps the attribute on the profile where GSI1 projects it, and changes nothing else', async () => {
+    const g = await newcomer();
+    const before = await me(g);
+    await g.post('/settings', { requestId: rid(), badgePublic: false });
+    const after = await me(g);
+    expect({ ...after, badgePublic: true }).toEqual({ ...before, week: after.week });
+    const [profile] = itemsWithPrefix(g.fake, `USER#${AUTHOR_ID}`).filter(
+      (item) => item.SK === 'PROFILE',
+    );
+    expect(profile?.badge_public).toBe(false);
+  });
+
+  it('answers the same value again without a write, and a replayed request id with the profile as it is', async () => {
+    const g = await newcomer();
+    const request = { requestId: rid(), badgePublic: false };
+    const first = await g.post('/settings', request);
+    const writes = g.fake.calls.filter((call) => call.operation === 'UpdateItem').length;
+    expect(await g.post('/settings', request)).toEqual(first);
+    // Another request id with the value it already has: nothing to change, nothing written.
+    expect(
+      meOf(await g.post('/settings', { requestId: rid(), badgePublic: false })).badgePublic,
+    ).toBe(false);
+    expect(g.fake.calls.filter((call) => call.operation === 'UpdateItem')).toHaveLength(writes);
+  });
+
+  it('refuses a body whose badgePublic is not a boolean, and never records the request id', async () => {
+    const g = await newcomer();
+    for (const body of [{}, { badgePublic: 'no' }, { badgePublic: 0 }, { badgePublic: null }]) {
+      expect((await g.post('/settings', { requestId: rid(), ...body })).status).toBe(400);
+    }
+    expect((await g.post('/settings', { badgePublic: false })).status).toBe(400);
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-46'))?.requestIds ?? []).toEqual([]);
+    expect((await g.post('/settings', { requestId: rid(), badgePublic: false }, 4242)).status).toBe(
+      404,
+    );
+  });
+
+  it('turns the badge unranked, pins and coin included, and back', async () => {
+    const g = await newcomer();
+    await patch(g, { featsUnlocked: ['merge-conflict', 'the-old-coin'], oldCoin: true });
+    await g.post('/feats/pin', { requestId: rid(), featId: 'merge-conflict', pinned: true });
+    const ranked = await badgeOf(g);
+    expect(ranked).not.toContain('unranked');
+    expect(ranked).toContain(FEAT_GLYPHS.humour);
+
+    await g.post('/settings', { requestId: rid(), badgePublic: false });
+    const hidden = await badgeOf(g);
+    expect(hidden).toContain('unranked');
+    expect(hidden).not.toContain(FEAT_GLYPHS.humour);
+    expect(hidden).not.toContain(COIN_GLYPH);
+    // It is the very badge an unknown login gets: nothing says that this account exists.
+    const unknown = await g.api(apiRequest({ path: '/badge/nobody-here.svg', origin: null }));
+    expect(hidden).toBe(unknown.body);
+
+    await g.post('/settings', { requestId: rid(), badgePublic: true });
+    expect(await badgeOf(g)).toBe(ranked);
+  });
+
+  it('is private by the badge route alone: a player with no setting stored is public', async () => {
+    const g = await newcomer();
+    const [profile] = itemsWithPrefix(g.fake, `USER#${AUTHOR_ID}`).filter(
+      (item) => item.SK === 'PROFILE',
+    );
+    expect(profile && 'badge_public' in profile).toBe(false);
+    expect(await badgeOf(g)).not.toContain('unranked');
+  });
+});
+
 describe('the depth routes as requests', () => {
   it('answer a replayed request id with the profile as it is, and record at most 20 ids', async () => {
     const g = await newcomer();
@@ -1364,6 +1450,7 @@ describe('the depth routes as requests', () => {
       '/forge/upgrade',
       '/gear/equip',
       '/feats/pin',
+      '/settings',
     ]) {
       expect(
         (await send({ path, token, origin: 'https://evil.example', method: 'POST' })).statusCode,

@@ -54,6 +54,62 @@ afterEach(() => {
 const soundSwitch = () =>
   screen.getByRole('switch', { name: 'Play sound effects' }) as HTMLInputElement;
 
+const badgeSwitch = () =>
+  screen.getByRole('switch', { name: 'Show my badge publicly' }) as HTMLInputElement;
+
+describe('Settings: the README badge (Requirement 11.4)', () => {
+  it('shows the switch on, says what the badge shows and what turning it off does', async () => {
+    await settings();
+    const panel = screen.getByRole('region', { name: 'README badge' });
+    expect(badgeSwitch().checked).toBe(true);
+    const text = textOf(panel);
+    expect(text).toContain('level, Vocation, Renown and the Feats you pinned');
+    expect(text).toContain('neutral "unranked" badge');
+    expect(text).toContain('Your badge is public.');
+    expect(text).toContain('up to 6 hours');
+  });
+
+  it('turns the badge off through POST /settings and shows the profile it answers with', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const settingsCall = vi.fn(base.settings);
+    const { session } = await settings({ api: { ...base, settings: settingsCall } });
+    await fireEvent.click(badgeSwitch());
+    await waitFor(() => expect(session.me?.badgePublic).toBe(false));
+    expect(settingsCall).toHaveBeenCalledTimes(1);
+    expect((settingsCall.mock.calls[0] as unknown as [boolean])[0]).toBe(false);
+    expect(badgeSwitch().checked).toBe(false);
+    expect(textOf(screen.getByRole('region', { name: 'README badge' }))).toContain(
+      'Your badge is hidden.',
+    );
+    await fireEvent.click(badgeSwitch());
+    await waitFor(() => expect(session.me?.badgePublic).toBe(true));
+    expect(badgeSwitch().checked).toBe(true);
+  });
+
+  it('starts off for a player who turned it off earlier', async () => {
+    await settings({ me: { badgePublic: false } });
+    expect(badgeSwitch().checked).toBe(false);
+  });
+
+  it('says so, and puts the switch back, when the server refuses or cannot be reached', async () => {
+    const base = createFixtureApi({ now: NOW });
+    const api: Api = {
+      ...base,
+      async settings() {
+        throw new ApiError(0, 'Could not reach the server.');
+      },
+    };
+    const { session } = await settings({ api });
+    await fireEvent.click(badgeSwitch());
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(textOf(screen.getByRole('region', { name: 'README badge' }))).toContain(
+      'Could not reach the server',
+    );
+    expect(badgeSwitch().checked).toBe(true);
+    expect(session.me?.badgePublic).toBe(true);
+  });
+});
+
 describe('Settings: sound', () => {
   it('has the Sound panel, with the switch off, and builds no audio object just by being opened', async () => {
     const audio = stubAudio();

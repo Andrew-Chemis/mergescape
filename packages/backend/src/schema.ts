@@ -88,6 +88,8 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'old_coin',
     // Minutes east of UTC for the local-time Feats. Nothing writes it yet (the timezone setting is deferred).
     'tz_offset',
+    // The player's choice to keep the public README badge from showing them (Settings; GSI1 projects it).
+    'badge_public',
   ],
   // USER#<id> / EVT#<ts>#<delivery>: one Combat Log row. Numbers and scorer-generated labels only.
   EVENT: [

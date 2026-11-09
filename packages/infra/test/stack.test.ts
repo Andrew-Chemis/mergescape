@@ -7,6 +7,7 @@
  * (the asset hash is then a placeholder that does not change with the backend's source; `bundling.test.ts`
  * runs esbuild for real).
  */
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { format, resolveConfig } from 'prettier';
 import { describe, expect, it } from 'vitest';
@@ -218,11 +219,31 @@ describe('the table', () => {
             'vocation',
             'pinned_feats',
             'old_coin',
+            'badge_public',
           ],
         },
         ProvisionedThroughput: { ReadCapacityUnits: 5, WriteCapacityUnits: 5 },
       },
     ]);
+  });
+
+  it('projects badge_public, so a player who turned the badge off is never shown by it', () => {
+    const [index] = tableProps['GlobalSecondaryIndexes'] as Json[];
+    expect((index?.['Projection'] as Json)['NonKeyAttributes']).toContain('badge_public');
+  });
+
+  it('is the projection the backend tests fake: the two lists name the same attributes', () => {
+    // A fake that projected less would let the badge tests pass while the real index hid an attribute.
+    const fake = readFileSync(
+      fileURLToPath(new URL('../../backend/test/fake-dynamo.ts', import.meta.url)),
+      'utf8',
+    );
+    const list = /GSI1_PROJECTED_ATTRIBUTES: readonly string\[\] = \[([\s\S]*?)\];/.exec(fake)?.[1];
+    const names = [...(list ?? '').matchAll(/'([a-z_]+)'/g)].map((match) => match[1] as string);
+    const [index] = tableProps['GlobalSecondaryIndexes'] as Json[];
+    expect(sorted(names)).toEqual(
+      sorted((index?.['Projection'] as Json)['NonKeyAttributes'] as string[]),
+    );
   });
 
   it('is retained when the stack is deleted or replaced', () => {

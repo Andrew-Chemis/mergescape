@@ -25,7 +25,8 @@
                 "renown",
                 "vocation",
                 "pinned_feats",
-                "old_coin"
+                "old_coin",
+                "badge_public"
               ],
               "ProjectionType": "INCLUDE"
             },

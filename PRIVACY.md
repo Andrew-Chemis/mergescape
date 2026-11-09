@@ -22,6 +22,7 @@ Only numbers, ids and times. This is the complete list.
 - Your **numeric GitHub id** and your **GitHub login**, learned once when you sign in. Nothing else from your GitHub profile: no name, no email address, no avatar.
 - The **installation ids** of the Mergescape GitHub App installations you can see on GitHub, refreshed each time you sign in.
 - The **game state** you earn: experience and level, the four skills, gold, Renown, Vocation, Charms, Pledges and Vouchers, the Bestiary (kill counts and first-seen times per monster), your weekly runs, supplies, expeditions, gear and Feats, and the counters that the scoring rules need (such as your weekly streak).
+- Your **badge setting**: whether the public README badge may show you (on by default; see "The README badge").
 
 ### Pull requests
 
@@ -128,7 +129,9 @@ Mergescape is a game you play for yourself. Nobody else can see your character, 
 
 ## The README badge
 
-If you put the Mergescape badge in a README, it is a **public image**: anyone who knows your GitHub login can request it and see your level, Vocation and Renown, and nothing else. After you delete your data it shows a neutral "unranked" badge.
+If you put the Mergescape badge in a README, it is a **public image**: anyone who knows your GitHub login can request it and see your level, Vocation and Renown, the small icons of the (up to three) Feats you chose to pin, and the Old Coin if you found it, and nothing else.
+
+**You can turn it off.** The switch "Show my badge publicly" in Settings is on by default. Turned off, the same address shows the neutral "unranked" badge that a login nobody has used gets, so it does not even show that you play. Places that have already loaded the picture can keep it for up to 6 hours. The choice is stored with your profile as `badge_public`, and the public badge reads it together with the fields above. After you delete your data the badge also shows the neutral "unranked" badge.
 
 ## Contact
 

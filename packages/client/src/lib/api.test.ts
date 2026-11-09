@@ -244,6 +244,7 @@ describe('createHttpApi', () => {
       'packOpen',
       'packOptions',
       'pledgePlay',
+      'settings',
       'shopBuy',
       'shopPick',
       'shopReroll',

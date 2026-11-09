@@ -203,6 +203,20 @@ describe('the depth writes POST { requestId, ...fields } with the bearer token',
       { featId: 'goblin-slayer', pinned: false },
       answer,
     ],
+    [
+      'settings (hide the badge)',
+      (api) => api.settings(false),
+      '/settings',
+      { badgePublic: false },
+      answer,
+    ],
+    [
+      'settings (show the badge)',
+      (api) => api.settings(true),
+      '/settings',
+      { badgePublic: true },
+      answer,
+    ],
   ];
 
   it.each(calls)('%s', async (_name, call, path, fields, body) => {

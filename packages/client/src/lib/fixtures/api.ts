@@ -675,6 +675,11 @@ export function createFixtureApi(options: FixtureApiOptions = {}): Api {
       return delay({ feats: clone(feats) });
     },
     featPin: (featId, pinned) => pin(featId, pinned),
+    settings: (badgePublic) =>
+      transact(() => {
+        me.badgePublic = badgePublic;
+        return { me: snapshot() };
+      }),
     shopBuy: (input) => write(() => buy(input)),
     shopPick: (input) => write(() => pick(input)),
     shopReroll: () => write(reroll),

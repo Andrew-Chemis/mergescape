@@ -55,6 +55,8 @@ export function toPlayerState(profile: ProfileItem): PlayerState {
     pinnedFeats: profile.pinnedFeats,
     ...(profile.featCounters !== null ? { featCounters: profile.featCounters } : {}),
     ...(profile.tzOffsetMinutes !== null ? { tzOffsetMinutes: profile.tzOffsetMinutes } : {}),
+    // Absent means public, so only an opt-out is carried.
+    ...(!profile.badgePublic ? { badgePublic: false } : {}),
   };
 }
 
@@ -119,8 +121,8 @@ export const OLD_COIN_FEAT = 'the-old-coin';
 /**
  * The profile fields an expedition, Forge, gear, Feat or pack action changed between two states of the same
  * player: the satchel, the latest expedition, the inventory and worn gear, pets, Charm packs, the Forge, Feats
- * and titles, pins and the Feat counters. Only changed fields are present. Gold, Charms and the like belong
- * to `shopPatch`; an action that changes both (opening a Charm pack) uses both.
+ * and titles, pins and the Feat counters, and the badge setting. Only changed fields are present. Gold,
+ * Charms and the like belong to `shopPatch`; an action that changes both (opening a Charm pack) uses both.
  */
 export function depthPatch(before: PlayerState, after: PlayerState): ProfilePatch {
   const patch: ProfilePatch = {};
@@ -160,6 +162,9 @@ export function depthPatch(before: PlayerState, after: PlayerState): ProfilePatc
   }
   if (!same(after.featCounters, before.featCounters) && after.featCounters) {
     patch.featCounters = after.featCounters;
+  }
+  if ((after.badgePublic ?? true) !== (before.badgePublic ?? true)) {
+    patch.badgePublic = after.badgePublic ?? true;
   }
   return patch;
 }

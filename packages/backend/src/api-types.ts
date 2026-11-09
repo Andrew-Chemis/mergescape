@@ -139,6 +139,8 @@ export interface MeResponse {
   expedition: ExpeditionState | null;
   /** Minutes east of UTC for the local-time Feats; null means UTC. */
   tzOffsetMinutes: number | null;
+  /** May the public README badge show this player? True until they turn it off in Settings. */
+  badgePublic: boolean;
 }
 
 /** `Station`, `Slot`, `RecipeId` and `PetKey` are the names docs/api-contract.md uses for these shared types. */

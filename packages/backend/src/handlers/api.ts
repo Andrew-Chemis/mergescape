@@ -27,6 +27,7 @@
  * | POST /gear/equip        | yes          | bearer | wear a piece or a pet, or take a slot off       |
  * | GET /feats              | yes          | bearer | every Feat with its progress                    |
  * | POST /feats/pin         | yes          | bearer | pin or unpin a Feat (at most three)             |
+ * | POST /settings          | yes          | bearer | show or hide the public README badge            |
  * | GET /export             | yes          | bearer | every item under the player's USER# partition   |
  * | POST /delete            | yes          | bearer | delete the player's data (Requirement 13.2)     |
  * | GET /badge/{login}.svg  | no           | none   | the README badge, public, cached six hours      |
@@ -136,7 +137,8 @@ type DepthHandler =
   | 'forge_collect'
   | 'forge_upgrade'
   | 'gear_equip'
-  | 'feat_pin';
+  | 'feat_pin'
+  | 'settings';
 
 type Route =
   | {
@@ -171,6 +173,7 @@ const DEPTH_HANDLERS: ReadonlySet<string> = new Set<DepthHandler>([
   'forge_upgrade',
   'gear_equip',
   'feat_pin',
+  'settings',
 ]);
 
 function isDepthHandler(handler: string): handler is DepthHandler {
@@ -210,6 +213,7 @@ const ROUTES: Readonly<Record<string, Route>> = {
   '/gear/equip': { kind: 'post', handler: 'gear_equip' },
   '/feats': { kind: 'get', handler: 'feats' },
   '/feats/pin': { kind: 'post', handler: 'feat_pin' },
+  '/settings': { kind: 'post', handler: 'settings' },
 };
 
 /** `GET /packs/:seed` is the one route with a path parameter. */
@@ -306,6 +310,10 @@ function parseDepth(
         ? null
         : done({ type: 'pin', featId, pinned: body.pinned });
     }
+    case 'settings':
+      return typeof body.badgePublic === 'boolean'
+        ? done({ type: 'settings', badgePublic: body.badgePublic })
+        : null;
   }
 }
 
@@ -664,10 +672,12 @@ export function createApiHandler(
   /**
    * The README badge: no auth and no Origin check, because an `<img>` in someone's README sends neither.
    * It reads GSI1 for level, Vocation and Renown and nothing else. An unknown or malformed login gets the
-   * neutral "unranked" badge with the same caching (Requirement 11.3) and is never echoed.
+   * neutral "unranked" badge with the same caching (Requirement 11.3) and is never echoed. So does a player
+   * who turned their badge off in Settings (Requirement 11.4): it is indistinguishable from an unknown login.
    */
   async function badge(login: string): Promise<FunctionUrlResult> {
-    const player = GITHUB_LOGIN.test(login) ? await db.findBadgeByLogin(login) : null;
+    const found = GITHUB_LOGIN.test(login) ? await db.findBadgeByLogin(login) : null;
+    const player = found?.badgePublic === false ? null : found;
     return {
       statusCode: 200,
       headers: {

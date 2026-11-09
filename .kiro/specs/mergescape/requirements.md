@@ -147,7 +147,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 1. THE client SHALL provide the screens Landing, Town, Shop, Combat Log, Character, Run Map, Bestiary, Expedition, Forge, Feats, Settings, Privacy and Terms, with a left rail at ≥768px and bottom tabs below.
 2. THE Combat Log SHALL render each XP grant as one row (monster sprite, repository shown to the owner only, one-line summary, XP) that expands to the full Points × Power × Zone breakdown from the ScoreResult.
-3. THE client SHALL require no player action for XP progression; the only write operations SHALL be shop purchases, pack picks, Pledge plays, Charm sells, expedition send/collect, Forge job start/collect, gear equip, Feat display selection, export and delete.
+3. THE client SHALL require no player action for XP progression; the only write operations SHALL be shop purchases, pack picks, Pledge plays, Charm sells, expedition send/collect, Forge job start/collect, gear equip, Feat display selection, the badge visibility setting, export and delete.
 4. THE client SHALL render sprites from 16×16 palette-indexed definitions at integer scales with crisp edges, palette-swapping the hero per gear tier.
 5. THE client SHALL use real text for all copy, show visible focus states, honour `prefers-reduced-motion`, and keep body text contrast ≥4.5:1.
 6. WHEN the player has no installations THEN Town SHALL show the install call to action; WHEN the player has installations but no events THEN Town SHALL show the sleeping character with the line "Merge something. I'll wake up."
@@ -162,6 +162,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 1. WHEN `GET /badge/{login}.svg` is requested THEN the api service SHALL return an SVG showing only level, vocation and Renown with `Cache-Control: public, max-age=21600`.
 2. THE badge path SHALL be served through CloudFront in front of the api Function URL.
 3. IF the login is unknown THEN the service SHALL return a neutral "unranked" badge with the same caching.
+4. WHEN a player has turned their badge off (`POST /settings` with `badgePublic: false`, a Settings switch that is on by default) THEN `GET /badge/{login}.svg` SHALL return the same neutral "unranked" badge it returns for an unknown login, and the opt-out flag SHALL be projected on GSI1 so the badge reads it without touching the profile item.
 
 ### Requirement 12: Platform and security
 

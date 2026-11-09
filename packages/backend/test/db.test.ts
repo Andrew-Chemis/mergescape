@@ -992,6 +992,7 @@ describe('schema guard', () => {
         'feat_counters',
         'old_coin',
         'tz_offset',
+        'badge_public',
       ].sort(),
     );
     expect([...ALLOWED_ATTRIBUTES.EXPEDITION].sort()).toEqual(

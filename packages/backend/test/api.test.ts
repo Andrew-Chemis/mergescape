@@ -623,6 +623,7 @@ describe('GET /me', () => {
       pinnedFeats: [],
       expedition: null,
       tzOffsetMinutes: null,
+      badgePublic: true,
     });
     expect((me.week as { hand: unknown[] }).hand).toHaveLength(5);
   });

@@ -197,6 +197,7 @@ export function toMeResponse(current: Current, now: number): MeResponse {
     pinnedFeats: [...(player.pinnedFeats ?? [])],
     expedition: player.expedition ?? null,
     tzOffsetMinutes: player.tzOffsetMinutes ?? null,
+    badgePublic: player.badgePublic ?? true,
   };
 }
 

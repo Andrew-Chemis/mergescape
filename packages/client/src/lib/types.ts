@@ -162,6 +162,8 @@ export interface MeResponse {
   /** The latest expedition, collected or not; null before the first. */
   expedition: ExpeditionState | null;
   tzOffsetMinutes: number | null;
+  /** May the public README badge show this player? True until they turn it off in Settings. */
+  badgePublic: boolean;
 }
 
 /** Every mutation answers with the whole new profile and run, so the client never re-fetches. */

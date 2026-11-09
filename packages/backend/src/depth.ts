@@ -1,7 +1,8 @@
 /**
  * The depth-layer mutations (tasks.md 22, Requirements 15 to 17): sending and collecting expeditions,
  * opening Charm packs, starting and collecting Forge orders, buying station upgrades and cape colours,
- * equipping gear and pets, and pinning Feats. Each takes a client request id and either applies once or
+ * equipping gear and pets, and pinning Feats, plus the one setting a player has (whether the public badge
+ * may show them, Requirement 11.4). Each takes a client request id and either applies once or
  * answers the same way again, exactly as the shop does (`mutations.ts`):
  *
  *   1. the `WEEK#` write comes first and is conditional on the week's `version`. It is the lock between two
@@ -79,7 +80,8 @@ export type DepthRequest =
   | { type: 'equip'; pieceId: string }
   | { type: 'unequip'; slot: GearSlot }
   | { type: 'equip_pet'; petId: string }
-  | { type: 'pin'; featId: string; pinned: boolean };
+  | { type: 'pin'; featId: string; pinned: boolean }
+  | { type: 'settings'; badgePublic: boolean };
 
 export interface DepthContext extends RunContext {
   log: Logger;
@@ -253,6 +255,9 @@ export function plan(
       const pinned = pinFeat(player, request.featId);
       return pinned.ok ? change(pinned.player) : fail(409, pinned.error);
     }
+    case 'settings':
+      // A value, not a step: setting it twice is the same as setting it once.
+      return change({ ...player, badgePublic: request.badgePublic });
   }
 }
 

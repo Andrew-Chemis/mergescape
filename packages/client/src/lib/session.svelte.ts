@@ -543,6 +543,11 @@ export class Session {
     return this.#write(scope, (api, options) => api.featPin(featId, pinned, options));
   }
 
+  /** `POST /settings`: show or hide the public README badge. */
+  setBadgePublic(scope: string, badgePublic: boolean): Promise<ActionResult> {
+    return this.#write(scope, (api, options) => api.settings(badgePublic, options));
+  }
+
   /** `GET /export`: the player's data as parsed JSON. */
   async exportData(): Promise<ActionResult & { data?: Record<string, unknown> }> {
     const api = this.#api;

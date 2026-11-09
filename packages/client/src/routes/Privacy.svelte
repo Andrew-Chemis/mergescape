@@ -46,6 +46,9 @@
         of the score breakdown. They contain no text from GitHub.
       </li>
       <li>
+        <b>Your badge setting:</b> whether the public README badge may show you (on by default).
+      </li>
+      <li>
         <b>Plumbing:</b> the App installations and the repositories they cover, webhook delivery ids so
         nothing is counted twice, a one-time sign-in code, and anonymous counters with no person attached.
       </li>
@@ -193,8 +196,16 @@
     <h2 id="badge-heading">The README badge</h2>
     <p>
       If you put the Mergescape badge in a README it is a public image: anyone who knows your GitHub
-      login can see your level, Vocation and Renown, and nothing else. After you delete your data it
-      shows a neutral "unranked" badge.
+      login can see your level, Vocation and Renown, the small icons of the (up to three) Feats you
+      chose to pin, and the Old Coin if you found it, and nothing else.
+    </p>
+    <p>
+      <b>You can turn it off.</b> The switch "Show my badge publicly" in
+      <a href="#/settings">Settings</a> is on by default. Turned off, the same address shows the neutral
+      "unranked" badge that a login nobody has used gets, so it does not even show that you play. Places
+      that have already loaded the picture can keep it for up to 6 hours. The choice is stored with your
+      profile, and the public badge reads it together with the fields above. After you delete your data
+      the badge also shows the neutral "unranked" badge.
     </p>
   </section>
 

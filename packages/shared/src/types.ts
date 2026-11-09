@@ -455,6 +455,11 @@ export interface PlayerState {
   featCounters?: FeatCounters;
   /** Minutes east of UTC for local-time Feats (Night Owl, Dawn Patrol, Friday Deploy). Absent means UTC. */
   tzOffsetMinutes?: number;
+  /**
+   * May the public README badge show this player's level, Vocation, Renown and pinned Feats? Absent means
+   * yes. A privacy setting the player controls on Settings; scoring never reads it.
+   */
+  badgePublic?: boolean;
 }
 
 /** The scorer's view of a PR. Metadata persisted per Requirement 3.1 is handled by the backend. */

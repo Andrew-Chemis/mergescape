@@ -116,6 +116,8 @@ export interface Api {
     pinned: boolean,
     options?: MutationOptions,
   ): Promise<DepthMutationResponse>;
+  /** `POST /settings`: show or hide the public README badge. */
+  settings(badgePublic: boolean, options?: MutationOptions): Promise<DepthMutationResponse>;
   /** `GET /export`: everything stored under the player's partition, as parsed JSON. */
   exportData(): Promise<Record<string, unknown>>;
   /** `POST /delete`: resolves on 204; 400 `confirm_mismatch` when the login does not match. */
@@ -556,6 +558,9 @@ export function createHttpApi(options: HttpApiOptions): Api {
     },
     async featPin(featId, pinned, mutation) {
       return asDepthMutation(await post('/feats/pin', { featId, pinned }, mutation));
+    },
+    async settings(badgePublic, mutation) {
+      return asDepthMutation(await post('/settings', { badgePublic }, mutation));
     },
     exportData() {
       return get('/export');

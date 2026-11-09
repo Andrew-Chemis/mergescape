@@ -433,7 +433,7 @@ describe('FakeDynamo Scan and the GSI projection', () => {
     expect(result.LastEvaluatedKey).toBeUndefined();
   });
 
-  it('projects the keys and the INCLUDE attributes, not the whole item (template.yaml)', async () => {
+  it('projects the keys and the INCLUDE attributes, not the whole item (GSI1_PROJECTED_ATTRIBUTES)', async () => {
     const fake = await seeded();
     const [item] = (await scan(fake)).Items ?? [];
     expect(item).toEqual({

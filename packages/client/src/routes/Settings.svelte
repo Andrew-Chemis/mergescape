@@ -21,6 +21,23 @@
   const me = $derived(session.me);
   const zone = timezoneInfo();
 
+  // --- Badge --------------------------------------------------------------------------------------
+  const badgePublic = $derived(me?.badgePublic ?? true);
+  let badgeError = $state<string | null>(null);
+
+  async function chooseBadge(event: Event & { currentTarget: HTMLInputElement }) {
+    // The event forgets its target once the handler has returned, so hold on to it for the answer.
+    const input = event.currentTarget;
+    const wanted = input.checked;
+    badgeError = null;
+    const result = await session.setBadgePublic('badge', wanted);
+    if (!result.ok) {
+      badgeError = result.message;
+      // The control follows the profile, which did not change.
+      input.checked = !wanted;
+    }
+  }
+
   // --- Sound --------------------------------------------------------------------------------------
   let soundSaveFailed = $state(false);
   /** Read once: only used to explain that the system setting does not decide anything about sound. */
@@ -180,6 +197,37 @@
         Adding or removing repositories happens on GitHub. Uninstalling the App stops its events
         counting at once.
       </p>
+    </section>
+
+    <section class="panel" aria-labelledby="badge-heading">
+      <h2 id="badge-heading">README badge</h2>
+      <p>
+        The badge you can put in a README shows your level, Vocation, Renown and the Feats you
+        pinned to anyone who knows your GitHub login. Turn it off and the same address shows a
+        neutral "unranked" badge, exactly as it does for a login that has never played.
+      </p>
+      <Switch
+        id="badge-switch"
+        checked={badgePublic}
+        label="Show my badge publicly"
+        describedBy="badge-status"
+        disabled={session.busy === 'badge'}
+        onchange={(event) => void chooseBadge(event)}
+      />
+      <div id="badge-status" aria-live="polite">
+        <p class="dim small">
+          {#if badgePublic}
+            Your badge is public. It can take up to 6 hours to change in places that have already
+            loaded it.
+          {:else}
+            Your badge is hidden. It can take up to 6 hours to change in places that have already
+            loaded it.
+          {/if}
+        </p>
+        {#if badgeError}
+          <p class="error" role="alert">{badgeError}</p>
+        {/if}
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="sound-heading">

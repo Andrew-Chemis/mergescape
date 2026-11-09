@@ -179,6 +179,8 @@ export interface ProfileItem {
   oldCoin: boolean;
   /** Minutes east of UTC; null means UTC. */
   tzOffsetMinutes: number | null;
+  /** May the public badge show this player? `badge_public`; true unless the player turned it off (Requirement 11.4). */
+  badgePublic: boolean;
   /** Optimistic-lock counter, bumped by every score write. */
   version: number;
 }
@@ -231,6 +233,7 @@ export interface ProfilePatch {
   featCounters?: FeatCounters;
   oldCoin?: boolean;
   tzOffsetMinutes?: number;
+  badgePublic?: boolean;
 }
 
 /** What one scored event changes on a profile. */
@@ -348,6 +351,8 @@ export interface BadgeProfile {
   pins: string[];
   /** The Old Coin has been found. */
   coin: boolean;
+  /** The player has not turned the public badge off (`badge_public`, true when never set). */
+  badgePublic: boolean;
 }
 
 /** What `Db#deleteUser` removed. */
@@ -525,6 +530,7 @@ function toProfile(item: Attrs): ProfileItem {
       : null,
     oldCoin: bool(item, 'old_coin', false),
     tzOffsetMinutes: numOrNull(item, 'tz_offset'),
+    badgePublic: bool(item, 'badge_public', true),
     version: num(item, 'version', 0),
   };
 }
@@ -814,6 +820,9 @@ function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
   if (patch.tzOffsetMinutes !== undefined) {
     set.tz_offset = patch.tzOffsetMinutes;
   }
+  if (patch.badgePublic !== undefined) {
+    set.badge_public = patch.badgePublic;
+  }
   if (patch.weekState !== undefined) {
     set.wk_week = patch.weekState.week;
     set.wk_progress = clean(patch.weekState.pledgeProgress);
@@ -1092,7 +1101,8 @@ export class Db {
 
   /**
    * The badge's player for a login, read from GSI1 (`LOGIN#<lower-cased login>`), which projects exactly
-   * login, level, XP, Renown and Vocation (template.yaml). Null when nobody has signed in with that login.
+   * login, level, XP, Renown, Vocation, the pinned Feats, the Old Coin and `badge_public` (the stack's
+   * `GSI1_PROJECTED_ATTRIBUTES`). Null when nobody has signed in with that login.
    * A login can sit on two profiles only after a GitHub rename; the newer account is the likelier holder.
    */
   async findBadgeByLogin(login: string): Promise<BadgeProfile | null> {
@@ -1117,6 +1127,7 @@ export class Db {
         vocation: str(item, 'vocation') ?? 'Journeyman',
         pins: stringList(item.pinned_feats),
         coin: bool(item, 'old_coin', false),
+        badgePublic: bool(item, 'badge_public', true),
       }))
       .filter((player) => Number.isSafeInteger(player.id));
     return players.reduce<BadgeProfile | null>(

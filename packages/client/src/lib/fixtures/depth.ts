@@ -39,6 +39,7 @@ export type FixtureDepth = Pick<
   | 'pinnedFeats'
   | 'expedition'
   | 'tzOffsetMinutes'
+  | 'badgePublic'
 >;
 
 function unique(ref: string, id: string): GearPiece {
@@ -137,6 +138,7 @@ export function fixtureDepth(now: number, variant: FixtureVariant): FixtureDepth
       pinnedFeats: [],
       expedition: onboardingExpedition(now, DAY0_SENT_MINUTES_AGO),
       tzOffsetMinutes: null,
+      badgePublic: true,
     };
   }
   if (variant === 'noevents' || variant === 'noinstall') {
@@ -151,6 +153,7 @@ export function fixtureDepth(now: number, variant: FixtureVariant): FixtureDepth
       pinnedFeats: [],
       expedition: null,
       tzOffsetMinutes: null,
+      badgePublic: true,
     };
   }
   return {
@@ -193,6 +196,7 @@ export function fixtureDepth(now: number, variant: FixtureVariant): FixtureDepth
     pinnedFeats: ['goblin-slayer'],
     expedition: returnedExpedition(now),
     tzOffsetMinutes: null,
+    badgePublic: true,
   };
 }
 

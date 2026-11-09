@@ -30,7 +30,8 @@ const LOCK_FILE = fileURLToPath(new URL('../../../pnpm-lock.yaml', import.meta.u
 
 /**
  * Attributes of a profile that GSI1 carries: the badge reads them from the index (login, level, vocation and
- * Renown, plus the pinned Feats and the Old Coin of task 22) and so does the rollover's scan.
+ * Renown, plus the pinned Feats and the Old Coin of task 22, and `badge_public`, the player's choice to keep
+ * the badge from showing them, of task 24) and so does the rollover's scan.
  */
 export const GSI1_PROJECTED_ATTRIBUTES = [
   'login',
@@ -40,6 +41,7 @@ export const GSI1_PROJECTED_ATTRIBUTES = [
   'vocation',
   'pinned_feats',
   'old_coin',
+  'badge_public',
 ] as const;
 
 export const INGEST_TABLE_ACTIONS = [

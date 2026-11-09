@@ -21,7 +21,7 @@
  *   role lacks (the ingest role has no DeleteItem or BatchWriteItem)
  * - Scan on the GSI only, as the api role has it (Requirement 12.2): a Scan of the table itself is always
  *   refused with AccessDeniedException, whatever the allow-list says
- * - the GSI's INCLUDE projection (template.yaml): an item read through GSI1 carries the table keys, the
+ * - the GSI's INCLUDE projection (the stack's `GSI1_PROJECTED_ATTRIBUTES`): an item read through GSI1 carries the table keys, the
  *   index keys and the projected attributes only, not the whole item
  *
  * What it does NOT emulate (all real behaviour, none exercised by these tests):
@@ -66,7 +66,7 @@ export interface FakeOutput {
 export type FakeOperation =
   'PutItem' | 'GetItem' | 'UpdateItem' | 'DeleteItem' | 'Query' | 'Scan' | 'BatchWriteItem';
 
-/** The non-key attributes GSI1 projects (`NonKeyAttributes` in packages/infra/template.yaml). */
+/** The non-key attributes GSI1 projects (`GSI1_PROJECTED_ATTRIBUTES` in packages/infra/lib/mergescape-stack.ts). */
 export const GSI1_PROJECTED_ATTRIBUTES: readonly string[] = [
   'login',
   'level',
@@ -76,6 +76,8 @@ export const GSI1_PROJECTED_ATTRIBUTES: readonly string[] = [
   // Task 22: the badge draws the pinned Feats and the Old Coin.
   'pinned_feats',
   'old_coin',
+  // Task 24: a player may turn the public badge off.
+  'badge_public',
 ];
 
 export interface FakeDynamoOptions {
