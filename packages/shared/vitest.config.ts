@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     name: 'shared',
+    // The source-scanning tests read the file list through import.meta.glob at transform time, which a
+    // persistent module cache would freeze when a source file is added.
+    fsModuleCache: false,
     include: ['src/**/*.test.ts'],
     coverage: {
       provider: 'v8',

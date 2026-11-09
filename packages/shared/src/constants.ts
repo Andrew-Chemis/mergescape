@@ -296,6 +296,9 @@ export const BIOMES = [
 /** A Legendary Charm is offered on every Nth Renown point. */
 export const LEGENDARY_OFFER_EVERY_RENOWN = 4;
 
+/** Clearing this act also grants one free Pledge pack (design.md 6.1). */
+export const FREE_PLEDGE_PACK_ACT: ActId = 'raid';
+
 // ---------------------------------------------------------------------------------------------
 // Gold and shop (design.md 6.5; requirements.md 8)
 // ---------------------------------------------------------------------------------------------

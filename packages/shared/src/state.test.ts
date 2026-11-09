@@ -30,6 +30,8 @@ describe('createPlayerState', () => {
       feats: { unlocked: [], powerBonus: 0 },
       moguls: { current: null, bag: [], chain: 0, benched: null, boardWeek: null },
       week: { loadedDiceUsed: false },
+      gold: 0,
+      renown: 0,
       vouchers: [],
       deck: [
         { id: 'strike', name: 'Strike', upgraded: false },
@@ -38,6 +40,7 @@ describe('createPlayerState', () => {
         { id: 'mentor', name: 'Mentor', upgraded: false },
         { id: 'tidy', name: 'Tidy', upgraded: false },
       ],
+      cosmetics: [],
       repoMerges: {},
     });
   });

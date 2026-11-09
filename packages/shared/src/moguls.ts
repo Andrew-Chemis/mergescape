@@ -7,6 +7,7 @@ import { canSeeNextMogul } from './vouchers';
 import type {
   BreakdownLine,
   Charm,
+  Cosmetic,
   GameEvent,
   Mogul,
   MogulId,
@@ -113,6 +114,16 @@ export function mogulDefinition(id: MogulId): MogulDefinition {
 export function isMogulId(value: string): value is MogulId {
   return Object.hasOwn(BY_ID, value);
 }
+
+/** The Mogul cosmetic pack contents: one invented keepsake per Mogul. Purely visual. */
+export const MOGUL_COSMETICS: readonly Cosmetic[] = [
+  { id: 'cosmetic-tiny-rocket', name: 'Tiny Rocket', mogul: 'rocket-man' },
+  { id: 'cosmetic-green-brick', name: 'Glowing Green Brick', mogul: 'leather-jacket' },
+  { id: 'cosmetic-round-glasses', name: 'Round Glasses', mogul: 'turtleneck' },
+  { id: 'cosmetic-forehead-goggles', name: 'Forehead Goggles', mogul: 'hoodie' },
+  { id: 'cosmetic-glowing-orb', name: 'Glowing Orb', mogul: 'founder' },
+  { id: 'cosmetic-pizza-stack', name: 'Stack of Pizza Boxes', mogul: 'two-pizza-boss' },
+];
 
 // ---------------------------------------------------------------------------------------------
 // Selection: a shuffled bag, no repeats until all six have appeared (Requirement 7.2)

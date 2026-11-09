@@ -1,11 +1,12 @@
 import { ZONE_EXPONENT } from './constants';
+import { creditScoreResult, startingWallet } from './economy';
 import { starterDeck } from './pledges';
 import { emptySkillXp, SKILLS } from './skills';
 import type { PlayerState, PRState, PullRequestFacts, ScoreResult } from './types';
 
 /**
- * A level-1 character: no Charms, gear, Vouchers, Feats or Moguls, the five-card starter Pledge deck
- * (Requirement 9.2) and an empty week.
+ * A level-1 character: no Charms, gear, Vouchers, Feats or Moguls, no gold or Renown, the five-card
+ * starter Pledge deck (Requirement 9.2) and an empty week.
  */
 export function createPlayerState(id: number): PlayerState {
   return {
@@ -20,8 +21,11 @@ export function createPlayerState(id: number): PlayerState {
     feats: { unlocked: [], powerBonus: 0 },
     moguls: { current: null, bag: [], chain: 0, benched: null, boardWeek: null },
     week: { loadedDiceUsed: false },
+    ...startingWallet(),
+    renown: 0,
     vouchers: [],
     deck: starterDeck(),
+    cosmetics: [],
     repoMerges: {},
   };
 }
@@ -42,7 +46,7 @@ export function createPRState(facts: PullRequestFacts): PRState {
 }
 
 /**
- * Apply a ScoreResult to the states it was computed from: XP, skill XP and every
+ * Apply a ScoreResult to the states it was computed from: XP, skill XP, the gold the points earn, and every
  * counter update (including Pledge progress, the Leather Jacket chain, Loaded Dice and repository merge
  * counts). Pure; the backend does the same with DynamoDB writes, tests and previews use this.
  */
@@ -56,12 +60,15 @@ export function applyScoreResult(
     skillXp[skill] += result.skillXp[skill];
   }
   const { player: playerUpdates, pr: prUpdates } = result.counterUpdates;
-  const earned: PlayerState = {
-    ...player,
-    xp: player.xp + result.xp,
-    skillXp,
-    counters: { ...player.counters, ...playerUpdates },
-  };
+  const earned = creditScoreResult(
+    {
+      ...player,
+      xp: player.xp + result.xp,
+      skillXp,
+      counters: { ...player.counters, ...playerUpdates },
+    },
+    result,
+  ).player;
   const { pledges, mogulChain, loadedDiceUsed, repoMerges } = result.counterUpdates;
   const nextPlayer: PlayerState = {
     ...earned,

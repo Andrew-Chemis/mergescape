@@ -5,6 +5,7 @@ import {
   activeMogul,
   applyFounderBoard,
   isMogulId,
+  MOGUL_COSMETICS,
   MOGUL_DISCLAIMER,
   MOGUL_IDS,
   mogulChainAfter,
@@ -112,6 +113,11 @@ describe('the six Moguls (Requirement 7.1, design.md 6.2 as audited)', () => {
       'The Moguls are fictional caricatures. Any resemblance to persons living, dead or on a podcast is satire.',
     );
   });
+
+  it('has one invented cosmetic per Mogul', () => {
+    expect(MOGUL_COSMETICS.map((entry) => entry.mogul)).toEqual([...MOGUL_IDS]);
+    expect(new Set(MOGUL_COSMETICS.map((entry) => entry.id)).size).toBe(6);
+  });
 });
 
 describe('copy review (Requirement 7.5): no real names, company names or trademarks', () => {
@@ -162,7 +168,7 @@ describe('copy review (Requirement 7.5): no real names, company names or tradema
   });
 
   it('finds nothing in the exported copy', () => {
-    const copy = JSON.stringify([MOGULS, MOGUL_DISCLAIMER]);
+    const copy = JSON.stringify([MOGULS, MOGUL_COSMETICS, MOGUL_DISCLAIMER]);
     expect(copy.match(pattern)).toBeNull();
   });
 

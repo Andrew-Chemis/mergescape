@@ -10,6 +10,7 @@ import {
   CHARM_RULES,
   CHARM_PRICE_BY_RARITY,
   GEAR_TIER_LEVELS,
+  FREE_PLEDGE_PACK_ACT,
   INTEREST,
   MAX_CHARM_COPIES,
   MOGUL_RULES,
@@ -128,6 +129,7 @@ describe('constants match the spec tables', () => {
       tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
       pairUp: { merges: 3, bonusPoints: 600 },
     });
+    expect(FREE_PLEDGE_PACK_ACT).toBe('raid');
   });
 
   it('Moguls (design.md 6.2 as audited)', () => {

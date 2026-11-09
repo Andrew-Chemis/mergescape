@@ -82,10 +82,28 @@ export interface ShopSlot<T> {
   sold: boolean;
 }
 
+/**
+ * A pack shelf slot: a bought pack waits here until the player keeps one of its 3 options. Both extra
+ * fields are optional so a shop stored without them still reads (absent means false and 0).
+ */
+export interface PackSlot extends ShopSlot<PackKind> {
+  /** True once the player has kept an option; a pack is opened exactly once. */
+  picked?: boolean;
+  /** The re-roll count when this pack was stocked; seeds its 3 options so they never change. */
+  nonce?: number;
+}
+
+/** A cosmetic from a Mogul pack. Purely visual; it never touches scoring. */
+export interface Cosmetic {
+  id: string;
+  name: string;
+  mogul: MogulId;
+}
+
 /** The shop as stored on the week item: stock is generated once from the week's seed. */
 export interface ShopStock {
   charms: ShopSlot<Charm>[];
-  packs: ShopSlot<PackKind>[];
+  packs: PackSlot[];
   voucher: ShopSlot<Voucher> | null;
   /** Re-rolls bought during this visit. */
   rerolls: number;
@@ -105,6 +123,18 @@ export interface RunState {
   played: Pledge[];
   shopSeed: number;
   shop: ShopStock | null;
+  /*
+   * Week-scoped scorer state (see `playerWithRun` and `runWithPlayer` in run.ts). Optional so that a run
+   * stored before these existed still reads; absent means the initial value.
+   */
+  /** Loaded Dice has been spent this week. */
+  loadedDiceUsed?: boolean;
+  /** The Leather Jacket chain: successive reviewed merges since the last solo merge. */
+  mogulChain?: number;
+  /** Progress toward each played Pledge's goal, by Pledge id. */
+  pledgeProgress?: Record<string, number>;
+  /** Ids of played Pledges whose completion bonus has fired. */
+  pledgesCompleted?: string[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,10 +246,16 @@ export interface PlayerState {
   feats: FeatLoadout;
   moguls: MogulHook;
   week: WeekHook;
+  /** Gold. Only economy.ts changes it. */
+  gold: number;
+  /** Lifetime Moguls beaten (Boss clears). */
+  renown: number;
   /** Vouchers bought; each once. */
   vouchers: readonly VoucherId[];
   /** The Pledge deck (cap 20). */
   deck: readonly Pledge[];
+  /** Ids of cosmetics kept from Mogul packs. */
+  cosmetics: readonly string[];
   /** Lifetime scored merges per repository, keyed by the repo id as a string (Grey Beard, Mentor). */
   repoMerges: Readonly<Record<string, number>>;
 }
