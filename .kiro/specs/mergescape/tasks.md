@@ -114,19 +114,19 @@ Conventions for the implementer:
   - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 8.1, 8.2, 8.3, 8.4, 8.5, 8.7, 8.8_
   - Verify: table tests for targets (new player, 3 weeks, vacation week cap); same seed → same stock; a grep test asserts no `gold` mutation outside `economy.ts`.
 
-- [ ] 15. **[v1]** Backend: run rollover and act clearing
+- [x] 15. **[v1]** Backend: run rollover and act clearing
   - `rollover` action (EventBridge): for every profile (paginated scan on GSI), close last week (streak points, Vocation recompute), create this week's `WEEK#` item (targets, Mogul, Pledge hand, shop seed).
   - In ingest: after scoring, update weekly XP, evaluate act clear → payouts, interest, open shop, Renown.
   - _Requirements: 5.3, 6.1, 6.5, 6.7, 7.2, 8.1_
   - Verify: integration test simulates a week of fixture events and asserts act transitions, gold and Renown.
 
-- [ ] 16. **[v1]** Backend: shop and Pledge endpoints
+- [x] 16. **[v1]** Backend: shop and Pledge endpoints
   - Routes: `GET /week`, `POST /shop/buy` (charm | pack | voucher), `POST /shop/pick` (pack option), `POST /shop/reroll`, `POST /shop/sell`, `POST /shrine/remove`, `POST /pledges/play`.
   - All writes conditional on gold and slot state; idempotent via client-supplied request id stored on the week item.
   - _Requirements: 8.6, 8.7, 9.3_
   - Verify: concurrent double-buy test leaves one purchase; insufficient gold returns 409.
 
-- [ ] 17. **[v1]** Client: Shop, Run Map, Bestiary, Settings, Privacy, Terms
+- [x] 17. **[v1]** Client: Shop, Run Map, Bestiary, Settings, Privacy, Terms
   - Shop screen in Balatro layout (2 Charms, 2 Packs, 1 Voucher, re-roll, sell strip, gold + interest preview), pack-open modal (3 cards, keep 1).
   - Run Map (three acts, nodes for scored events, elite and Mogul nodes, modifier card, targets panel), Pledge hand play UI on Town.
   - Bestiary grid with kill counts and the satire disclaimer; Mogul gallery.
