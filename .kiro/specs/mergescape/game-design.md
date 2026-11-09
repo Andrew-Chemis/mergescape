@@ -200,10 +200,9 @@ Pets are the fifth slot and purely cosmetic except for one small passive each. S
 | Feat | Condition | Reward |
 |---|---|---|
 | Thousand-Hand Smith | Merge a PR touching ≥1,000 files | Title "Thousand-Hand"; Pet: *Many-Armed Goblin*. Cosmetic. |
-| Megalith | ≥1,000,000 lines added across merged PRs in a trailing 30-day window | Title "Megalith"; Body: *Monolith Plate* (Dragon-tier look, Iron-tier Power). |
+| Archivist | Review 100 PRs of ≥500 lines each with ≥3 inline comments, lifetime | Title "Archivist"; Body: *Monolith Plate* (Dragon-tier look, Iron-tier Power). +0.1 Feat bonus. |
 | Deleter of Worlds | Net −100,000 lines across merged PRs, lifetime | Weapon: *The Red Pen* (affix Stout). +0.1 Feat bonus. |
 | Hundred Merges Week | 100 merged PRs in one Run | Cape: *Streamer's Cape* (animated). |
-| The Long Haul | A PR open ≥180 days, then merged | Trinket: *Hourglass of Scope*. |
 | Mass Reviewer | Review ≥100 distinct PRs in 30 days | Title "Warden of the Gate". +0.1 Feat bonus. |
 | Omnilinguist | Merged PRs in ≥12 distinct repositories, lifetime | Pet: *Polyglot Parrot*. |
 | First Light | First merged PR in a repo that had none for ≥365 days | Title "Lamplighter". |
@@ -215,17 +214,15 @@ Pets are the fifth slot and purely cosmetic except for one small passive each. S
 | Surgeon | 50 merged PRs under 50 lines, each with ≥1 approval | Weapon: *Scalpel* (affix Keen). +0.1 Feat bonus. |
 | Riposte Master | 100 Ripostes (addressed changes-requested and merged) | Title "Unbowed". |
 | Close Reader | 25 reviews with ≥10 inline comments each | Trinket: *Loupe*. +0.1 Feat bonus. |
-| Fast Hands | Approve 50 PRs within 1 hour of their opening | Pet: *Hot Potato*. |
+| Fast Hands | Approve 50 PRs under 200 lines within 1 hour of their opening | Pet: *Hot Potato*. |
 | Mentor | 100 approvals on PRs from authors with fewer lifetime merges than you | Cape: *Mentor's Mantle*. +0.1 Feat bonus. |
-| Clean Record | 52 consecutive weeks with zero PRs closed unmerged | Title "Immaculate". |
+| Keeper | 500 merged PRs with another human's approval in a single repository | Title "Keeper". |
 | Verified | 500 Verified Kills (PRs you approved later merged) | Title "The Seal". +0.1 Feat bonus. |
 
 **Endurance and rhythm**
 
 | Feat | Condition | Reward |
 |---|---|---|
-| Night Owl | 100 scored events between 22:00 and 06:00 local | Pet: *Owl*. |
-| Dawn Patrol | First event of the day before 07:00, 50 times | Title "Early". |
 | Year of the Goblin | 52 Runs with at least one scored event | Cape: *Anniversary Cape* (trim changes each year). |
 | Iron Week | Clear all three acts 10 weeks in a row | Title "Ironclad". |
 
@@ -246,11 +243,30 @@ Pets are the fifth slot and purely cosmetic except for one small passive each. S
 | Feat | Condition | Reward |
 |---|---|---|
 | Merge Conflict | Two of your PRs merge within the same minute | Title "Simultaneous". |
+| The Long Haul | ??? Hidden. A PR open ≥180 days, then merged | Trinket: *Hourglass of Scope*. Cosmetic; the copy is an apology. |
+| Night Owl | ??? Hidden. 100 scored events between 22:00 and 06:00 local | Pet: *Owl*. Cosmetic; the copy tells you to go to bed. |
 | Friday Deploy | Merge a PR after 16:00 local on a Friday, 10 times | Pet: *Pager Gremlin* (hidden until earned). |
 | Rubber Stamp | ??? Hidden. Approve 20 PRs within 60 seconds of opening each | Title "Rubber Stamp". Cosmetic and mildly shaming by design; the copy says so. |
 | Self Merge | ??? Hidden. 50 solo merges | Title "Lone Wolf", Cape: *Hermit's Hood*. Cosmetic only, no Feat bonus, by rule 3. |
 
-### 8.3 Implementation shape
+### 8.3 Incentive audit (2026-11-08)
+
+Every reward was checked against Pillar 5. Changes made:
+
+| Item | Problem | Change |
+|---|---|---|
+| Megalith (Feat) | Rewards raw added-line volume even with the approval gate | Cut. Replaced by **Archivist**: 100 thorough reviews of large PRs, which is the work nobody thanks you for. |
+| Clean Record (Feat), Clean Sweep (Pledge) | Penalise closing PRs unmerged, which is healthy hygiene | Cut both. Keeper (Feat) and **Tidy** (Pledge: merge 3 PRs each under 150 lines) replace them. |
+| Night Owl (Charm), Rocket Man night bonus | Mechanically reward working at night | Charm replaced by **Lantern** (+0.5 Power on the first scored event of each day; rewards showing up, not the hour). Rocket Man's night bonus removed. Night Owl and Dawn Patrol Feats become hidden cosmetics with copy that tells you to sleep. |
+| Hot Potato (Charm), Fast Hands (Feat) | Reward speed of approval alone, which is rubber-stamping | Both now apply only to PRs under 200 lines, where a fast review is a good review. |
+| Rocket Man and Leather Jacket "unmerged close" penalties | Punish closing PRs | Rocket Man loses the gold penalty; net-negative merges get +1 Power instead. Leather Jacket's chain now resets on a **solo** merge, not on a close. |
+| The Hoodie | 0 XP for anything not merged within 24 h punishes careful review | Now ×2 for PRs merged within 48 h of their **first review**, ×0.75 otherwise: rewards responsiveness, not rushing. |
+| Two-Pizza Boss | Solo merges score 0 for a week hurts solo maintainers who have no one to ask | Solo merges ×0.25 instead of 0. |
+| Thousand-Hand Smith, Hundred Merges Week, Friday Deploy, Rubber Stamp, Self Merge, The Long Haul | Celebrate excess or bad habits | Kept, cosmetic only, never a Feat bonus, with self-aware copy. They are jokes the player is in on. |
+
+Unchanged after review: Rubber Duck, Small Hands, Second Pair of Eyes, Grey Beard, Jester's Rebase (Riposte still requires a merge, so requesting changes gratuitously earns nothing), Loaded Dice, Oracle; Strike, Defend, Big Game Hunter, Mentor, Pair Up; The Turtleneck, The Founder; all Craft, Endurance and World Feats.
+
+### 8.4 Implementation shape
 
 A Feat is `{id, name, hidden, hint, condition: (ctx) => progress 0..1, reward}` evaluated on every scored event against rolling counters kept on the profile (30-day and lifetime windows; per-repo first-merge dates; local-time buckets). Progress is displayed as a bar for visible Feats. Unlock fires once and writes a `FEAT#` item with the unlocking event id so it can be audited.
 

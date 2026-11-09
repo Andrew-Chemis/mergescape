@@ -40,7 +40,7 @@ Merged PR #412 (+318 / -97, 2 reviewers)
         +  52  size (log-scaled)
         +  30  reviewed by another human
   ────────────
-         182  × Power 3.5  (Rubber Duck +1.5, Night Owl +1.0)
+         182  × Power 3.5  (Rubber Duck +1.5, Lantern +1.0)
          637  × Zone 41.6  (Level 23)
   ────────────
   26,499 XP   → Smithing 24!
@@ -124,7 +124,7 @@ Therefore an **agentic power user** is modelled as ≈10–15 merged PRs/week, 1
 | Inline review comment | 5 | Oratory | Cap 10 per PR per reviewer (50 points) |
 | Verified kill | +25 | Vigilance | A PR you approved later merges |
 | Riposte | +15 | Smithing | Your PR received CHANGES_REQUESTED and then merged (you addressed feedback) |
-| PR closed unmerged | 0 | — | No penalty; see Boss modifiers for flavour |
+| PR closed unmerged | 0 | — | Never penalised anywhere: closing a PR is healthy |
 | Daily first-event | +20 | Endurance | Once per UTC day |
 | Weekly streak | +50 × consecutive weeks (cap 10) | Endurance | Awarded at run end if ≥1 merged or ≥3 reviews that week |
 
@@ -217,14 +217,14 @@ Act III's boss is one of six **Moguls**, parody archetypes of tech executives. T
 
 | Mogul | Look | Modifier | The joke |
 |---|---|---|---|
-| **The Rocket Man** | Silver flight suit, tiny rocket on his back, 3 am energy | *Hardcore week.* Deletions count double toward size points; events 22:00–06:00 local get +1 Power; any PR closed unmerged costs 5 gold | "The best part is no part." Ships at night, deletes code, fires people on a whim |
-| **The Leather Jacket** | Black leather jacket, grey hair, holding a glowing green brick | *The more you merge, the more you save.* Each successive merge this week adds +0.1 Power (cap +1.5); a PR closed unmerged resets the chain | Keynote catchphrase; compounding hardware demand |
+| **The Rocket Man** | Silver flight suit, tiny rocket on his back, 3 am energy | *Hardcore week.* Deletions count double toward size points; merges with net negative lines get +1 Power | "The best part is no part." Deletes code, ships rockets |
+| **The Leather Jacket** | Black leather jacket, grey hair, holding a glowing green brick | *The more you merge, the more you save.* Each successive reviewed merge this week adds +0.1 Power (cap +1.5); a solo merge resets the chain | Keynote catchphrase; compounding hardware demand |
 | **The Turtleneck** | Black turtleneck, round glasses, jeans, one hand raised | *One more thing.* PRs under 100 LoC score ×3; over 400 LoC score ×0.5; an approval you give with exactly one inline comment is a "design review" and scores ×2 | Obsession with small, perfect things |
-| **The Hoodie** | Grey tee, hoodie, VR goggles pushed up on forehead | *Move fast.* Only PRs merged within 24 hours of opening score; those score ×2. Everything else goes to the Metaverse (0 XP) | Move fast; nobody is in the metaverse |
+| **The Hoodie** | Grey tee, hoodie, VR goggles pushed up on forehead | *Move fast.* PRs merged within 48 hours of their first review score ×2; everything else ×0.75 and goes to the Metaverse | Move fast; nobody is in the metaverse |
 | **The Founder** | Grey crewneck, serene smile, cradling a glowing orb | *Non-profit to for-profit.* Points ×0.5 but gold ×4 all week. On Wednesday the Board "removes" one random Charm; it returns on Friday with +0.25 Power | The orb is "AGI". The Charm comes back stronger |
-| **The Two-Pizza Boss** | Bald, open-collar shirt, stack of pizza boxes, laughing | *Two-pizza teams.* Merges with ≥2 distinct human reviewers score ×2.5; solo merges score 0; party bonus points ×3 | Teams small enough to feed with two pizzas; also, day one |
+| **The Two-Pizza Boss** | Bald, open-collar shirt, stack of pizza boxes, laughing | *Two-pizza teams.* Merges with ≥2 distinct human reviewers score ×2.5; solo merges ×0.25; party bonus points ×3 | Teams small enough to feed with two pizzas; also, day one |
 
-Modifiers are revealed Monday so you can plan Pledges around them. The former dungeon bosses (Release Dragon, Silent Monolith) are now **elites** that can appear in Act II.
+Modifiers are revealed Monday so you can plan Pledges around them. No modifier ever penalises closing a PR unmerged or rewards the hour of day (see game-design.md §8.3). The former dungeon bosses (Release Dragon, Silent Monolith) are now **elites** that can appear in Act II.
 
 A one-line disclaimer sits in the Bestiary: *"The Moguls are fictional caricatures. Any resemblance to persons living, dead or on a podcast is satire."*
 
@@ -235,10 +235,10 @@ Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt vouc
 | Charm | Rarity | Effect |
 |---|---|---|
 | Rubber Duck | Common | +0.25 Power; +0.25 more on reviews with ≥3 inline comments |
-| Night Owl | Common | +0.5 Power on events 22:00–06:00 local |
+| Lantern | Common | +0.5 Power on the first scored event of each day |
 | Small Hands | Uncommon | Merges under 150 LoC gain +0.75 Power |
 | Second Pair of Eyes | Uncommon | Party bonus points 30 → 60 |
-| Hot Potato | Rare | Approving a PR within 2 hours of its open: +1.5 Power |
+| Hot Potato | Rare | Approving a PR under 200 lines within 2 hours of its open: +1.5 Power |
 | Grey Beard | Rare | +1.0 Power on any PR to a repo you've merged ≥50 times in |
 | Jester's Rebase | Legendary | Riposte points ×4; CHANGES_REQUESTED reviews you give also grant Riposte |
 | Loaded Dice | Legendary | Once per week, one event's Power is replaced by 10 |
@@ -254,7 +254,7 @@ Your deck starts with 5 basic Pledges. Each Monday you draw 5 and may **play up 
 | Defend | Submit 5 scoring reviews | +1 Power on all reviews for the rest of the week |
 | Big Game Hunter | Review a PR ≥ 800 LoC | That review ×3 |
 | Mentor | Approve 2 PRs from authors with fewer merges than you | +0.5 Power until Sunday |
-| Clean Sweep | Zero PRs closed unmerged this week | Chest upgrade |
+| Tidy | Merge 3 PRs each under 150 lines | +200 points on the 3rd |
 | Pair Up (Strike+) | Merge 3 PRs each with party bonus | +600 points |
 
 Cards upgrade (Strike → Strike+) when chosen as a Boss reward. Deck cap 20; remove cards at the Town shrine for gold.
@@ -349,7 +349,7 @@ A 32×32 pixel sprite in OSRS proportions. Starts in a brown tunic. Visual tiers
 | 4 | **Character** | Progress | D2-style XP bar with exact numbers, 4 skill panels OSRS-style, Vocation, equipped Charms (5 slots), gear tier preview |
 | 5 | **Run Map** | The week | 3-act node map (StS), current node pulsing, boss modifier card, Pledges in play |
 | 6 | **Bestiary** | Collection | Grid of monsters, kill counts, "first seen" |
-| 7 | **Settings** | Trust | Installations list (link to GitHub to add/remove), export JSON, delete character, timezone for Night Owl |
+| 7 | **Settings** | Trust | Installations list (link to GitHub to add/remove), export JSON, delete character, timezone for Lantern and the Hoodie |
 | 8 | **Share card / Badge** | Growth | `/badge/<login>.svg` (level, renown, vocation) for READMEs; PNG share card |
 
 Navigation: left rail on desktop (Town, Log, Character, Map, Bestiary, Settings), bottom tabs on mobile. Dark mode default (dungeon), light "parchment" mode.
@@ -456,7 +456,7 @@ Metrics worth tracking (aggregate, CloudWatch custom metrics): activations (firs
 
 **v1 — "Spire" (+3 weekends).** Weekly Run with act targets, the Shop (Charms, packs, 6 vouchers, re-roll, sell), 6 Moguls, 12 Charms, 8 Pledges, Bestiary, badge, export/delete.
 
-**v1.1.** Backfill (Ancient Tomes), `issue_comment` opt-in, light theme, Night Owl timezone.
+**v1.1.** Backfill (Ancient Tomes), `issue_comment` opt-in, light theme, timezone setting.
 
 **v2.** Guild raids, more biomes, Legendary Charm season, PNG share card, custom domain.
 
@@ -518,7 +518,7 @@ Notes:
 
 1. Non-default-branch PRs at 50% or 100%? Stacked-diff workflows argue for 100%; farming argues for 50%. Start 50%, revisit with data.
 2. Per-skill Zone exponent (so Oratory can't carry a level)? Not for v1.
-3. Local-time features (Night Owl) need a timezone setting; default to the browser's on first login.
+3. Local-time features (Lantern, hidden time Feats) need a timezone setting; default to the browser's on first login.
 
 ---
 

@@ -146,7 +146,7 @@ Cost scales with installed-repo activity, not signed-in users. Dropping unlinked
 
 **ADR-9 Pure, shared scorer.** The same TypeScript runs in Lambda (authoritative) and the browser (for previews and tests), so the Combat Log breakdown is guaranteed to match what was stored.
 
-**ADR-10 UTC weeks.** Simplest correct behaviour; players in UTC−8 see Monday start Sunday afternoon. Documented, revisit in v1.1 with a timezone setting (needed for Night Owl anyway).
+**ADR-10 UTC weeks.** Simplest correct behaviour; players in UTC−8 see Monday start Sunday afternoon. Documented, revisit in v1.1 with a timezone setting (needed for Lantern and the time-of-day Feats anyway).
 
 ---
 

@@ -180,7 +180,7 @@ p{max-width:68ch}
             <div class="acts">
               <div class="act done">I · Scout<small>1,420,000 ✓ +20 gold · shop visited</small></div>
               <div class="act now">II · Raid<small>1,912,400 / 2,370,000</small></div>
-              <div class="act">III · The Rocket Man<small>Deletions ×2 · night +1 Power · unmerged −5g</small></div>
+              <div class="act">III · The Rocket Man<small>Deletions ×2 · net-negative merges +1 Power</small></div>
             </div>
             <div class="meter gold" style="margin-top:8px"><b style="--w:81%"></b><span>81% · 3 days left</span></div>
           </div>
@@ -301,7 +301,7 @@ p{max-width:68ch}
               <div class="node boss" style="left:84%;top:50%"><i class="spr" data-s="rocket" data-z="2"></i><small>The Rocket Man</small></div>
             </div>
             <div class="row">
-              <div class="panel parch grow"><h4>Act III Mogul · The Rocket Man</h4><div style="font-size:13px"><b>Hardcore week.</b> Deletions count double toward size points. Events between 22:00 and 06:00 get +1 Power. Any PR closed unmerged costs 5 gold. <i>Clear it for Renown 18, 100 gold and a shop visit.</i></div></div>
+              <div class="panel parch grow"><h4>Act III Mogul · The Rocket Man</h4><div style="font-size:13px"><b>Hardcore week.</b> Deletions count double toward size points. Merges with net negative lines get +1 Power. <i>Clear it for Renown 18, 100 gold and a shop visit.</i></div></div>
               <div class="panel grow" style="flex-basis:200px"><h4>Targets</h4>
                 <div class="acts" style="grid-template-columns:1fr">
                   <div class="act done">Scout · 60%<small>1,420,000 ✓</small></div>
@@ -360,7 +360,7 @@ p{max-width:68ch}
               <h4>Charms</h4>
               <div class="pick" style="grid-template-columns:1fr 1fr">
                 <div class="card rare"><span class="m">+1.0</span><span class="rar">Rare · 120 g</span><h4>Grey Beard</h4><p>+1 Power in repos you've merged 50+ times.</p></div>
-                <div class="card common"><span class="m">+.5</span><span class="rar">Common · 40 g</span><h4>Night Owl</h4><p>+0.5 Power 22:00–06:00. Pairs with the Rocket Man.</p></div>
+                <div class="card common"><span class="m">+.5</span><span class="rar">Common · 40 g</span><h4>Lantern</h4><p>+0.5 Power on your first event each day.</p></div>
               </div>
             </div>
             <div class="row">
@@ -387,12 +387,12 @@ p{max-width:68ch}
       <h2>The Moguls · Act III bosses</h2>
       <p class="sub">Six parody archetypes, one per week, each with a modifier that is both a joke and a nudge. Invented names, no real names or logos anywhere. The Bestiary carries the disclaimer: any resemblance to persons living, dead or on a podcast is satire.</p>
       <div class="beasts" style="grid-template-columns:1fr">
-        <div class="beast"><i class="spr" data-s="rocket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Rocket Man</h4><p><b>Hardcore week.</b> Deletions count double, night events +1 Power, unmerged PRs cost 5 gold. "The best part is no part."</p></div></div>
-        <div class="beast"><i class="spr" data-s="jacket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Leather Jacket</h4><p><b>The more you merge, the more you save.</b> Each merge in a row adds +0.1 Power (cap +1.5); an unmerged close resets the chain.</p></div></div>
+        <div class="beast"><i class="spr" data-s="rocket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Rocket Man</h4><p><b>Hardcore week.</b> Deletions count double; net-negative merges get +1 Power. "The best part is no part."</p></div></div>
+        <div class="beast"><i class="spr" data-s="jacket" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Leather Jacket</h4><p><b>The more you merge, the more you save.</b> Each reviewed merge in a row adds +0.1 Power (cap +1.5); a solo merge resets the chain.</p></div></div>
         <div class="beast"><i class="spr" data-s="turtle" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Turtleneck</h4><p><b>One more thing.</b> PRs under 100 lines ×3, over 400 ×0.5. An approval with exactly one inline comment is a design review: ×2.</p></div></div>
-        <div class="beast"><i class="spr" data-s="hoodie" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Hoodie</h4><p><b>Move fast.</b> Only PRs merged within 24 hours of opening score, at ×2. Everything else goes to the metaverse.</p></div></div>
+        <div class="beast"><i class="spr" data-s="hoodie" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Hoodie</h4><p><b>Move fast.</b> PRs merged within 48 hours of their first review score ×2; everything else ×0.75 and goes to the metaverse.</p></div></div>
         <div class="beast"><i class="spr" data-s="founder" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Founder</h4><p><b>Non-profit to for-profit.</b> Points ×0.5, gold ×4. Wednesday the Board removes a random Charm; Friday it returns with +0.25 Power.</p></div></div>
-        <div class="beast"><i class="spr" data-s="pizza" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Two-Pizza Boss</h4><p><b>Two-pizza teams.</b> Merges with 2+ human reviewers ×2.5, party bonus ×3, solo merges score 0.</p></div></div>
+        <div class="beast"><i class="spr" data-s="pizza" data-z="4"></i><div><span class="k boss">Mogul</span><h4>The Two-Pizza Boss</h4><p><b>Two-pizza teams.</b> Merges with 2+ human reviewers ×2.5, party bonus ×3, solo merges ×0.25.</p></div></div>
       </div>
     </div>
   </div>
@@ -427,10 +427,10 @@ p{max-width:68ch}
   <p class="sub">Persistent passives in five slots. Power = 1 + the sum of your Charms. Bought in the Shop, pulled from Charm packs, or granted by a Boss clear. Sell any for half price.</p>
   <div class="cards">
     <div class="card common"><span class="m">+0.25</span><span class="rar">Common</span><h4>Rubber Duck</h4><p>+0.25 Power; +0.25 more on reviews with 3+ inline comments.</p></div>
-    <div class="card common"><span class="m">+0.5</span><span class="rar">Common</span><h4>Night Owl</h4><p>+0.5 Power on events between 22:00 and 06:00 local.</p></div>
+    <div class="card common"><span class="m">+0.5</span><span class="rar">Common</span><h4>Lantern</h4><p>+0.5 Power on the first scored event of each day.</p></div>
     <div class="card uncommon"><span class="m">+0.75</span><span class="rar">Uncommon</span><h4>Small Hands</h4><p>Merges under 150 lines gain +0.75 Power.</p></div>
     <div class="card uncommon"><span class="m">points</span><span class="rar">Uncommon</span><h4>Second Pair of Eyes</h4><p>Party bonus points 30 → 60.</p></div>
-    <div class="card rare"><span class="m">+1.5</span><span class="rar">Rare</span><h4>Hot Potato</h4><p>Approve within 2 hours of a PR opening: +1.5 Power on that review.</p></div>
+    <div class="card rare"><span class="m">+1.5</span><span class="rar">Rare</span><h4>Hot Potato</h4><p>Approve a PR under 200 lines within 2 hours of opening: +1.5 Power on that review.</p></div>
     <div class="card rare"><span class="m">+1.0</span><span class="rar">Rare</span><h4>Grey Beard</h4><p>+1 Power on any PR in a repo you've merged 50+ times in.</p></div>
     <div class="card legend"><span class="m">×4</span><span class="rar">Legendary</span><h4>Jester's Rebase</h4><p>Riposte points ×4; changes-requested reviews you give also grant Riposte.</p></div>
     <div class="card legend"><span class="m">=10</span><span class="rar">Legendary</span><h4>Loaded Dice</h4><p>Once a week, one event's Power becomes 10.</p></div>
@@ -444,7 +444,7 @@ p{max-width:68ch}
     <div class="card pledge"><span class="cost">5</span><span class="rar">Pledge</span><h4>Defend</h4><p>Submit 5 scoring reviews. +1 Power on reviews for the rest of the week.</p></div>
     <div class="card pledge"><span class="cost">1</span><span class="rar">Pledge</span><h4>Big Game Hunter</h4><p>Review a PR of 800+ lines. That review scores ×3.</p></div>
     <div class="card pledge"><span class="cost">2</span><span class="rar">Pledge</span><h4>Mentor</h4><p>Approve 2 PRs from authors with fewer merges than you. +0.5 Power until Sunday.</p></div>
-    <div class="card pledge"><span class="cost">0</span><span class="rar">Pledge</span><h4>Clean Sweep</h4><p>Close zero PRs unmerged this week. Upgrades the next chest.</p></div>
+    <div class="card pledge"><span class="cost">3</span><span class="rar">Pledge</span><h4>Tidy</h4><p>Merge 3 PRs each under 150 lines. +200 points on the third.</p></div>
     <div class="card pledge"><span class="cost">3</span><span class="rar">Pledge+</span><h4>Pair Up</h4><p>Merge 3 PRs each with a party bonus. +600 points.</p></div>
   </div>
 
