@@ -14,11 +14,12 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "pnpm -r typecheck",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "build": "pnpm -r build"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-svelte": "catalog:",
     "prettier": "catalog:",

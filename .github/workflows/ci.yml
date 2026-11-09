@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # New advisories appear without a code change, so the audit also runs weekly.
+  schedule:
+    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
@@ -14,8 +17,9 @@ concurrency:
 
 jobs:
   verify:
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,5 +30,49 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # Vitest with coverage over every package. It fails below the thresholds in vitest.config.ts:
+      # shared 95 % lines and 100 % branches on score.ts (Requirement 4.10), backend 90 %, client 90 %.
       - run: pnpm test
+      - name: Keep the coverage summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage/coverage-summary.json
+          if-no-files-found: ignore
+          retention-days: 14
       - run: pnpm build
+
+  # The SAM template: our structural checks, cfn-lint, and checkov with the documented skip list.
+  template:
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm via corepack
+        run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @mergescape/infra validate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cfn-lint==1.60.0 checkov==3.4.3
+      - run: cfn-lint packages/infra/template.yaml
+      - run: checkov --config-file packages/infra/.checkov.yaml -f packages/infra/template.yaml
+
+  # Production dependencies are what ends up in the Lambda bundles.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm via corepack
+        run: corepack enable
+      - run: pnpm audit --prod --audit-level=high

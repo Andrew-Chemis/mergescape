@@ -12,12 +12,22 @@ Parameters:
       (scheme and host only, no path or trailing slash). Used for CORS and the Origin check.
     AllowedPattern: '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'
     ConstraintDescription: An https origin with no path and no trailing slash.
+  ClientBasePath:
+    Type: String
+    Default: /
+    Description: >-
+      Path of the client on its Pages origin, with a leading and a trailing slash: / for a user site
+      (the repository <owner>.github.io), /<repository>/ for a project site. The browser is sent back
+      to PagesOrigin plus this path after signing in.
+    AllowedPattern: '^/([A-Za-z0-9._~-]+/)*$'
+    ConstraintDescription: Starts and ends with a slash, for example / or /mergescape/.
   SsmPrefix:
     Type: String
     Default: /mergescape
     Description: >-
-      SSM Parameter Store prefix under which the four SecureString secrets live
-      (github-app-private-key, github-webhook-secret, github-oauth-client-secret, jwt-key).
+      SSM Parameter Store prefix under which the five SecureString parameters live
+      (github-app-private-key, github-webhook-secret, github-oauth-client-id,
+      github-oauth-client-secret, jwt-key).
     AllowedPattern: '^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$'
     ConstraintDescription: Starts with a slash and does not end with one.
   Stage:
@@ -51,6 +61,7 @@ Globals:
         TABLE_NAME: !Ref Table
         SSM_PREFIX: !Ref SsmPrefix
         PAGES_ORIGIN: !Ref PagesOrigin
+        CLIENT_BASE_PATH: !Ref ClientBasePath
         STAGE: !Ref Stage
 
 Resources:

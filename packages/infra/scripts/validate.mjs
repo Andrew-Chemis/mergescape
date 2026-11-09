@@ -160,9 +160,10 @@ check('template: transform is AWS::Serverless-2016-10-31', () => {
   equal(template.Transform, 'AWS::Serverless-2016-10-31');
 });
 
-check('parameters: PagesOrigin, SsmPrefix, Stage, AlertEmail', () => {
+check('parameters: PagesOrigin, ClientBasePath, SsmPrefix, Stage, AlertEmail', () => {
   equal(sorted(Object.keys(template.Parameters ?? {})), [
     'AlertEmail',
+    'ClientBasePath',
     'PagesOrigin',
     'SsmPrefix',
     'Stage',
@@ -184,6 +185,7 @@ check('globals: nodejs22.x, 256 MB, 10 s, tracing off, environment variables', (
     TABLE_NAME: ref('Table'),
     SSM_PREFIX: ref('SsmPrefix'),
     PAGES_ORIGIN: ref('PagesOrigin'),
+    CLIENT_BASE_PATH: ref('ClientBasePath'),
     STAGE: ref('Stage'),
   });
 });

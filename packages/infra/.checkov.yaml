@@ -1,0 +1,32 @@
+# Checkov settings for template.yaml (task 19). Run from the repository root:
+#
+#   checkov --config-file packages/infra/.checkov.yaml -f packages/infra/template.yaml
+#
+# Every check skipped below is a known gap that costs money or does not apply to a public Function URL
+# stack at personal scale. A new failure is therefore a real finding. The same list is in
+# packages/infra/README.md ("Things to know").
+framework:
+  - cloudformation
+compact: true
+quiet: true
+skip-check:
+  # DynamoDB point-in-time recovery: billed per GB-month beyond the free tier. The table is retained when
+  # the stack is deleted, and every player can export their own data.
+  - CKV_AWS_28
+  # Customer-managed KMS keys (table, log groups, Lambda environment): each key costs about 1 USD a month.
+  # Data is encrypted at rest with AWS-owned and AWS-managed keys. The environment holds the table name,
+  # SSM prefix, Pages origin and stage, never a secret (those are SSM SecureStrings).
+  - CKV_AWS_119
+  - CKV_AWS_158
+  - CKV_AWS_173
+  # Dead-letter queue: ingest is called synchronously by GitHub over a Function URL, which has no DLQ, and
+  # GitHub's "Redeliver" replays a failed delivery.
+  - CKV_AWS_116
+  # VPC: both functions call only public AWS endpoints and GitHub; a VPC would need a NAT gateway.
+  - CKV_AWS_117
+  # CloudFront access logs need a bucket and would record which logins' badges are requested.
+  - CKV_AWS_86
+  # The default CloudFront certificate cannot set a TLS floor. A custom domain (v2) can.
+  - CKV_AWS_174
+  # WAF costs a monthly fee plus per-rule charges; reserved concurrency and the budgets bound the blast radius.
+  - CKV_AWS_68

@@ -19,6 +19,7 @@ catalog:
   '@testing-library/svelte': 5.4.2
   '@types/aws-lambda': 8.10.164
   '@types/node': 22.20.5
+  '@vitest/coverage-v8': 5.1.0
   axe-core: 4.14.0
   esbuild: 0.28.2
   eslint: 10.14.0

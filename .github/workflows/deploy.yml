@@ -7,6 +7,9 @@ name: Deploy
 #   AWS_DEPLOY_ROLE_ARN  required; the workflow is skipped while it is empty (forks, new clones)
 #   PAGES_ORIGIN         required; https://<owner>.github.io (CORS origin, client CSP)
 #   ALERT_EMAIL          required; receives the AWS Budgets alerts
+#   CLIENT_BASE_PATH     optional; path of the client on Pages. Default: / for a repository named
+#                        <owner>.github.io, otherwise /<repository>/ (where a project site is served)
+#   APP_SLUG             optional; slug of your GitHub App (the install link). Default mergescape
 #   AWS_REGION           optional, default us-east-1
 #   STACK_NAME           optional, default mergescape
 #   SSM_PREFIX           optional, default /mergescape
@@ -66,9 +69,16 @@ jobs:
         env:
           PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}
           ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+          CLIENT_BASE_PATH: ${{ vars.CLIENT_BASE_PATH }}
           SSM_PREFIX: ${{ vars.SSM_PREFIX || '/mergescape' }}
           STAGE: ${{ vars.STAGE || 'prod' }}
         run: |
+          base="$CLIENT_BASE_PATH"
+          if [ -z "$base" ]; then
+            repo="${GITHUB_REPOSITORY#*/}"
+            owner="${GITHUB_REPOSITORY%%/*}"
+            if [ "${repo,,}" = "${owner,,}.github.io" ]; then base="/"; else base="/${repo}/"; fi
+          fi
           sam deploy \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
@@ -79,6 +89,7 @@ jobs:
             --parameter-overrides \
               "PagesOrigin=$PAGES_ORIGIN" \
               "AlertEmail=$ALERT_EMAIL" \
+              "ClientBasePath=$base" \
               "SsmPrefix=$SSM_PREFIX" \
               "Stage=$STAGE"
 
@@ -119,6 +130,7 @@ jobs:
       - name: Build client
         env:
           VITE_API_ORIGIN: ${{ needs.stack.outputs.api_origin }}
+          VITE_GITHUB_APP_SLUG: ${{ vars.APP_SLUG }}
         run: pnpm --filter @mergescape/client --if-present run build
 
       # The client is optional until it exists: skip publishing instead of failing the workflow.

@@ -6,12 +6,16 @@
   "scripts": {
     "validate": "node scripts/validate.mjs",
     "sam:build": "sam build",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "esbuild": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
     "yaml": "catalog:"
   }
 }
