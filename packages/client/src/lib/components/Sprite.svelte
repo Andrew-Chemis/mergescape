@@ -6,16 +6,18 @@
     name: SpriteName;
     /** Gear-tier palette; only the hero uses it. */
     palette?: HeroPalette;
+    /** The hero's cape colour (a hex string); the hero is drawn without a cape when it is left out. */
+    cape?: string | null | undefined;
     /** Whole-number pixel scale: each sprite pixel becomes `scale` screen pixels. */
     scale?: number;
     /** Accessible name. Leave out when the surrounding text already says what the sprite is. */
     label?: string;
   }
 
-  let { name, palette = 'rags', scale = 4, label }: Props = $props();
+  let { name, palette = 'rags', cape = null, scale = 4, label }: Props = $props();
 
   const size = $derived(SPRITE_GRID * integerScale(scale));
-  const paths = $derived(spritePaths(name, palette));
+  const paths = $derived(spritePaths(name, palette, cape ?? undefined));
 </script>
 
 <span class="spr">
