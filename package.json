@@ -20,7 +20,10 @@
   "devDependencies": {
     "@eslint/js": "catalog:",
     "eslint": "catalog:",
+    "eslint-plugin-svelte": "catalog:",
     "prettier": "catalog:",
+    "prettier-plugin-svelte": "catalog:",
+    "svelte": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vite": "catalog:",

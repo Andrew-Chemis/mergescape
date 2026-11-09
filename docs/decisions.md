@@ -17,5 +17,5 @@ Chosen from the open choices in `research.md` section 8, item 2. The stack is tw
 - **`shared` is consumed as TypeScript source.** Its `exports` point at `src/index.ts`, so `typecheck` and `test` need no prior build and Vite, esbuild and Vitest compile it where it is imported.
 - **`build` is a compile check for `shared`, `backend` and `infra`.** It runs `tsc --noEmit` over production sources only (tests excluded). Lambda bundles are produced by `sam build` in task 5; the client build is `vite build`.
 - **Pinned versions live in one place.** `pnpm-workspace.yaml` has a `catalog:` of exact versions that every `package.json` references.
-- **Svelte files are type-checked but not linted or format-checked.** No Svelte lint or Prettier plugin is installed, to keep dependencies minimal. Add `eslint-plugin-svelte` and `prettier-plugin-svelte` when task 9 brings real components.
+- **Svelte files are type-checked, linted and format-checked.** `svelte-check` types them, `eslint-plugin-svelte` lints them and `prettier-plugin-svelte` formats them (added in task 9, pinned in the catalog). Task 1 had left both plugins out to keep dependencies minimal until real components existed.
 - **`@eslint/js`** is the only dependency beyond the agreed list. It supplies ESLint's recommended rule set for the flat config.

@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';
+import svelte from 'eslint-plugin-svelte';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
@@ -12,15 +13,24 @@ export default defineConfig(
     '.kiro/**',
     'SPEC.md',
     'mergescape-mocks.html',
-    // Svelte files are checked by svelte-check; no Svelte lint plugin is installed yet.
-    '**/*.svelte',
   ]),
   js.configs.recommended,
   tseslint.configs.recommended,
+  svelte.configs['flat/recommended'],
   {
     files: ['**/*.js', '**/*.mjs'],
     languageOptions: {
       globals: { console: 'readonly', process: 'readonly' },
     },
+  },
+  {
+    // Svelte components and runes modules are TypeScript: the Svelte parser hands `<script lang="ts">`
+    // to the TypeScript parser. TypeScript itself checks for undefined names (svelte-check), so the
+    // base `no-undef` rule, which does not know the DOM or the runes, is off for them.
+    files: ['**/*.svelte', '**/*.svelte.ts'],
+    languageOptions: {
+      parserOptions: { parser: tseslint.parser },
+    },
+    rules: { 'no-undef': 'off' },
   },
 );

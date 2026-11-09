@@ -16,12 +16,17 @@ catalog:
   '@aws-sdk/lib-dynamodb': 3.1164.0
   '@eslint/js': 10.0.1
   '@sveltejs/vite-plugin-svelte': 7.3.1
+  '@testing-library/svelte': 5.4.2
   '@types/aws-lambda': 8.10.164
   '@types/node': 22.20.5
+  axe-core: 4.14.0
   esbuild: 0.28.2
   eslint: 10.14.0
+  eslint-plugin-svelte: 3.24.1
   jose: 6.2.13
+  jsdom: 28.1.0
   prettier: 3.9.10
+  prettier-plugin-svelte: 4.1.1
   svelte: 5.57.3
   svelte-check: 4.7.8
   typescript: 5.9.3

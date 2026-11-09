@@ -8,6 +8,3 @@ pnpm-lock.yaml
 .kiro
 SPEC.md
 mergescape-mocks.html
-
-# No prettier-plugin-svelte yet; Svelte files are checked by svelte-check.
-*.svelte
