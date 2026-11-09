@@ -32,6 +32,7 @@ import type {
   PackOptionsResponse,
 } from '../src/api-types';
 import { COIN_GLYPH, FEAT_GLYPHS } from '../src/badge';
+import { featKey } from '../src/keys';
 import { applyFeats, settleWorld } from '../src/feat-flow';
 import { processDelivery } from '../src/ingest';
 import { createRecordingMetrics } from '../src/metrics';
@@ -1220,6 +1221,46 @@ describe('GET /feats and POST /feats/pin', () => {
     const visible = feats.find((feat) => feat.id === 'surgeon');
     expect(visible).toMatchObject({ unlocked: false, hidden: false });
     expect(visible?.progress).toBeGreaterThanOrEqual(0);
+  });
+
+  it('gives an unlocked Feat the instant it unlocked, from its FEAT# record, and a locked one none', async () => {
+    const g = await withMergeConflict();
+    const { feats } = (await g.get('/feats')).body as unknown as FeatsResponse;
+    const records = SK_PREFIX(g, 'FEAT#');
+    expect(records.length).toBeGreaterThan(0);
+    for (const record of records) {
+      const id = String(record.SK).slice('FEAT#'.length);
+      const row = feats.find((feat) => feat.id === id);
+      expect(row?.unlocked, id).toBe(true);
+      expect(row?.unlockedAt, id).toBe(record.unlocked_at);
+      expect(Date.parse(row?.unlockedAt ?? ''), id).toBeGreaterThanOrEqual(START);
+    }
+    // Every unlocked row has a date here, and nothing locked has one.
+    expect(feats.filter((feat) => feat.unlocked && !feat.unlockedAt)).toEqual([]);
+    expect(feats.filter((feat) => !feat.unlocked && 'unlockedAt' in feat)).toEqual([]);
+    expect(feats.find((feat) => feat.id === 'merge-conflict')?.unlockedAt).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('leaves the date out of a Feat that is unlocked but has no record, or whose record has no usable time', async () => {
+    const g = await withMergeConflict();
+    // The profile lists Feats whose FEAT# record never got written (the record follows the profile write).
+    await patch(g, { featsUnlocked: ['merge-conflict', 'surgeon', 'goblin-slayer'] });
+    await g.db.put('FEAT', featKey(AUTHOR_ID, 'goblin-slayer'), {
+      unlocked_at: 'not a time',
+      delivery_id: 'x',
+    });
+    const { feats } = (await g.get('/feats')).body as unknown as FeatsResponse;
+    const surgeon = feats.find((feat) => feat.id === 'surgeon');
+    expect(surgeon?.unlocked).toBe(true);
+    expect(surgeon && 'unlockedAt' in surgeon).toBe(false);
+    const slayer = feats.find((feat) => feat.id === 'goblin-slayer');
+    expect(slayer?.unlocked).toBe(true);
+    expect(slayer && 'unlockedAt' in slayer).toBe(false);
+    expect(feats.find((feat) => feat.id === 'merge-conflict')?.unlockedAt).toEqual(
+      expect.any(String),
+    );
   });
 
   it('pins and unpins, at most three, and only what is unlocked', async () => {

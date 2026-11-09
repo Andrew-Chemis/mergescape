@@ -1705,6 +1705,35 @@ export class Db {
     }
   }
 
+  /**
+   * When each Feat unlocked, from the `FEAT#<id>` records (written once, at the unlock): Feat id to the ISO
+   * instant. A Feat the profile lists as unlocked but whose record is missing (the record follows the
+   * profile write, so a crash between the two leaves none) simply has no entry.
+   */
+  async listFeatUnlocks(userId: number): Promise<Record<string, string>> {
+    const unlocks: Record<string, string> = {};
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const output = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)',
+          ExpressionAttributeNames: { '#pk': 'PK', '#sk': 'SK' },
+          ExpressionAttributeValues: { ':pk': userPk(userId), ':prefix': 'FEAT#' },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        }),
+      );
+      for (const item of (output.Items ?? []) as Attrs[]) {
+        const unlockedAt = str(item, 'unlocked_at');
+        if (unlockedAt !== null && !Number.isNaN(Date.parse(unlockedAt))) {
+          unlocks[String(item.SK).slice('FEAT#'.length)] = unlockedAt;
+        }
+      }
+      startKey = output.LastEvaluatedKey;
+    } while (startKey);
+    return unlocks;
+  }
+
   // ----- weekly run: USER#<id> / WEEK#<yyyy-ww> -----
 
   async getWeek(userId: number, weekKey: string): Promise<RunState | null> {

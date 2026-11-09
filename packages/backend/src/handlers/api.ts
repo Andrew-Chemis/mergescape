@@ -597,9 +597,11 @@ export function createApiHandler(
   async function featsView(userId: number): Promise<FunctionUrlResult> {
     const context = runContext();
     const current = await loadCurrent(context, userId);
-    return current
-      ? json(200, toFeatsView(current, context.now))
-      : json(404, { error: 'no_profile' });
+    if (!current) {
+      return json(404, { error: 'no_profile' });
+    }
+    // The unlock dates are the `FEAT#` records, written once when each Feat unlocked.
+    return json(200, toFeatsView(current, context.now, await db.listFeatUnlocks(userId)));
   }
 
   /** `GET /packs/:seed`: the 3 Charms of an unopened pack (a pure function of the seed, kept by the player). */

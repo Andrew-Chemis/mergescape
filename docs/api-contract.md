@@ -100,7 +100,7 @@ Types from `@mergescape/shared`: `Satchel`, `LootItem`, `ExpeditionState`, `Forg
 - `POST /forge/collect` `{ requestId, station: Station }` → `{ me, piece: GearPiece | null, applied: boolean }`; 409 `no_job`, `not_ready`.
 - `POST /forge/upgrade` `{ requestId, upgrade: 'bellows' | 'dyes' | 'index' }` or `{ requestId, capeColor: CapeColor | null }` → `{ me }`; 409 `already_owned`, `insufficient_supplies`, `dyes_required`.
 - `POST /gear/equip` `{ requestId, pieceId: string }` or `{ requestId, unequip: Slot }` or `{ requestId, petId: PetId }` → `{ me }`; 409 `not_owned`, `already_equipped`, `tier_locked`, `nothing_equipped`, `pet_slot`.
-- `GET /feats` → `{ feats: FeatStatus[] }` (hidden ones come back as `???` with hint only, per shared `featStatuses`).
+- `GET /feats` → `{ feats: FeatRow[] }` where `FeatRow` is the shared `FeatStatus` plus an optional `unlockedAt` (hidden ones come back as `???` with hint only, per shared `featStatuses`). `unlockedAt` is the ISO 8601 instant the Feat unlocked, read from the Feat's `FEAT#` record, which is written once at the unlock. It is present on an unlocked Feat that has its record and absent otherwise: a locked Feat never has it, and neither does an unlocked one whose record is missing (the record follows the profile write, so a crash between the two leaves none) or has no usable time. The client then says only "Unlocked".
 - `POST /feats/pin` `{ requestId, featId: string, pinned: boolean }` → `{ me }`; 409 `not_unlocked`, `already_pinned`, `too_many_pinned`.
 - `GET /badge/:login.svg` additionally renders up to three pinned Feat glyphs and the Old Coin when unlocked.
 

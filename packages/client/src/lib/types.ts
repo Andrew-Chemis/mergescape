@@ -338,8 +338,9 @@ export interface ForgeCollectResponse {
 }
 
 /**
- * One row of `GET /feats` (the shared `FeatStatus`). The contract does not carry the unlock date, so
- * `unlockedAt` is read when the api sends it and the screen says only "Unlocked" when it does not.
+ * One row of `GET /feats` (the shared `FeatStatus`). `unlockedAt` is the ISO instant the Feat unlocked,
+ * which the api sends for an unlocked Feat that has its record (docs/api-contract.md). The screen says only
+ * "Unlocked" when it is missing, or is not a date.
  */
 export interface FeatView extends FeatStatus {
   unlockedAt?: string | null;

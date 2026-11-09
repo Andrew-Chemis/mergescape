@@ -226,9 +226,15 @@ export interface ForgeCollectResponse {
   applied: boolean;
 }
 
+/** One row of `GET /feats`: the shared status, and when the Feat unlocked once it has. */
+export interface FeatRow extends FeatStatus {
+  /** ISO instant of the unlock, from the Feat's `FEAT#` record; absent while locked or when no record exists. */
+  unlockedAt?: string;
+}
+
 /** `GET /feats` */
 export interface FeatsResponse {
-  feats: FeatStatus[];
+  feats: FeatRow[];
 }
 
 /** The answer of the depth mutations that return only the profile. */

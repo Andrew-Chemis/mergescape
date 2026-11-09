@@ -120,8 +120,9 @@
       <p class="desc">{feat.description}</p>
     {/if}
     {#if feat.unlocked}
+      {@const day = feat.unlockedAt ? formatDay(feat.unlockedAt) : ''}
       <p class="when">
-        {#if feat.unlockedAt}Unlocked {formatDay(feat.unlockedAt)}{:else}Unlocked{/if}
+        {#if day}Unlocked {day}{:else}Unlocked{/if}
         {#if featRewardText(feat.id)}&middot; {featRewardText(feat.id)}{/if}
       </p>
       <div class="buttons">

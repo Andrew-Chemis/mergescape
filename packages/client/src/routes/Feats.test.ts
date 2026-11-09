@@ -192,6 +192,22 @@ describe('Feats, other states', () => {
     expect(textOf(feat('Goblin Slayer'))).toContain('Unlocked · Pet: Goblin Runt');
   });
 
+  it('shows the day each Feat unlocked, in UTC, as the api sends it', async () => {
+    const dated = fixtureFeats(NOW, 'active').map((row) =>
+      row.id === 'goblin-slayer' ? { ...row, unlockedAt: '2026-10-03T23:59:00.000Z' } : row,
+    );
+    await renderApp({ hash: '#/feats', feats: dated });
+    expect(textOf(feat('Goblin Slayer'))).toContain('Unlocked Sat, Oct 3 · Pet: Goblin Runt');
+  });
+
+  it('says only "Unlocked" when the date is not a date', async () => {
+    const damaged = fixtureFeats(NOW, 'active').map((row) =>
+      row.id === 'goblin-slayer' ? { ...row, unlockedAt: 'sometime' } : row,
+    );
+    await renderApp({ hash: '#/feats', feats: damaged });
+    expect(textOf(feat('Goblin Slayer'))).toContain('Unlocked · Pet: Goblin Runt');
+  });
+
   it('draws an unlocked hidden Feat with its real name', async () => {
     const earned = fixtureFeats(NOW, 'active').map((row) =>
       row.id === 'the-old-coin'

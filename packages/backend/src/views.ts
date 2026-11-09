@@ -271,9 +271,21 @@ export function toForgeView({ player }: Current, now: number): ForgeView {
   };
 }
 
-/** `GET /feats`: progress for the visible Feats, "???" and a hint for the hidden ones. */
-export function toFeatsView({ player }: Current, now: number): FeatsResponse {
-  return { feats: featStatuses(player, now) };
+/**
+ * `GET /feats`: progress for the visible Feats, "???" and a hint for the hidden ones, and for an unlocked
+ * Feat the instant it unlocked (`unlocks`: Feat id to ISO instant, from the `FEAT#` records).
+ */
+export function toFeatsView(
+  { player }: Current,
+  now: number,
+  unlocks: Readonly<Record<string, string>> = {},
+): FeatsResponse {
+  return {
+    feats: featStatuses(player, now).map((feat) => {
+      const unlockedAt = feat.unlocked ? unlocks[feat.id] : undefined;
+      return unlockedAt === undefined ? feat : { ...feat, unlockedAt };
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
