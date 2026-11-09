@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SUPPLY_DROPS } from './constants';
+import { loadoutOf, makePiece } from './gear';
 import { score } from './score';
 import { createPlayerState } from './state';
 import {
@@ -7,6 +8,7 @@ import {
   dailyFirstDrop,
   emptySatchel,
   emptySupplies,
+  hoarderDrop,
   inlineDrop,
   mergeDrop,
   missingSupplies,
@@ -30,7 +32,7 @@ import {
   settledPlayer,
   verifiedKill,
 } from './test-builders';
-import type { PlayerState } from './types';
+import type { GearPiece, GearSlot, PlayerState } from './types';
 
 describe('the satchel', () => {
   it('starts empty and reads absent entries as zero', () => {
@@ -243,5 +245,74 @@ describe('score() emits exactly the module drops (Requirement 4.11)', () => {
     const fresh = createPlayerState(REVIEWER_ID);
     const result = score(reviewEvent('APPROVED'), fresh, prStateFor(facts()), NOW);
     expect(result.supplies).toEqual({ ...emptySupplies(), lore: 2, provisions: 1 });
+  });
+});
+
+describe('Hoarder gear (+1 supply per event)', () => {
+  const hoarder = (id: string, slot: GearSlot): GearPiece =>
+    makePiece({ id, slot, tier: 'iron', affix: 'hoarder' });
+  const wearing = (count: number, base: PlayerState): PlayerState => ({
+    ...base,
+    gear: loadoutOf(
+      (['weapon', 'body', 'cape', 'trinket'] as const)
+        .slice(0, count)
+        .map((slot) => hoarder(`h-${slot}`, slot)),
+    ),
+  });
+  const author = wearing(1, settledPlayer());
+  const reviewer = wearing(1, settledPlayer(REVIEWER_ID));
+
+  it('adds one of the main supply of a merge, a review and an inline comment', () => {
+    const pr = mergedFacts();
+    expect(score(mergedEvent(pr), author, prStateFor(pr), NOW).supplies).toEqual({
+      ...emptySupplies(),
+      ore: 3,
+      timber: 1,
+    });
+    const open = facts();
+    expect(score(reviewEvent('APPROVED'), reviewer, prStateFor(open), NOW).supplies.lore).toBe(3);
+    expect(score(reviewEvent('COMMENTED'), reviewer, prStateFor(open), NOW).supplies.lore).toBe(2);
+    expect(
+      score(inlineEvent(human(REVIEWER_ID), open), reviewer, prStateFor(open), NOW).supplies.ink,
+    ).toBe(2);
+  });
+
+  it('adds one per piece', () => {
+    const pr = mergedFacts();
+    const three = wearing(3, settledPlayer());
+    expect(score(mergedEvent(pr), three, prStateFor(pr), NOW).supplies.ore).toBe(2 + 3);
+  });
+
+  it('never adds Provisions, Flux or anything on an event with no main supply', () => {
+    const open = facts();
+    expect(score(openedEvent(open), author, prStateFor(open), NOW).supplies).toEqual(
+      emptySupplies(),
+    );
+    const merged = mergedFacts();
+    const kill = score(verifiedKill(human(REVIEWER_ID), merged), reviewer, prStateFor(merged), NOW);
+    expect(kill.supplies).toEqual(emptySupplies());
+    // The first event of the day still adds its Provision, and Hoarder adds nothing to it.
+    const fresh = wearing(1, createPlayerState(REVIEWER_ID));
+    expect(score(reviewEvent('APPROVED'), fresh, prStateFor(open), NOW).supplies).toEqual({
+      ...emptySupplies(),
+      lore: 3,
+      provisions: 1,
+    });
+  });
+
+  it('respects the Ink cap: past 5 inline comments on a PR there is nothing to add to', () => {
+    const open = facts();
+    const capped = prStateFor(open, {
+      reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 5 } },
+    });
+    expect(score(inlineEvent(human(REVIEWER_ID), open), reviewer, capped, NOW).supplies.ink).toBe(
+      0,
+    );
+  });
+
+  it('hoarderDrop reads the drop itself', () => {
+    expect(hoarderDrop(author, mergedEvent(mergedFacts()), { ore: 1 })).toEqual({ ore: 1 });
+    expect(hoarderDrop(author, mergedEvent(mergedFacts()), {})).toEqual({});
+    expect(hoarderDrop(settledPlayer(), mergedEvent(mergedFacts()), { ore: 1 })).toEqual({});
   });
 });

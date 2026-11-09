@@ -1,8 +1,8 @@
 import { FEAT_PET_IDS, PET_IDS } from './constants';
 import type { GearTier, PetId, SupplyKind } from './constants';
-import { makePiece } from './gear';
+import { loadoutOf, makePiece, tierUnlocked } from './gear';
 import { addSupplies } from './supplies';
-import type { GearPiece, PlayerState, Supplies } from './types';
+import type { GearPiece, PlayerState, Result, Supplies } from './types';
 
 /**
  * Pets (game-design.md 7.3, Requirement 16.5). A pet fills the fifth gear slot and carries the slot Power of
@@ -239,4 +239,28 @@ export function petWeeklySupplies(player: Pick<PlayerState, 'gear'>): Partial<Su
 /** Bank the equipped pet's weekly supplies. Call once per run rollover. */
 export function applyPetWeekly(player: PlayerState): PlayerState {
   return addSupplies(player, petWeeklySupplies(player));
+}
+
+export type PetEquipError = 'not_owned' | 'tier_locked';
+
+/**
+ * Put an owned pet in the pet slot (replacing the one there). A pet carries the Power of its tier, so the
+ * tier must be unlocked, and the set bonus is recomputed. Passives apply from this moment.
+ */
+export function equipPet(
+  player: PlayerState,
+  petId: string,
+): Result<{ player: PlayerState }, PetEquipError> {
+  const definition = petDefinition(petId);
+  if (definition === undefined || !ownedPets(player).includes(petId)) {
+    return { ok: false, error: 'not_owned' };
+  }
+  if (!tierUnlocked(player, definition.tier)) {
+    return { ok: false, error: 'tier_locked' };
+  }
+  const worn = [
+    ...player.gear.pieces.filter((entry) => entry.slot !== 'pet'),
+    petPiece(definition),
+  ];
+  return { ok: true, player: { ...player, gear: loadoutOf(worn, player.gear.capeColor) } };
 }

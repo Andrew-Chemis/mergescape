@@ -18,6 +18,7 @@ import { emptySkillXp, SKILL_LABELS, SKILLS } from './skills';
 import {
   dailyFirstDrop,
   emptySupplies,
+  hoarderDrop,
   inlineDrop,
   mergeDrop,
   reviewDrop,
@@ -601,7 +602,11 @@ export function score(
     xp,
     skill: outcome.skill,
     skillXp,
-    supplies: sumSupplies(outcome.supplies, dailyDrop),
+    supplies: sumSupplies(
+      outcome.supplies,
+      dailyDrop,
+      hoarderDrop(player, event, outcome.supplies),
+    ),
     monster: outcome.monster,
     breakdown,
     counterUpdates,

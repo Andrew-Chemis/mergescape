@@ -1,6 +1,8 @@
 import type {
   ActId,
   Affix,
+  StationId,
+  UpgradeId,
   ExpeditionHours,
   GearTier,
   MaterialKind,
@@ -187,6 +189,8 @@ export interface GearLoadout {
   pieces: readonly GearPiece[];
   /** Full-set bonus currently earned (0 or 0.25). */
   setBonus: number;
+  /** The cape colour chosen with the Loom's Dyes; absent means the natural cape. */
+  capeColor?: string;
 }
 
 export interface PledgeLoadout {
@@ -268,6 +272,116 @@ export interface WeekHook {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The Forge (game-design.md 7.2)
+// ---------------------------------------------------------------------------------------------
+
+/** One order at a station (the `JOB#<station>` item). */
+export interface ForgeJob {
+  /** Recipe id, for example `forge:weapon:iron`. */
+  recipe: string;
+  station: StationId;
+  startedAt: number;
+  doneAt: number;
+  seed: number;
+  /** An affix order holds the piece being worked on until it is collected. */
+  piece?: GearPiece;
+  collected: boolean;
+  /** What the order made, stored on collection so a repeated collect returns the same piece. */
+  output?: GearPiece;
+}
+
+export interface ForgeState {
+  /** The current or last order at each station; one at a time, so a station is free once it is collected. */
+  stations: Partial<Record<StationId, ForgeJob>>;
+  /** Upgrades bought, each once. */
+  upgrades: UpgradeId[];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feat counters (game-design.md 8.4): plain data so the backend can persist them as one map
+// ---------------------------------------------------------------------------------------------
+
+/** What the player has done in one repository (keyed by repo id as a string). Days are `YYYY-MM-DD` UTC. */
+export interface RepoRecord {
+  first: string;
+  last: string;
+  /** Merges with another human's approval. */
+  merges: number;
+}
+
+/**
+ * The rolling counters Feats read: lifetime counts, a 30-day window kept as per-day buckets, per-repository
+ * first-merge dates, and scored events by local hour. Everything is a number, a string or a small map, and
+ * nothing is read from before the character existed (Requirement 17.6). The merge counters that feed Scale
+ * Feats count only merges that another human approved.
+ */
+export interface FeatCounters {
+  /** Merges with another human's approval, lifetime. */
+  approvedMerges: number;
+  /** Deletions minus additions over those merges, lifetime (negative when they added more). */
+  netLinesRemoved: number;
+  /** The most files an approved merge has touched. */
+  maxFilesMerged: number;
+  /** Approved merges under 50 lines. */
+  smallMerges: number;
+  /** Merges that addressed requested changes. */
+  ripostes: number;
+  /** Merges by the author with no other human review. */
+  soloMerges: number;
+  /** Approved merges in the Run `week`. */
+  weekMerges: { week: string; count: number };
+  repos: Record<string, RepoRecord>;
+  /** Approved merges into a repository that had been dark for a year. */
+  firstLights: number;
+  /** Merges after 16:00 local on a Friday. */
+  fridayDeploys: number;
+  /** Merges in the same minute as the previous one. */
+  simultaneousMerges: number;
+  /** The minute (epoch minutes) of the last merge; -1 when none. */
+  lastMergeMinute: number;
+  /** Merges of a PR open for 180 days or more. */
+  longHauls: number;
+  verifiedKills: number;
+  /** Verified kills of PRs of 500 lines or more where the player left 3 inline comments. */
+  archivistReviews: number;
+  /** First reviews of a PR carrying 10 inline comments. */
+  closeReads: number;
+  /** Approvals under 200 lines within an hour of the PR opening. */
+  fastApprovals: number;
+  /** Approvals within a minute of the PR opening. */
+  rubberStamps: number;
+  /** Approvals of PRs by authors with fewer merges than the player. */
+  mentorApprovals: number;
+  /** Approvals of PRs open a week or more. */
+  unblocked: number;
+  inlineComments: number;
+  /** Verified kills per UTC day, the last 30 days. */
+  reviewedPrs: Record<string, number>;
+  /** Approved merges under 150 lines per UTC day, the last 30 days. */
+  tidyMerges: Record<string, number>;
+  /** Scored events by local hour of day (24 entries). */
+  hours: number[];
+  /** Runs (ISO weeks) with at least one scored event. */
+  activeWeeks: number;
+  lastActiveWeek: string;
+  /** Consecutive Runs whose Boss act cleared, and the last such Run. */
+  bossStreak: number;
+  lastBossWeek: string;
+  /** Moguls beaten at least once. */
+  moguls: string[];
+  /** Kills by Bestiary id. */
+  kills: Record<string, number>;
+  /** Expeditions collected. */
+  expeditions: number;
+  /** Regions returned from at least once. */
+  regions: string[];
+  /** Reclaimed uniques brought back from The Garbage Collector. */
+  reclaimed: number;
+  /** Coins dated 7960 found. */
+  oldCoins: number;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Counters (plain data so the backend can persist them)
 // ---------------------------------------------------------------------------------------------
 
@@ -339,6 +453,16 @@ export interface PlayerState {
   pets?: readonly string[];
   /** Seeds of Charm packs from loot that are not yet opened. */
   charmPacks?: readonly number[];
+  /** The three stations and their upgrades (forge.ts). Absent means no orders and no upgrades. */
+  forge?: ForgeState;
+  /** Titles earned from Feats. */
+  titles?: readonly string[];
+  /** Up to three unlocked Feat ids shown on the character sheet and the badge. */
+  pinnedFeats?: readonly string[];
+  /** Rolling counters Feats read (feats.ts). Absent means all zero. */
+  featCounters?: FeatCounters;
+  /** Minutes east of UTC for local-time Feats (Night Owl, Dawn Patrol, Friday Deploy). Absent means UTC. */
+  tzOffsetMinutes?: number;
 }
 
 /** The scorer's view of a PR. Metadata persisted per Requirement 3.1 is handled by the backend. */
@@ -367,6 +491,15 @@ export interface PRState {
 // ---------------------------------------------------------------------------------------------
 // GameEvent: the normalised, allow-listed form of a webhook (nothing else survives normalisation)
 // ---------------------------------------------------------------------------------------------
+
+/** Flags any normalised event may carry. */
+export interface EventFlags {
+  /**
+   * True for an event replayed from history (the v1.1 backfill). It scores XP like any other, but it never
+   * counts toward a Feat: a Feat is always something done while playing (Requirement 17.6).
+   */
+  backfill?: boolean;
+}
 
 export interface EventActor {
   /** Numeric GitHub user id. */
@@ -400,7 +533,7 @@ export interface PullRequestFacts {
   mergedBy: EventActor | null;
 }
 
-export interface PROpenedEvent {
+export interface PROpenedEvent extends EventFlags {
   kind: 'pr_opened';
   /** The PR author. */
   actor: EventActor;
@@ -409,26 +542,26 @@ export interface PROpenedEvent {
   pr: PullRequestFacts;
 }
 
-export interface PRMergedEvent {
+export interface PRMergedEvent extends EventFlags {
   kind: 'pr_merged';
   /** The author, or the human merger when the author is a bot. */
   actor: EventActor;
   pr: PullRequestFacts;
 }
 
-export interface PRClosedEvent {
+export interface PRClosedEvent extends EventFlags {
   kind: 'pr_closed';
   actor: EventActor;
   pr: PullRequestFacts;
 }
 
-export interface PRSynchronizedEvent {
+export interface PRSynchronizedEvent extends EventFlags {
   kind: 'pr_synchronized';
   actor: EventActor;
   pr: PullRequestFacts;
 }
 
-export interface ReviewSubmittedEvent {
+export interface ReviewSubmittedEvent extends EventFlags {
   kind: 'review_submitted';
   /** The reviewer. */
   actor: EventActor;
@@ -437,7 +570,7 @@ export interface ReviewSubmittedEvent {
   pr: PullRequestFacts;
 }
 
-export interface ReviewCommentCreatedEvent {
+export interface ReviewCommentCreatedEvent extends EventFlags {
   kind: 'review_comment_created';
   /** The comment author. */
   actor: EventActor;
@@ -445,7 +578,7 @@ export interface ReviewCommentCreatedEvent {
 }
 
 /** Built from a merge and the stored reviews (see `verifiedKillEvents`), one per approver. */
-export interface VerifiedKillEvent {
+export interface VerifiedKillEvent extends EventFlags {
   kind: 'verified_kill';
   /** The approver. */
   actor: EventActor;
@@ -457,7 +590,7 @@ export interface VerifiedKillEvent {
  * changes on the PR. It scores only for a player holding Jester's Rebase: the Riposte is granted when the
  * PR they challenged merges, never at review time (game-design.md 8.3).
  */
-export interface RiposteCreditEvent {
+export interface RiposteCreditEvent extends EventFlags {
   kind: 'riposte_credit';
   /** The reviewer who requested changes. */
   actor: EventActor;
@@ -465,7 +598,7 @@ export interface RiposteCreditEvent {
 }
 
 /** Built by the weekly rollover for each player when a run closes. */
-export interface WeeklyStreakEvent {
+export interface WeeklyStreakEvent extends EventFlags {
   kind: 'weekly_streak';
   actor: EventActor;
   /** At least one merged PR or three reviews that week. */

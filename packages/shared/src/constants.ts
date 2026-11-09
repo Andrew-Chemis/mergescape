@@ -659,3 +659,140 @@ export const AFFIX_RULES = {
   /** Hoarder: each piece adds this many of the event's main supply. */
   hoarderSupplies: 1,
 } as const;
+
+// ---------------------------------------------------------------------------------------------
+// The Forge (game-design.md 7.2; Requirement 16.2 and 16.6)
+// ---------------------------------------------------------------------------------------------
+
+export const STATION_IDS = ['forge', 'loom', 'scriptorium'] as const;
+export type StationId = (typeof STATION_IDS)[number];
+
+/** The Forge makes Weapons and Bodies, the Loom Capes, the Scriptorium Trinkets and affixes. */
+export const STATION_SLOTS: Readonly<Record<StationId, readonly GearSlot[]>> = {
+  forge: ['weapon', 'body'],
+  loom: ['cape'],
+  scriptorium: ['trinket'],
+};
+
+/**
+ * Hours a recipe takes by station and tier: 2 h Leather to 24 h Dragon at the Forge and the Loom, 4 h to
+ * 12 h at the Scriptorium.
+ */
+export const STATION_HOURS: Readonly<Record<StationId, Readonly<Record<GearTier, number>>>> = {
+  forge: { leather: 2, iron: 4, silver: 8, mithril: 12, rune: 18, dragon: 24 },
+  loom: { leather: 2, iron: 4, silver: 8, mithril: 12, rune: 18, dragon: 24 },
+  scriptorium: { leather: 4, iron: 5, silver: 6, mithril: 8, rune: 10, dragon: 12 },
+};
+
+/** What one piece of a tier costs (game-design.md 7.1: Leather is Timber and Provisions, and so on). */
+export const RECIPE_INPUTS: Readonly<
+  Record<GearTier, Readonly<Partial<Record<MaterialKind, number>>>>
+> = {
+  leather: { timber: 6, provisions: 2 },
+  iron: { ore: 8 },
+  silver: { ore: 6, silver: 3 },
+  mithril: { mithril: 5 },
+  rune: { rune: 5 },
+  dragon: { dragon: 6 },
+};
+
+/** The Scriptorium rolls an affix onto a piece for Flux; rolling over an existing affix costs more. */
+export const AFFIX_ORDER = { hours: 4, flux: 2, rerollFlux: 4 } as const;
+
+export const UPGRADE_IDS = ['bellows', 'dyes', 'index'] as const;
+export type UpgradeId = (typeof UPGRADE_IDS)[number];
+
+/** Station upgrades, each bought once: Bellows (Flux x3), Dyes (Ink x10), Index (Lore x50). */
+export const STATION_UPGRADES: Readonly<
+  Record<UpgradeId, { station: StationId; cost: Readonly<Partial<Record<MaterialKind, number>>> }>
+> = {
+  bellows: { station: 'forge', cost: { flux: 3 } },
+  dyes: { station: 'loom', cost: { ink: 10 } },
+  index: { station: 'scriptorium', cost: { lore: 50 } },
+};
+
+/** Bellows: every Forge order takes this fraction of its time (25% less). */
+export const BELLOWS_TIME_FACTOR = 0.75;
+
+/** Cape colours the Dyes unlock (cosmetic). */
+export const CAPE_COLORS = ['crimson', 'azure', 'verdant', 'amber', 'violet', 'ash'] as const;
+export type CapeColor = (typeof CAPE_COLORS)[number];
+
+// ---------------------------------------------------------------------------------------------
+// Feats (game-design.md 8; Requirement 17)
+// ---------------------------------------------------------------------------------------------
+
+export const FEAT_RULES = {
+  /** A designated Feat adds this much Power ... */
+  bonusPerFeat: 0.1,
+  /** ... and the total never exceeds this (never a bonus for excess). */
+  bonusCap: 0.5,
+  /** Most Feats a player can pin to the character sheet and the badge. */
+  maxPinned: 3,
+  /** Per-day buckets older than this many days are dropped from the rolling window. */
+  windowDays: 30,
+  /** Repositories tracked per player; the counters stay a bounded size. */
+  maxTrackedRepos: 200,
+
+  // Scale: only merged PRs another human approved count.
+  thousandHandFiles: 1000,
+  archivistReviews: 100,
+  archivistMinLoc: 500,
+  archivistMinInline: 3,
+  deleterNetLines: 100_000,
+  hundredMergesWeek: 100,
+  massReviewerPrs: 100,
+  omnilinguistRepos: 12,
+  firstLightQuietDays: 365,
+
+  // Craft
+  surgeonMerges: 50,
+  surgeonMaxLoc: 50,
+  riposteMasterRipostes: 100,
+  closeReaderReviews: 25,
+  closeReaderInline: 10,
+  fastHandsApprovals: 50,
+  fastHandsMaxLoc: 200,
+  fastHandsHours: 1,
+  mentorApprovals: 100,
+  keeperMerges: 500,
+  verifiedKills: 500,
+  marginaliaComments: 500,
+  unblockerApprovals: 25,
+  unblockerDays: 7,
+  tidyHandsMerges: 12,
+  tidyHandsMaxLoc: 150,
+
+  // Endurance and rhythm
+  yearOfTheGoblinWeeks: 52,
+  ironWeekStreak: 10,
+  perennialWeeks: 10,
+  evergreenWeeks: 26,
+  halfwayLevel: 50,
+  ninetyNineLevel: 99,
+
+  // World and discovery
+  goblinSlayerKills: 1000,
+  hydraBaneKills: 100,
+  impWhispererKills: 100,
+  mogulHunterMoguls: 6,
+  spelunkerExpeditions: 100,
+  collectorPets: 6,
+  cartographerRegions: 8,
+  renownedRenown: 8,
+
+  // Hidden humour (cosmetic only, never a Feat bonus)
+  longHaulDays: 180,
+  fridayDeploys: 10,
+  fridayAfterHour: 16,
+  rubberStamps: 20,
+  rubberStampSeconds: 60,
+  soloMerges: 50,
+  nightEvents: 100,
+  /** Night Owl counts local hours from this one through midnight and up to (not including) `nightEnd`. */
+  nightStart: 22,
+  nightEnd: 6,
+  dawnEvents: 100,
+  dawnStart: 5,
+  dawnEnd: 7,
+} as const;

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACT_CLEAR_GOLD,
+  AFFIX_ORDER,
   AFFIX_RULES,
   AFFIXES,
+  BELLOWS_TIME_FACTOR,
+  CAPE_COLORS,
+  FEAT_RULES,
+  RECIPE_INPUTS,
+  STATION_HOURS,
+  STATION_IDS,
+  STATION_SLOTS,
+  STATION_UPGRADES,
+  UPGRADE_IDS,
   EXPEDITION_HOURS,
   EXPEDITION_PLANS,
   EXPEDITION_RULES,
@@ -236,5 +246,83 @@ describe('constants of the depth layers (game-design.md 6.1, 6.2, 7.1)', () => {
   it('pets: six v1 pets and five cosmetic Feat pets', () => {
     expect(PET_IDS).toHaveLength(6);
     expect(FEAT_PET_IDS).toHaveLength(5);
+  });
+});
+
+describe('constants of the Forge and Feats (game-design.md 7.2, 8)', () => {
+  it('three stations, what they make, and how long it takes', () => {
+    expect(STATION_IDS).toEqual(['forge', 'loom', 'scriptorium']);
+    expect(STATION_SLOTS).toEqual({
+      forge: ['weapon', 'body'],
+      loom: ['cape'],
+      scriptorium: ['trinket'],
+    });
+    expect(STATION_HOURS.forge).toEqual({
+      leather: 2,
+      iron: 4,
+      silver: 8,
+      mithril: 12,
+      rune: 18,
+      dragon: 24,
+    });
+    expect(STATION_HOURS.scriptorium.leather).toBe(4);
+    expect(STATION_HOURS.scriptorium.dragon).toBe(12);
+    expect(AFFIX_ORDER).toEqual({ hours: 4, flux: 2, rerollFlux: 4 });
+  });
+
+  it('inputs by tier and the three upgrades', () => {
+    expect(RECIPE_INPUTS.leather).toEqual({ timber: 6, provisions: 2 });
+    expect(RECIPE_INPUTS.silver).toEqual({ ore: 6, silver: 3 });
+    expect(UPGRADE_IDS).toEqual(['bellows', 'dyes', 'index']);
+    expect(STATION_UPGRADES.bellows.cost).toEqual({ flux: 3 });
+    expect(STATION_UPGRADES.dyes.cost).toEqual({ ink: 10 });
+    expect(STATION_UPGRADES.index.cost).toEqual({ lore: 50 });
+    expect(BELLOWS_TIME_FACTOR).toBe(0.75);
+    expect(CAPE_COLORS).toHaveLength(6);
+  });
+
+  it('the Feat bonus is +0.1 each up to +0.5, three can be pinned, the window is 30 days', () => {
+    expect(FEAT_RULES.bonusPerFeat).toBe(0.1);
+    expect(FEAT_RULES.bonusCap).toBe(0.5);
+    expect(FEAT_RULES.maxPinned).toBe(3);
+    expect(FEAT_RULES.windowDays).toBe(30);
+    // Thresholds the design states.
+    expect(FEAT_RULES).toMatchObject({
+      thousandHandFiles: 1000,
+      archivistReviews: 100,
+      archivistMinLoc: 500,
+      archivistMinInline: 3,
+      deleterNetLines: 100000,
+      hundredMergesWeek: 100,
+      massReviewerPrs: 100,
+      omnilinguistRepos: 12,
+      firstLightQuietDays: 365,
+      surgeonMerges: 50,
+      surgeonMaxLoc: 50,
+      riposteMasterRipostes: 100,
+      closeReaderReviews: 25,
+      closeReaderInline: 10,
+      fastHandsApprovals: 50,
+      fastHandsMaxLoc: 200,
+      fastHandsHours: 1,
+      mentorApprovals: 100,
+      keeperMerges: 500,
+      verifiedKills: 500,
+      yearOfTheGoblinWeeks: 52,
+      ironWeekStreak: 10,
+      goblinSlayerKills: 1000,
+      hydraBaneKills: 100,
+      mogulHunterMoguls: 6,
+      spelunkerExpeditions: 100,
+      longHaulDays: 180,
+      nightEvents: 100,
+      nightStart: 22,
+      nightEnd: 6,
+      fridayDeploys: 10,
+      fridayAfterHour: 16,
+      rubberStamps: 20,
+      rubberStampSeconds: 60,
+      soloMerges: 50,
+    });
   });
 });

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { FEAT_PET_IDS, PET_IDS } from './constants';
 import { durationReduction, packOddsBonus } from './expeditions';
+import { loadoutOf, makePiece } from './gear';
 import {
   activePassive,
   applyPetWeekly,
   CORE_PETS,
+  equipPet,
   equippedPet,
   grantPet,
   isPetId,
@@ -18,6 +20,7 @@ import {
   petWeeklySupplies,
   STARTER_PETS,
 } from './pets';
+import { computePower } from './power';
 import { createPlayerState } from './state';
 import { emptySatchel, satchelOf } from './supplies';
 import type { PlayerState } from './types';
@@ -185,5 +188,41 @@ describe('passives only apply while the pet is equipped', () => {
     expect(packOddsBonus(withPet('owl'))).toBe(3);
     expect(petPackBonus(withPet('flaky-wisp'))).toBe(0);
     expect(petExpeditionReduction(withPet('owl'))).toBe(0);
+  });
+});
+
+describe('equipPet', () => {
+  it('puts an owned pet in the pet slot with its passive and tier Power', () => {
+    const player = createPlayerState(1);
+    const equipped = equipPet(player, 'linter-cat');
+    expect(equipped.ok).toBe(true);
+    if (equipped.ok) {
+      expect(equipped.player.gear.pieces).toEqual([petPiece(petDefinition('linter-cat')!)]);
+      expect(petWeeklySupplies(equipped.player)).toEqual({ ink: 1 });
+      expect(computePower(equipped.player)).toBe(1.05);
+    }
+  });
+
+  it('replaces the pet already there and keeps the rest of the loadout', () => {
+    const sword = makePiece({ id: 'w', slot: 'weapon', tier: 'leather' });
+    const start: PlayerState = {
+      ...grantPet(createPlayerState(1), 'rubber-duck').player,
+      gear: loadoutOf([sword, petPiece(petDefinition('linter-cat')!)], 'azure'),
+    };
+    const swapped = equipPet(start, 'rubber-duck');
+    expect(swapped.ok).toBe(true);
+    if (swapped.ok) {
+      expect(swapped.player.gear.pieces.map((piece) => piece.id)).toEqual(['w', 'pet-rubber-duck']);
+      expect(swapped.player.gear.capeColor).toBe('azure');
+    }
+  });
+
+  it('refuses a pet the player does not own, an unknown id, and a tier not yet unlocked', () => {
+    const player = createPlayerState(1);
+    expect(equipPet(player, 'owl')).toEqual({ ok: false, error: 'not_owned' });
+    expect(equipPet(player, 'dog')).toEqual({ ok: false, error: 'not_owned' });
+    const mote: PlayerState = grantPet(player, 'garbage-collectors-mote').player;
+    expect(equipPet(mote, 'garbage-collectors-mote')).toEqual({ ok: false, error: 'tier_locked' });
+    expect(equipPet({ ...mote, renown: 64 }, 'garbage-collectors-mote').ok).toBe(true);
   });
 });

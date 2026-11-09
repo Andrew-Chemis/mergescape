@@ -49,7 +49,7 @@ describe('computePower', () => {
         ],
         setBonus: 0.25,
       },
-      feats: { unlocked: ['megalith'], powerBonus: 0.3 },
+      feats: { unlocked: ['archivist'], powerBonus: 0.3 },
     };
     expect(computePower(player)).toBeCloseTo(1 + 0.4 + 0.3 + 0.25 + 0.3, 6);
     expect(powerBreakdown(player).map((line) => [line.label, line.value])).toEqual([

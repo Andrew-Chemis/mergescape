@@ -1,5 +1,13 @@
-import { MATERIAL_KINDS, SIZE_TIER_LOC, SUPPLY_DROPS, SUPPLY_KINDS } from './constants';
-import type { MaterialAmounts, PlayerState, Result, Satchel, Supplies } from './types';
+import {
+  AFFIX_RULES,
+  MATERIAL_KINDS,
+  SIZE_TIER_LOC,
+  SUPPLY_DROPS,
+  SUPPLY_KINDS,
+} from './constants';
+import type { SupplyKind } from './constants';
+import { affixCount } from './gear';
+import type { GameEvent, MaterialAmounts, PlayerState, Result, Satchel, Supplies } from './types';
 
 /**
  * Supplies (game-design.md 6.1, Requirement 15.1 and 4.11): the drop table for each scored event, and the
@@ -149,6 +157,32 @@ export function inlineDrop(inlineBefore: number): Partial<Supplies> {
 /** The Provisions the first scored event of each UTC day drops. */
 export function dailyFirstDrop(): Partial<Supplies> {
   return { provisions: SUPPLY_DROPS.dailyFirstProvisions };
+}
+
+/** The supply each kind of event is known for: the one a Hoarder piece adds to. */
+const MAIN_SUPPLY: Readonly<Partial<Record<GameEvent['kind'], SupplyKind>>> = {
+  pr_merged: 'ore',
+  review_submitted: 'lore',
+  review_comment_created: 'ink',
+};
+
+/**
+ * What Hoarder gear adds to an event's drop: +1 of the event's main supply per Hoarder piece (Ore for a
+ * merge, Lore for a review, Ink for an inline comment). It adds only where the event already dropped that
+ * supply, so the Ink cap of 5 per PR still holds, and it never adds Provisions or Flux: the expedition
+ * currency stays earned by merging with review and addressing feedback.
+ */
+export function hoarderDrop(
+  player: Pick<PlayerState, 'gear'>,
+  event: GameEvent,
+  drop: Partial<Supplies>,
+): Partial<Supplies> {
+  const main = MAIN_SUPPLY[event.kind];
+  const pieces = affixCount(player, 'hoarder');
+  if (main === undefined || pieces === 0 || (drop[main] ?? 0) <= 0) {
+    return {};
+  }
+  return { [main]: pieces * AFFIX_RULES.hoarderSupplies };
 }
 
 /** Add drops together into a full set of six supplies. */

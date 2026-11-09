@@ -1,5 +1,7 @@
 import { BASE_POWER, CHARM_RULES, POWER_CAP } from './constants';
 import { charmPowerLines, loadedDiceFires } from './charms';
+import { featPowerBonus } from './feats';
+import { gearPowerLines } from './gear';
 import { tidy } from './math';
 import { mogulPowerLines } from './moguls';
 import { pledgePower } from './pledges';
@@ -22,7 +24,8 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
 /**
  * The terms of `Power = 1 + Σ(Charm powers) + Σ(gear power incl. set bonus) + Pledge bonus + Feat bonus`,
  * capped at 9 (Requirement 4.5), as Combat Log lines, one per contributing source: each Charm, then the
- * gear total, the Pledge bonus and the Feat bonus. Terms that are zero are omitted. When the cap bites a
+ * "Gear" total (and, in an event context, the Keen and Stout lines), the Pledge bonus and the Feat bonus,
+ * which never exceeds +0.5. Terms that are zero are omitted. When the cap bites a
  * final negative "Power cap" line makes the lines sum to the capped Power.
  *
  * Without a context this is the unconditional baseline (what the Character sheet shows): Charms'
@@ -35,13 +38,10 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
 export function powerBreakdown(player: PlayerState, ctx?: PowerContext): BreakdownLine[] {
   const lines: BreakdownLine[] = [{ label: 'Base Power', value: BASE_POWER, kind: 'power' }];
   lines.push(...charmPowerLines(player, ctx));
-  const gear = tidy(
-    player.gear.pieces.reduce((sum, piece) => sum + piece.power, 0) + player.gear.setBonus,
-  );
+  lines.push(...gearPowerLines(player, ctx));
   const flat: [string, number][] = [
-    ['Gear', gear],
     ['Pledge bonus', pledgePower(player, ctx)],
-    ['Feat bonus', player.feats.powerBonus],
+    ['Feat bonus', featPowerBonus(player)],
   ];
   for (const [label, value] of flat) {
     if (value !== 0) {

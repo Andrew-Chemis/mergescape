@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FORMER_OWNERS, REGIONS } from './expeditions';
+import { FEATS } from './feats';
+import { RECIPES } from './forge';
 import { UNIQUES } from './gear';
 import { PETS } from './pets';
 import { namesPattern, productionSources } from './test-sources';
@@ -13,7 +15,7 @@ import { namesPattern, productionSources } from './test-sources';
 describe('no real names in the expedition, gear, pet, Forge and Feat modules', () => {
   // "Oracle" is also a Charm name; it is denied only in the Mogul copy review.
   const pattern = namesPattern(['oracle']);
-  const NEW_MODULES = ['supplies', 'expeditions', 'gear', 'pets'];
+  const NEW_MODULES = ['supplies', 'expeditions', 'gear', 'pets', 'forge', 'feats'];
 
   it('scans the new source files, and finds nothing in them', () => {
     const sources = productionSources();
@@ -25,7 +27,7 @@ describe('no real names in the expedition, gear, pet, Forge and Feat modules', (
   });
 
   it('finds nothing in the exported content', () => {
-    const content = JSON.stringify([FORMER_OWNERS, REGIONS, UNIQUES, PETS]);
+    const content = JSON.stringify([FORMER_OWNERS, REGIONS, UNIQUES, PETS, RECIPES, FEATS]);
     expect(content.match(pattern)).toBeNull();
   });
 

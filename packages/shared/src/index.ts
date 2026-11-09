@@ -9,6 +9,8 @@ export * from './d2table';
 export * from './economy';
 export * from './expeditions';
 export * from './facts';
+export * from './feats';
+export * from './forge';
 export * from './gear';
 export * from './math';
 export * from './moguls';

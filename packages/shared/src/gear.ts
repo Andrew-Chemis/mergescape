@@ -1,6 +1,16 @@
-import { GEAR_TIER_RULES } from './constants';
+import { AFFIX_RULES, GEAR_SET_BONUS, GEAR_TIER_RULES, GEAR_TIERS } from './constants';
 import type { Affix, GearTier } from './constants';
-import type { GearPiece, GearSlot, PlayerState } from './types';
+import { levelFor } from './d2table';
+import { tidy } from './math';
+import type {
+  BreakdownLine,
+  GearLoadout,
+  GearPiece,
+  GearSlot,
+  PlayerState,
+  PowerContext,
+  Result,
+} from './types';
 
 /**
  * Gear (game-design.md 7.1, Requirement 16.1): the five slots, the tier ladder with Power per piece, the
@@ -287,4 +297,152 @@ export function uniquePiece(definition: UniqueDefinition, id: string): GearPiece
     unique: definition.source,
     ref: definition.id,
   });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Loadout: tiers, the set bonus and equipping (Requirement 16.1 and 16.4)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * True when the player can wear a tier: they have reached its level, or the region that gives it (Silver
+ * from Silverhall at Renown 16, Dragon from The Garbage Collector at Renown 64).
+ */
+export function tierUnlocked(player: Pick<PlayerState, 'xp' | 'renown'>, tier: GearTier): boolean {
+  const rules = GEAR_TIER_RULES[tier];
+  return (
+    levelFor(player.xp) >= rules.unlockLevel ||
+    (rules.unlockRenown !== null && player.renown >= rules.unlockRenown)
+  );
+}
+
+/**
+ * The full-set bonus of a set of pieces: +0.25 when all five slots are filled by pieces of one tier (the
+ * tier whose Power each carries, so a Monolith Plate counts as Iron), otherwise 0.
+ */
+export function setBonusFor(pieces: readonly GearPiece[]): number {
+  const tiers = new Set(pieces.map((piece) => piece.tier));
+  const slots = new Set(pieces.map((piece) => piece.slot));
+  const full = GEAR_SLOTS.every((slot) => slots.has(slot));
+  return full && tiers.size === 1 && !tiers.has(undefined) ? GEAR_SET_BONUS : 0;
+}
+
+/** A loadout for these pieces, with the set bonus worked out; `capeColor` is kept when given. */
+export function loadoutOf(pieces: readonly GearPiece[], capeColor?: string): GearLoadout {
+  const loadout: GearLoadout = { pieces, setBonus: setBonusFor(pieces) };
+  if (capeColor !== undefined) {
+    loadout.capeColor = capeColor;
+  }
+  return loadout;
+}
+
+/** The highest tier the character looks like, for the sprite (a Monolith Plate looks like Dragon). */
+export function highestEquippedTier(player: Pick<PlayerState, 'gear'>): GearTier | null {
+  let best = -1;
+  for (const piece of player.gear.pieces) {
+    const tier = piece.look ?? piece.tier;
+    best = tier === undefined ? best : Math.max(best, GEAR_TIERS.indexOf(tier));
+  }
+  return GEAR_TIERS[best] ?? null;
+}
+
+export type EquipError = 'not_owned' | 'already_equipped' | 'pet_slot' | 'tier_locked';
+
+/**
+ * Equip a piece from the inventory into its slot. The piece must be owned and not already worn, must not
+ * be a pet (use `equipPet`), and its tier must be unlocked. A piece already in the slot goes back to the
+ * inventory. The set bonus is recomputed; the Power counts for events scored afterwards only.
+ */
+export function equipGear(
+  player: PlayerState,
+  pieceId: string,
+): Result<{ player: PlayerState }, EquipError> {
+  const inventory = player.inventory ?? [];
+  const piece = inventory.find((entry) => entry.id === pieceId);
+  if (piece === undefined) {
+    return {
+      ok: false,
+      error: player.gear.pieces.some((entry) => entry.id === pieceId)
+        ? 'already_equipped'
+        : 'not_owned',
+    };
+  }
+  if (piece.slot === 'pet') {
+    return { ok: false, error: 'pet_slot' };
+  }
+  if (piece.tier !== undefined && !tierUnlocked(player, piece.tier)) {
+    return { ok: false, error: 'tier_locked' };
+  }
+  const replaced = player.gear.pieces.find((entry) => entry.slot === piece.slot);
+  const worn = [...player.gear.pieces.filter((entry) => entry.slot !== piece.slot), piece];
+  const kept = inventory.filter((entry) => entry.id !== pieceId);
+  return {
+    ok: true,
+    player: {
+      ...player,
+      gear: loadoutOf(worn, player.gear.capeColor),
+      inventory: replaced === undefined ? kept : [...kept, replaced],
+    },
+  };
+}
+
+/** Take the piece in a slot off and put it back in the inventory (a pet simply leaves the slot). */
+export function unequipGear(
+  player: PlayerState,
+  slot: GearSlot,
+): Result<{ player: PlayerState }, 'nothing_equipped'> {
+  const piece = player.gear.pieces.find((entry) => entry.slot === slot);
+  if (piece === undefined) {
+    return { ok: false, error: 'nothing_equipped' };
+  }
+  const worn = player.gear.pieces.filter((entry) => entry.slot !== slot);
+  return {
+    ok: true,
+    player: {
+      ...player,
+      gear: loadoutOf(worn, player.gear.capeColor),
+      inventory: slot === 'pet' ? player.inventory : [...(player.inventory ?? []), piece],
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Power (Requirement 4.5)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The gear terms of Power as Combat Log lines. "Gear" is the unconditional line: every equipped piece plus
+ * the set bonus. With an event context, Keen pieces add +0.1 each on a review and Stout pieces +0.1 each on
+ * a merge, as lines of their own. Terms that are zero are omitted.
+ */
+export function gearPowerLines(player: PlayerState, ctx?: PowerContext): BreakdownLine[] {
+  const base = tidy(
+    player.gear.pieces.reduce((sum, piece) => sum + piece.power, 0) + player.gear.setBonus,
+  );
+  const lines: BreakdownLine[] = [];
+  if (base !== 0) {
+    lines.push({ label: 'Gear', value: base, kind: 'power' });
+  }
+  if (ctx !== undefined) {
+    const conditional: [Affix, string, string, boolean, number][] = [
+      ['keen', 'Keen', 'review', ctx.event.kind === 'review_submitted', AFFIX_RULES.keenPower],
+      ['stout', 'Stout', 'merge', ctx.event.kind === 'pr_merged', AFFIX_RULES.stoutPower],
+    ];
+    for (const [affix, name, when, applies, power] of conditional) {
+      const count = applies ? affixCount(player, affix) : 0;
+      if (count > 0) {
+        const label = count > 1 ? `${name} x${count}` : name;
+        lines.push({
+          label: `Gear: ${label} (${when})`,
+          value: tidy(power * count),
+          kind: 'power',
+        });
+      }
+    }
+  }
+  return lines;
+}
+
+/** The Power gear contributes to an event (0 with nothing equipped): the sum of `gearPowerLines`. */
+export function gearPower(player: PlayerState, ctx?: PowerContext): number {
+  return tidy(gearPowerLines(player, ctx).reduce((sum, line) => sum + line.value, 0));
 }
