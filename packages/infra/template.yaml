@@ -1,0 +1,5 @@
+# Placeholder. The SAM stack (DynamoDB table, ingest and api functions, Function URLs,
+# CloudFront, EventBridge rollover, budgets) is written in task 5.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Mergescape (placeholder, no resources yet)

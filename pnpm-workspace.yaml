@@ -1,0 +1,18 @@
+packages:
+  - packages/shared
+  - packages/backend
+  - packages/client
+  - packages/infra
+
+# Single source of truth for pinned tool versions. Packages reference these as `catalog:`.
+catalog:
+  '@eslint/js': 10.0.1
+  '@sveltejs/vite-plugin-svelte': 7.3.1
+  eslint: 10.14.0
+  prettier: 3.9.10
+  svelte: 5.57.3
+  svelte-check: 4.7.8
+  typescript: 5.9.3
+  typescript-eslint: 8.72.1
+  vite: 8.3.6
+  vitest: 5.1.0
