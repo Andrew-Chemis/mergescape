@@ -131,13 +131,12 @@
       <section class="panel cta" aria-labelledby="install-heading">
         <h2 id="install-heading">Install Mergescape on your repositories</h2>
         <p>
-          Your character only hears about pull requests in repositories where the GitHub App is
-          installed. Pick the repositories you want counted; you can change that on GitHub at any
-          time.
+          Your character only hears about the repositories you send it to. Pick the ones you want
+          counted; you can change your mind on GitHub at any time.
         </p>
         <p class="dim">
-          The App is read-only: pull request metadata and nothing else. It cannot comment, merge or
-          push.
+          It only listens: it reads the facts of your work, such as counts and times, and nothing
+          else. It cannot comment, merge or push.
         </p>
         <div class="row actions">
           <a class="btn primary" href={installUrl()} target="_blank" rel="noopener noreferrer">

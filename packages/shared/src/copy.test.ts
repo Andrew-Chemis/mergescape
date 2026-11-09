@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { CHARMS } from './charms';
 import { FORMER_OWNERS, REGIONS } from './expeditions';
 import { FEATS } from './feats';
 import { RECIPES } from './forge';
 import { UNIQUES } from './gear';
 import { PETS } from './pets';
+import { PLEDGES } from './pledges';
 import { namesPattern, productionSources } from './test-sources';
 
 /**
  * Copy review for the depth layers (Requirements 7.5 and 16.3): no real person, company or brand name in
- * the code or the content of expeditions, gear, pets, the Forge or Feats, and the former owners of
+ * the code or the content of expeditions, gear, pets, the Forge or Feats, in the Charm and Pledge text
+ * (task 24 added three Charms and two Pledges), and the former owners of
  * Reclaimed gear are invented. The Mogul copy has its own review in moguls.test.ts, which also scans
  * every production source file; this one names the new modules and scans their exported content.
  */
@@ -27,7 +30,16 @@ describe('no real names in the expedition, gear, pet, Forge and Feat modules', (
   });
 
   it('finds nothing in the exported content', () => {
-    const content = JSON.stringify([FORMER_OWNERS, REGIONS, UNIQUES, PETS, RECIPES, FEATS]);
+    const content = JSON.stringify([
+      FORMER_OWNERS,
+      REGIONS,
+      UNIQUES,
+      PETS,
+      RECIPES,
+      FEATS,
+      CHARMS.map((charm) => [charm.id, charm.name, charm.description, charm.conditionLabel]),
+      PLEDGES.map((pledge) => [pledge.id, pledge.name, pledge.description]),
+    ]);
     expect(content.match(pattern)).toBeNull();
   });
 

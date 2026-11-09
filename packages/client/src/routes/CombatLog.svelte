@@ -40,8 +40,8 @@
       <h2 id="empty-heading">Nothing logged yet</h2>
       <p>
         Every XP grant becomes one row here, with the Points × Power × Zone math behind it. Merge or
-        review a pull request in a repository where the App is installed and the first row appears
-        within seconds.
+        review a pull request anywhere you have set Mergescape up, and the first row appears within
+        seconds.
       </p>
     </section>
   {:else}
