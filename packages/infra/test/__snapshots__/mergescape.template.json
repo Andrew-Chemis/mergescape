@@ -1,0 +1,514 @@
+{
+  "Description": "Mergescape: webhook ingest and API Lambdas behind Function URLs, one provisioned DynamoDB table, a CloudFront distribution for badges, a weekly rollover schedule and cost budgets.",
+  "Resources": {
+    "TableCD117FA1": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          { "AttributeName": "PK", "AttributeType": "S" },
+          { "AttributeName": "SK", "AttributeType": "S" },
+          { "AttributeName": "GSI1PK", "AttributeType": "S" },
+          { "AttributeName": "GSI1SK", "AttributeType": "S" }
+        ],
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "GSI1",
+            "KeySchema": [
+              { "AttributeName": "GSI1PK", "KeyType": "HASH" },
+              { "AttributeName": "GSI1SK", "KeyType": "RANGE" }
+            ],
+            "Projection": {
+              "NonKeyAttributes": [
+                "login",
+                "level",
+                "xp",
+                "renown",
+                "vocation",
+                "pinned_feats",
+                "old_coin"
+              ],
+              "ProjectionType": "INCLUDE"
+            },
+            "ProvisionedThroughput": { "ReadCapacityUnits": 5, "WriteCapacityUnits": 5 }
+          }
+        ],
+        "KeySchema": [
+          { "AttributeName": "PK", "KeyType": "HASH" },
+          { "AttributeName": "SK", "KeyType": "RANGE" }
+        ],
+        "ProvisionedThroughput": { "ReadCapacityUnits": 5, "WriteCapacityUnits": 5 },
+        "TableName": "mergescape",
+        "TimeToLiveSpecification": { "AttributeName": "ttl", "Enabled": true }
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "IngestLogGroup131E2484": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": { "LogGroupName": "/aws/lambda/mergescape-prod-ingest", "RetentionInDays": 14 },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "IngestFunctionServiceRole55EB4427": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": { "Service": "lambda.amazonaws.com" }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "IngestFunctionServiceRoleDefaultPolicy8EB1E4A7": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Query",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                { "Fn::GetAtt": ["TableCD117FA1", "Arn"] },
+                { "Fn::Join": ["", [{ "Fn::GetAtt": ["TableCD117FA1", "Arn"] }, "/index/GSI1"]] }
+              ],
+              "Sid": "TableAccess"
+            },
+            {
+              "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/mergescape/*",
+              "Sid": "ReadSecrets"
+            },
+            {
+              "Action": "kms:Decrypt",
+              "Condition": {
+                "ForAnyValue:StringEquals": { "kms:ResourceAliases": "alias/aws/ssm" },
+                "StringEquals": { "kms:ViaService": "ssm.us-east-1.amazonaws.com" }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:kms:us-east-1:123456789012:key/*",
+              "Sid": "DecryptSecrets"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "IngestFunctionServiceRoleDefaultPolicy8EB1E4A7",
+        "Roles": [{ "Ref": "IngestFunctionServiceRole55EB4427" }]
+      }
+    },
+    "IngestFunction4B2F2EB2": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "273a4e337cdfafd08a2b7f322fa81e8e85e2981a88f252897a9b94cd1be8beb7.zip"
+        },
+        "Description": "Verifies GitHub webhook signatures, scores events and writes the results.",
+        "Environment": {
+          "Variables": {
+            "TABLE_NAME": { "Ref": "TableCD117FA1" },
+            "SSM_PREFIX": "/mergescape",
+            "PAGES_ORIGIN": "https://octocat.github.io",
+            "CLIENT_BASE_PATH": "/",
+            "STAGE": "prod"
+          }
+        },
+        "FunctionName": "mergescape-prod-ingest",
+        "Handler": "index.handler",
+        "LoggingConfig": { "LogGroup": { "Ref": "IngestLogGroup131E2484" } },
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 10,
+        "Role": { "Fn::GetAtt": ["IngestFunctionServiceRole55EB4427", "Arn"] },
+        "Runtime": "nodejs22.x",
+        "Timeout": 10
+      },
+      "DependsOn": [
+        "IngestFunctionServiceRoleDefaultPolicy8EB1E4A7",
+        "IngestFunctionServiceRole55EB4427"
+      ]
+    },
+    "IngestFunctionFunctionUrlCF9ABC07": {
+      "Type": "AWS::Lambda::Url",
+      "Properties": {
+        "AuthType": "NONE",
+        "TargetFunctionArn": { "Fn::GetAtt": ["IngestFunction4B2F2EB2", "Arn"] }
+      }
+    },
+    "IngestFunctioninvokefunctionurl2A0CFB91": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunctionUrl",
+        "FunctionName": { "Fn::GetAtt": ["IngestFunction4B2F2EB2", "Arn"] },
+        "FunctionUrlAuthType": "NONE",
+        "Principal": "*"
+      }
+    },
+    "IngestFunctioninvokefunction1242C960": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": { "Fn::GetAtt": ["IngestFunction4B2F2EB2", "Arn"] },
+        "InvokedViaFunctionUrl": true,
+        "Principal": "*"
+      }
+    },
+    "ApiLogGroup1DEDFC07": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": { "LogGroupName": "/aws/lambda/mergescape-prod-api", "RetentionInDays": 14 },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "ApiFunctionServiceRole52B9747B": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": { "Service": "lambda.amazonaws.com" }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "ApiFunctionServiceRoleDefaultPolicy20A32B8D": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "dynamodb:BatchWriteItem",
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Query",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                { "Fn::GetAtt": ["TableCD117FA1", "Arn"] },
+                { "Fn::Join": ["", [{ "Fn::GetAtt": ["TableCD117FA1", "Arn"] }, "/index/GSI1"]] }
+              ],
+              "Sid": "TableAccess"
+            },
+            {
+              "Action": "dynamodb:Scan",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": ["", [{ "Fn::GetAtt": ["TableCD117FA1", "Arn"] }, "/index/GSI1"]]
+              },
+              "Sid": "RolloverScan"
+            },
+            {
+              "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/mergescape/*",
+              "Sid": "ReadSecrets"
+            },
+            {
+              "Action": "kms:Decrypt",
+              "Condition": {
+                "ForAnyValue:StringEquals": { "kms:ResourceAliases": "alias/aws/ssm" },
+                "StringEquals": { "kms:ViaService": "ssm.us-east-1.amazonaws.com" }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:kms:us-east-1:123456789012:key/*",
+              "Sid": "DecryptSecrets"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ApiFunctionServiceRoleDefaultPolicy20A32B8D",
+        "Roles": [{ "Ref": "ApiFunctionServiceRole52B9747B" }]
+      }
+    },
+    "ApiFunctionCE271BD4": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "7d3f8357f88572798eb15c1e2dc6cc37e4e5cf4722b9399c1424820ce3e348b9.zip"
+        },
+        "Description": "OAuth callback, JWT-protected game API, badge SVG and the weekly rollover.",
+        "Environment": {
+          "Variables": {
+            "TABLE_NAME": { "Ref": "TableCD117FA1" },
+            "SSM_PREFIX": "/mergescape",
+            "PAGES_ORIGIN": "https://octocat.github.io",
+            "CLIENT_BASE_PATH": "/",
+            "STAGE": "prod"
+          }
+        },
+        "FunctionName": "mergescape-prod-api",
+        "Handler": "index.handler",
+        "LoggingConfig": { "LogGroup": { "Ref": "ApiLogGroup1DEDFC07" } },
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 5,
+        "Role": { "Fn::GetAtt": ["ApiFunctionServiceRole52B9747B", "Arn"] },
+        "Runtime": "nodejs22.x",
+        "Timeout": 60
+      },
+      "DependsOn": ["ApiFunctionServiceRoleDefaultPolicy20A32B8D", "ApiFunctionServiceRole52B9747B"]
+    },
+    "ApiFunctionFunctionUrl73AD62DC": {
+      "Type": "AWS::Lambda::Url",
+      "Properties": {
+        "AuthType": "NONE",
+        "Cors": {
+          "AllowHeaders": ["authorization", "content-type"],
+          "AllowMethods": ["GET", "POST"],
+          "AllowOrigins": ["https://octocat.github.io"],
+          "MaxAge": 600
+        },
+        "TargetFunctionArn": { "Fn::GetAtt": ["ApiFunctionCE271BD4", "Arn"] }
+      }
+    },
+    "ApiFunctioninvokefunctionurl0B8A0798": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunctionUrl",
+        "FunctionName": { "Fn::GetAtt": ["ApiFunctionCE271BD4", "Arn"] },
+        "FunctionUrlAuthType": "NONE",
+        "Principal": "*"
+      }
+    },
+    "ApiFunctioninvokefunctionB5A175E4": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": { "Fn::GetAtt": ["ApiFunctionCE271BD4", "Arn"] },
+        "InvokedViaFunctionUrl": true,
+        "Principal": "*"
+      }
+    },
+    "RolloverRule9D50DD46": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Description": "Monday 00:05 UTC weekly run rollover",
+        "ScheduleExpression": "cron(5 0 ? * MON *)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": { "Fn::GetAtt": ["ApiFunctionCE271BD4", "Arn"] },
+            "Id": "Target0",
+            "Input": "{\"action\":\"rollover\"}"
+          }
+        ]
+      }
+    },
+    "RolloverRuleAllowEventRuleMergescapeApiFunction07E34D07E61417D8": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": { "Fn::GetAtt": ["ApiFunctionCE271BD4", "Arn"] },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": { "Fn::GetAtt": ["RolloverRule9D50DD46", "Arn"] }
+      }
+    },
+    "BadgeCachePolicy18AAA6A1": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Comment": "Badges are cached for 6 hours unless the origin says otherwise.",
+          "DefaultTTL": 21600,
+          "MaxTTL": 86400,
+          "MinTTL": 0,
+          "Name": "mergescape-us-east-1-badge",
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": { "CookieBehavior": "none" },
+            "EnableAcceptEncodingBrotli": true,
+            "EnableAcceptEncodingGzip": true,
+            "HeadersConfig": { "HeaderBehavior": "none" },
+            "QueryStringsConfig": { "QueryStringBehavior": "none" }
+          }
+        }
+      }
+    },
+    "BadgeNotFoundFunction931C4F17": {
+      "Type": "AWS::CloudFront::Function",
+      "Properties": {
+        "AutoPublish": true,
+        "FunctionCode": "function handler() {\n  return { statusCode: 404, statusDescription: 'Not Found' };\n}\n",
+        "FunctionConfig": {
+          "Comment": "Return 404 for every path that is not a badge.",
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "Name": "mergescape-us-east-1-not-found"
+      }
+    },
+    "BadgeDistribution6044C4D4": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "CacheBehaviors": [
+            {
+              "AllowedMethods": ["GET", "HEAD"],
+              "CachePolicyId": { "Ref": "BadgeCachePolicy18AAA6A1" },
+              "CachedMethods": ["GET", "HEAD"],
+              "Compress": true,
+              "PathPattern": "/badge/*",
+              "TargetOriginId": "MergescapeBadgeDistributionOrigin1B4818054",
+              "ViewerProtocolPolicy": "redirect-to-https"
+            }
+          ],
+          "Comment": "Mergescape prod badges",
+          "DefaultCacheBehavior": {
+            "AllowedMethods": ["GET", "HEAD"],
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "CachedMethods": ["GET", "HEAD"],
+            "Compress": false,
+            "FunctionAssociations": [
+              {
+                "EventType": "viewer-request",
+                "FunctionARN": { "Fn::GetAtt": ["BadgeNotFoundFunction931C4F17", "FunctionARN"] }
+              }
+            ],
+            "TargetOriginId": "MergescapeBadgeDistributionOrigin1B4818054",
+            "ViewerProtocolPolicy": "https-only"
+          },
+          "Enabled": true,
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Origins": [
+            {
+              "CustomOriginConfig": {
+                "OriginProtocolPolicy": "https-only",
+                "OriginSSLProtocols": ["TLSv1.2"]
+              },
+              "DomainName": {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      { "Fn::GetAtt": ["ApiFunctionFunctionUrl73AD62DC", "FunctionUrl"] }
+                    ]
+                  }
+                ]
+              },
+              "Id": "MergescapeBadgeDistributionOrigin1B4818054"
+            }
+          ],
+          "PriceClass": "PriceClass_100"
+        }
+      }
+    },
+    "Budget1Usd": {
+      "Type": "AWS::Budgets::Budget",
+      "Properties": {
+        "Budget": {
+          "BudgetLimit": { "Amount": 1, "Unit": "USD" },
+          "BudgetName": "mergescape-prod-monthly-1-usd",
+          "BudgetType": "COST",
+          "TimeUnit": "MONTHLY"
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {
+              "ComparisonOperator": "GREATER_THAN",
+              "NotificationType": "ACTUAL",
+              "Threshold": 100,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [{ "Address": "octocat@example.org", "SubscriptionType": "EMAIL" }]
+          }
+        ]
+      }
+    },
+    "Budget10Usd": {
+      "Type": "AWS::Budgets::Budget",
+      "Properties": {
+        "Budget": {
+          "BudgetLimit": { "Amount": 10, "Unit": "USD" },
+          "BudgetName": "mergescape-prod-monthly-10-usd",
+          "BudgetType": "COST",
+          "TimeUnit": "MONTHLY"
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {
+              "ComparisonOperator": "GREATER_THAN",
+              "NotificationType": "ACTUAL",
+              "Threshold": 100,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [{ "Address": "octocat@example.org", "SubscriptionType": "EMAIL" }]
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "TableName": { "Description": "DynamoDB table name.", "Value": { "Ref": "TableCD117FA1" } },
+    "IngestUrl": {
+      "Description": "Function URL of the ingest Lambda. Set it as the GitHub App webhook URL.",
+      "Value": { "Fn::GetAtt": ["IngestFunctionFunctionUrlCF9ABC07", "FunctionUrl"] }
+    },
+    "ApiUrl": {
+      "Description": "Function URL of the api Lambda. Used as VITE_API_ORIGIN for the client build.",
+      "Value": { "Fn::GetAtt": ["ApiFunctionFunctionUrl73AD62DC", "FunctionUrl"] }
+    },
+    "BadgeDomain": {
+      "Description": "CloudFront domain that serves /badge/{login}.svg.",
+      "Value": { "Fn::GetAtt": ["BadgeDistribution6044C4D4", "DomainName"] }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Type": "AWS::SSM::Parameter::Value<String>",
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              { "Fn::Contains": [["1", "2", "3", "4", "5"], { "Ref": "BootstrapVersion" }] }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

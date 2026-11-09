@@ -1,10 +1,11 @@
-# Checkov settings for template.yaml (task 19). Run from the repository root:
+# Checkov settings for the template that `cdk synth` writes (task 19, moved to CDK in task 25). From packages/infra:
 #
-#   checkov --config-file packages/infra/.checkov.yaml -f packages/infra/template.yaml
+#   pnpm exec cdk synth --quiet
+#   checkov --config-file .checkov.yaml -f dist/cdk.out/Mergescape.template.json
 #
-# Every check skipped below is a known gap that costs money or does not apply to a public Function URL
-# stack at personal scale. A new failure is therefore a real finding. The same list is in
-# packages/infra/README.md ("Things to know").
+# (`pnpm --filter @mergescape/infra validate` does both.) Every check skipped below is a known gap that costs
+# money or does not apply to a public Function URL stack at personal scale, so a new failure is a real finding.
+# The same list is in packages/infra/README.md ("Things to know").
 framework:
   - cloudformation
 compact: true
@@ -24,6 +25,10 @@ skip-check:
   - CKV_AWS_116
   # VPC: both functions call only public AWS endpoints and GitHub; a VPC would need a NAT gateway.
   - CKV_AWS_117
+  # Function URLs with auth NONE: the design needs two public endpoints. ingest is protected by the HMAC
+  # signature of every GitHub delivery, api by its JWT and an Origin check, and reserved concurrency (10 and
+  # 5) bounds what either can cost. IAM-authenticated URLs would stop GitHub and the browser from calling.
+  - CKV_AWS_258
   # CloudFront access logs need a bucket and would record which logins' badges are requested.
   - CKV_AWS_86
   # The default CloudFront certificate cannot set a TLS floor. A custom domain (v2) can.

@@ -191,9 +191,18 @@ catalogs:
     '@vitest/coverage-v8':
       specifier: 5.1.0
       version: 5.1.0
+    aws-cdk:
+      specifier: 2.1142.0
+      version: 2.1142.0
+    aws-cdk-lib:
+      specifier: 2.270.0
+      version: 2.270.0
     axe-core:
       specifier: 4.14.0
       version: 4.14.0
+    constructs:
+      specifier: 10.8.1
+      version: 10.8.1
     esbuild:
       specifier: 0.28.2
       version: 0.28.2
@@ -221,6 +230,9 @@ catalogs:
     svelte-check:
       specifier: 4.7.8
       version: 4.7.8
+    tsx:
+      specifier: 4.23.5
+      version: 4.23.5
     typescript:
       specifier: 5.9.3
       version: 5.9.3
@@ -233,9 +245,6 @@ catalogs:
     vitest:
       specifier: 5.1.0
       version: 5.1.0
-    yaml:
-      specifier: 2.9.1
-      version: 2.9.1
 
 importers:
 
@@ -270,10 +279,10 @@ importers:
         version: 8.72.1(eslint@10.14.0)(typescript@5.9.3)
       vite:
         specifier: 'catalog:'
-        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
-        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   packages/backend:
     dependencies:
@@ -304,7 +313,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: 'catalog:'
-        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   packages/client:
     dependencies:
@@ -314,10 +323,10 @@ importers:
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: 'catalog:'
-        version: 7.3.1(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+        version: 7.3.1(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
       '@testing-library/svelte':
         specifier: 'catalog:'
-        version: 5.4.2(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))(vitest@5.1.0)
+        version: 5.4.2(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))(vitest@5.1.0)
       axe-core:
         specifier: 'catalog:'
         version: 4.14.0
@@ -335,31 +344,44 @@ importers:
         version: 5.9.3
       vite:
         specifier: 'catalog:'
-        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
-        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   packages/infra:
+    dependencies:
+      aws-cdk-lib:
+        specifier: 'catalog:'
+        version: 2.270.0(constructs@10.8.1)
+      constructs:
+        specifier: 'catalog:'
+        version: 10.8.1
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5
+      aws-cdk:
+        specifier: 'catalog:'
+        version: 2.1142.0
       esbuild:
         specifier: 'catalog:'
         version: 0.28.2
+      prettier:
+        specifier: 'catalog:'
+        version: 3.9.10
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.5
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
       vite:
         specifier: 'catalog:'
-        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+        version: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
-        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
-      yaml:
-        specifier: 'catalog:'
-        version: 2.9.1
+        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   packages/shared:
     devDependencies:
@@ -371,7 +393,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: 'catalog:'
-        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+        version: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
 packages:
 
@@ -391,6 +413,19 @@ packages:
 
   '@asamuzakjp/nwsapi@2.3.9':
     resolution: {integrity: sha512-n8GuYSrI9bF7FFZ/SjhwevlHc8xaVlb/7HmHelnc/PZXBD2ZR49NnN9sMMuDdEGPeeRQ5d0hqlSlEpgCX3Wl0Q==}
+
+  '@aws-cdk/asset-awscli-v1@2.2.292':
+    resolution: {integrity: sha512-d4aMFsAFj19FtxVyw8IzlUKv5Zu4sIvgnEjI2IU6IWBJgVbJ4aFnadANqYa+6MwB1CQbGOg0jh8WE77M+Nb/9A==}
+
+  '@aws-cdk/asset-node-proxy-agent-v6@2.1.3':
+    resolution: {integrity: sha512-98We1QWfin9vtuuQtNFhIIAEWb8CreyYTAP0Vn8HqSBoNiFJM9nZgifJeQawT9Wq0NX1HCNFlxCyTccIrK1PSA==}
+
+  '@aws-cdk/cloud-assembly-schema@54.26.0':
+    resolution: {integrity: sha512-zYI3XhQ/bpuSXuPaF77f7u2q6rZBPwdrPh8a0v+e/B3IxbRQAtQv0fmacQ8uYh9RPVuIVnExE6IsFJBSALH7BA==}
+    engines: {node: '>= 18.0.0'}
+    bundledDependencies:
+      - jsonschema
+      - semver
 
   '@aws-sdk/client-dynamodb@3.1164.0':
     resolution: {integrity: sha512-jrX0BtmtyRelTW/yAGgFpXvDj8BioL80njIGVfOsMsCrSKi+Ai0QZ45AqWgA0h1r7uzqfpWFhNUQZO77sOoyzg==}
@@ -1126,6 +1161,30 @@ packages:
   ast-v8-to-istanbul@1.0.7:
     resolution: {integrity: sha512-kFL68AG6ajd8fg248zwM9GQrUWEp79gsmjum34OEXjs4yHuUMZfYKwOLW9GMmB4oNvVrj+EAGxsP7ye2UR9UlA==}
 
+  aws-cdk-lib@2.270.0:
+    resolution: {integrity: sha512-xoO9FEqcVTTK39N6n+LxvAAsS5WZSGX/p+uv3l2W+LXDEIWctq6VECdluuFwdXnbyf4v4eIxo2btrkUepnEy0Q==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      constructs: ^10.5.0
+    bundledDependencies:
+      - '@aws/cloudformation-validate'
+      - '@balena/dockerignore'
+      - '@aws-cdk/cloud-assembly-api'
+      - case
+      - fs-extra
+      - ignore
+      - jsonschema
+      - minimatch
+      - punycode
+      - semver
+      - yaml
+      - mime-types
+
+  aws-cdk@2.1142.0:
+    resolution: {integrity: sha512-gNOeii+avTJmOwfR8tVgraZ5A2EBC/529EXg7e+yBp8Zl608dAv5CtFRoJt8QoKiruiCwYr4HF6ClNAse/NkSg==}
+    engines: {node: '>= 18.0.0'}
+    hasBin: true
+
   axe-core@4.14.0:
     resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
     engines: {node: '>=4'}
@@ -1162,6 +1221,9 @@ packages:
   clsx@2.1.1:
     resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
     engines: {node: '>=6'}
+
+  constructs@10.8.1:
+    resolution: {integrity: sha512-98yGXYyhePqPYh3cYu8nzBERmAhC0DONe3UD03okK0nehZ7hYP4wgZuf02a04+uOWxnTJ5Rpp5m0GRNpwyLGGA==}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -1780,6 +1842,11 @@ packages:
   tslib@2.9.1:
     resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
 
+  tsx@4.23.5:
+    resolution: {integrity: sha512-rw55FUaqOoI7RvlQwLbhO4nSDApnQ4/CykPuiQ/EPvtrX3WA9Ig55jIt9VvbBJbzJuj12ueRu4PMZ2SxPVbihg==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
+
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
     engines: {node: '>= 0.8.0'}
@@ -1977,6 +2044,12 @@ snapshots:
   '@asamuzakjp/generational-cache@1.0.1': {}
 
   '@asamuzakjp/nwsapi@2.3.9': {}
+
+  '@aws-cdk/asset-awscli-v1@2.2.292': {}
+
+  '@aws-cdk/asset-node-proxy-agent-v6@2.1.3': {}
+
+  '@aws-cdk/cloud-assembly-schema@54.26.0': {}
 
   '@aws-sdk/client-dynamodb@3.1164.0':
     dependencies:
@@ -2478,14 +2551,14 @@ snapshots:
 
   '@sveltejs/load-config@0.2.3': {}
 
-  '@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))':
+  '@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))':
     dependencies:
       deepmerge: 4.3.1
       magic-string: 1.4.5
       obug: 2.2.1
       svelte: 5.57.3(@typescript-eslint/types@8.72.1)
-      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
-      vitefu: 1.1.3(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
+      vitefu: 1.1.3(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -2502,14 +2575,14 @@ snapshots:
     dependencies:
       svelte: 5.57.3(@typescript-eslint/types@8.72.1)
 
-  '@testing-library/svelte@5.4.2(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))(vitest@5.1.0)':
+  '@testing-library/svelte@5.4.2(svelte@5.57.3(@typescript-eslint/types@8.72.1))(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))(vitest@5.1.0)':
     dependencies:
       '@testing-library/dom': 10.4.2
       '@testing-library/svelte-core': 1.1.3(svelte@5.57.3(@typescript-eslint/types@8.72.1))
       svelte: 5.57.3(@typescript-eslint/types@8.72.1)
     optionalDependencies:
-      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
-      vitest: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
+      vitest: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   '@types/aria-query@5.0.4': {}
 
@@ -2633,7 +2706,7 @@ snapshots:
       obug: 3.0.0
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+      vitest: 5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
 
   '@vitest/istanbul-lib-coverage@2.1.0': {}
 
@@ -2641,14 +2714,14 @@ snapshots:
     dependencies:
       '@vitest/istanbul-lib-coverage': 2.1.0
 
-  '@vitest/mocker@5.1.0(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))':
+  '@vitest/mocker@5.1.0(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.1.0
       estree-walker: 3.0.3
       magic-string: 1.4.5
     optionalDependencies:
-      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
 
   '@vitest/spy@5.1.0': {}
 
@@ -2685,6 +2758,15 @@ snapshots:
       estree-walker: 3.0.3
       js-tokens: 10.0.0
 
+  aws-cdk-lib@2.270.0(constructs@10.8.1):
+    dependencies:
+      '@aws-cdk/asset-awscli-v1': 2.2.292
+      '@aws-cdk/asset-node-proxy-agent-v6': 2.1.3
+      '@aws-cdk/cloud-assembly-schema': 54.26.0
+      constructs: 10.8.1
+
+  aws-cdk@2.1142.0: {}
+
   axe-core@4.14.0: {}
 
   axobject-query@4.1.0: {}
@@ -2716,6 +2798,8 @@ snapshots:
       readdirp: 4.1.2
 
   clsx@2.1.1: {}
+
+  constructs@10.8.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
@@ -3338,6 +3422,12 @@ snapshots:
 
   tslib@2.9.1: {}
 
+  tsx@4.23.5:
+    dependencies:
+      esbuild: 0.28.2
+    optionalDependencies:
+      fsevents: 2.3.3
+
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
@@ -3365,7 +3455,7 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1):
+  vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -3376,16 +3466,17 @@ snapshots:
       '@types/node': 22.20.5
       esbuild: 0.28.2
       fsevents: 2.3.3
+      tsx: 4.23.5
       yaml: 2.9.1
 
-  vitefu@1.1.3(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)):
+  vitefu@1.1.3(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)):
     optionalDependencies:
-      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
 
-  vitest@5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)):
+  vitest@5.1.0(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@28.1.0)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.1.0(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1))
+      '@vitest/mocker': 5.1.0(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -3396,7 +3487,7 @@ snapshots:
       tinybench: 6.2.3
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
-      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(yaml@2.9.1)
+      vite: 8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.5)(yaml@2.9.1)
       why-is-node-running: 3.2.1
     optionalDependencies:
       '@types/node': 22.20.5
@@ -3435,7 +3526,8 @@ snapshots:
 
   yaml@1.10.3: {}
 
-  yaml@2.9.1: {}
+  yaml@2.9.1:
+    optional: true
 
   yocto-queue@0.1.0: {}
 
