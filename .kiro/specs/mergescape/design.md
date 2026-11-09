@@ -76,15 +76,18 @@ Deliberately **not** requested: Contents, Issues, Discussions, Members, write an
 
 Nothing is credited for repos without the App. If a teammate installs it on a shared repo, your reviews there count once you sign in; theirs never show on your profile.
 
+**PR metadata vs. player credit.** `PR#` items are shared facts, not credit. They are written when the PR's author, merger or the acting reviewer is a linked player, and they record every *human* review on that PR as `(reviewer_id, state)` even when the reviewer has never signed in, because the party bonus, solo-kill and Riposte rules depend on knowing a review happened. What is dropped for unlinked actors is the scoring: no `EVT#` row, no XP. Bot reviews are never recorded.
+
 ### 3.4 Stored fields (complete list)
 
 ```
 PR:      installation_id, repo_id, repo_private(bool), pr_number, author_id,
          opened_at, merged_at|closed_at, merged(bool), merged_by_id,
-         additions, deletions, changed_files, commits, review_round_count,
-         reviewer_ids[], draft(bool), base_ref_is_default(bool)
-Review:  pr_key, reviewer_id, state(APPROVED|CHANGES_REQUESTED|COMMENTED),
+         additions, deletions, changed_files, commits, review_round_count, sync_count,
+         draft(bool), base_ref_is_default(bool)
+Review:  pr_key, reviewer_id, reviewer_is_bot(bool), state(APPROVED|CHANGES_REQUESTED|COMMENTED),
          submitted_at, inline_comment_count
+(Per-reviewer caps are derived from the review records, not stored separately.)
 ```
 
 No titles, bodies, file paths, or comment text. Repo *names* are shown to the owner only, fetched live from GitHub when the owner is logged in (never persisted for private repos). The numeric `repo_id` is enough for the game.
@@ -144,9 +147,9 @@ Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `B
 | Situation | Points | Power | Level | XP |
 |---|---|---|---|---|
 | First merged PR, 120 LoC, solo | (90+71)×0.5 = 80 | 1 | 1 | 80 × 1 × 3.03 = **242** (48% to level 2) |
-| Merged 300 LoC PR, approved by teammate, lvl 23 | 90+112+30 = 232 | 3.5 | 23 | 232×3.5×162.6 = **132,000** |
-| Approve a PR, lvl 23 | 40 | 3.5 | 23 | **22,760** |
-| Approve + 6 inline comments, lvl 60 | 40 + 30 | 5 | 60 | 70×5×721 = **252,000** (next level needs 11M) |
+| Merged 300 LoC PR, approved by teammate, lvl 23 | 90+112+30 = 232 | 3.5 | 23 | 232×3.5×161.56 = **131,187** |
+| Approve a PR, lvl 23 | 40 | 3.5 | 23 | 40×3.5×161.56 = **22,618** |
+| Approve + 6 inline comments, lvl 60 | 40 + 30 | 5 | 60 | 70×5×718.67 = **251,529** (next level needs 11M) |
 
 ---
 

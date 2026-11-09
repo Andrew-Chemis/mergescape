@@ -38,7 +38,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 2. WHEN the OAuth code is exchanged THEN the api service SHALL fetch the user's numeric id and login and SHALL discard the access token without persisting it.
 3. THE api service SHALL issue an HS256 JWT with 7-day expiry carrying `sub` (numeric GitHub id), `iss` and `aud`, and SHALL verify all three on every authenticated request.
 4. WHEN a player signs in THEN the api service SHALL refresh the player's accessible installation ids via `GET /user/installations`.
-5. WHEN a scoring event's actor id does not match any signed-in player THEN the ingest service SHALL drop the event before any database write and SHALL increment a `dropped_unlinked` metric.
+5. WHEN a scoring event's actor id does not match any signed-in player THEN the ingest service SHALL write no `EVT#`, profile or dedupe-credit item and SHALL increment a `dropped_unlinked` metric; it MAY still upsert the shared `PR#` item (PR facts and the human review record) when the PR's author, merger or the acting reviewer is a linked player, since the party bonus, solo-kill and Riposte rules depend on those records.
 6. WHEN a scoring event's installation is not in the actor's accessible installation list THEN the ingest service SHALL drop the event.
 7. IF the actor's `type` is `Bot` or the login ends with `[bot]` THEN the ingest service SHALL award no points to that actor, while still allowing a human merger or reviewer of the same PR to be credited.
 
@@ -48,8 +48,8 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 #### Acceptance Criteria
 
-1. THE system SHALL persist for a PR only: installation_id, repo_id, repo_private, pr_number, author_id, opened_at, merged_at or closed_at, merged, merged_by_id, additions, deletions, changed_files, commits, review_round_count, reviewer_ids, draft, base_ref_is_default.
-2. THE system SHALL persist for a review only: pr_key, reviewer_id, state, submitted_at, inline_comment_count.
+1. THE system SHALL persist for a PR only: installation_id, repo_id, repo_private, pr_number, author_id, opened_at, merged_at or closed_at, merged, merged_by_id, additions, deletions, changed_files, commits, review_round_count, sync_count, draft, base_ref_is_default.
+2. THE system SHALL persist for a review only: pr_key, reviewer_id, reviewer_is_bot, state, submitted_at, inline_comment_count; per-reviewer caps SHALL be derived from these records rather than stored.
 3. THE system SHALL NOT persist PR titles, bodies, comment text, file paths, diffs, or names of private repositories.
 4. WHEN the owner views a private repository's events THEN the client SHALL fetch the display name live from GitHub and SHALL NOT cache it server-side.
 5. THE test suite SHALL include a schema test that fails when any attribute outside the allowed set is written to a `PR#` or `EVT#` item.
@@ -170,7 +170,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 #### Acceptance Criteria
 
 1. THE infrastructure SHALL be one SAM template containing: `ingest` Lambda with Function URL, `api` Lambda with Function URL, CloudFront distribution for the badge path, one DynamoDB table in provisioned mode at 5 RCU / 5 WCU with TTL and one GSI on login, SSM SecureString parameters for the App private key, webhook secret, OAuth client secret and JWT key, an EventBridge rule at Monday 00:05 UTC invoking rollover, log groups with 14-day retention, and AWS Budget alarms at $1 and $10.
-2. THE `ingest` role SHALL be limited to PutItem, GetItem, UpdateItem and Query on the table plus SSM GetParameter and CloudWatch Logs; THE `api` role SHALL additionally have DeleteItem.
+2. THE `ingest` role SHALL be limited to PutItem, GetItem, UpdateItem and Query on the table plus SSM GetParameter and CloudWatch Logs; THE `api` role SHALL additionally have DeleteItem, BatchWriteItem, and Scan restricted to the GSI1 index ARN (for the weekly rollover).
 3. THE Function URL for `api` SHALL allow CORS only from the GitHub Pages origin and the handler SHALL re-check `Origin`.
 4. THE Lambdas SHALL have reserved concurrency of 10 (`ingest`) and 5 (`api`).
 5. THE JWT key SHALL be read from SSM at cold start and re-read every 15 minutes so rotation needs no redeploy.

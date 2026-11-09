@@ -11,7 +11,7 @@ Conventions for the implementer:
 
 ---
 
-- [ ] 1. **[v0]** Bootstrap the monorepo
+- [x] 1. **[v0]** Bootstrap the monorepo
   - Create `pnpm-workspace.yaml` with `packages/shared`, `packages/backend`, `packages/client`, `packages/infra`.
   - Root scripts: `lint` (eslint + prettier check), `test` (vitest workspace), `build` (all packages), `typecheck`.
   - TypeScript 5.x strict base config; Node 22 target for backend; ES2022 for client.
@@ -20,14 +20,14 @@ Conventions for the implementer:
   - _Requirements: 18.1, 18.2, 18.4_
   - Verify: `pnpm install && pnpm lint && pnpm test && pnpm build` succeed on a clean clone; CI is green.
 
-- [ ] 2. **[v0]** Shared package: tables, types, constants
+- [x] 2. **[v0]** Shared package: tables, types, constants
   - `d2table.ts`: the exact table from research.md §2 and `levelFor(xp)` (binary search), `xpToNext(xp)`, `progressWithinLevel(xp)`.
   - `constants.ts`: every number in design.md §4.2, §6.1, §6.5 (points, caps, zone exponent 1.6, shop prices, rarity weights, act percentages, gold payouts, interest rule).
   - `types.ts`: `GameEvent` (normalised from webhooks), `PlayerState`, `PRState`, `ScoreResult` with `breakdown: {label: string; value: number; kind: 'points'|'power'|'zone'|'xp'}[]`, `Skill`, `Charm`, `Pledge`, `Voucher`, `Mogul`, `RunState`, `ShopStock`.
   - _Requirements: 5.1, 5.2, 4.8_
   - Verify: tests for the spot checks in research.md §2; `levelFor(3520485254) === 99`; `levelFor(3520485253) === 98`; `levelFor(0) === 1`.
 
-- [ ] 3. **[v0]** Shared package: scorer core
+- [x] 3. **[v0]** Shared package: scorer core
   - `score.ts`: pure `score(event, player, pr, now): ScoreResult` implementing Requirement 4.2–4.9 with Power fixed at 1 and no Charms/Pledges/Moguls yet (hooks in place).
   - Implement caps with per-PR and per-day counters carried on `PlayerState`/`PRState` (opens today, reviews per PR per reviewer, inline comments per PR per reviewer, daily first-event flag, streak weeks).
   - Size points: `Math.min(120, Math.round(40 * Math.log2(1 + (adds + dels) / 50)))`.
@@ -36,16 +36,16 @@ Conventions for the implementer:
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 4.9, 2.7_
   - Verify: one test per table row and per cap boundary; design.md §4.5 worked examples reproduce exactly; 100% branch coverage on `score.ts`.
 
-- [ ] 4. **[v0]** Shared package: webhook normaliser
+- [x] 4. **[v0]** Shared package: webhook normaliser
   - `normalize.ts`: `(eventName, payload) → GameEvent[]` for `pull_request` (opened, ready_for_review, closed with merged true/false, synchronize counted only), `pull_request_review` (submitted, by state), `pull_request_review_comment` (created), `installation`, `installation_repositories`.
   - Extract only the fields listed in research.md §5. Strip everything else at this boundary so nothing downstream can leak.
   - Mark actors as bot per Requirement 2.7.
   - _Requirements: 1.1, 2.7, 3.1, 3.2, 3.3_
   - Verify: recorded fixture payloads for each event type under `packages/shared/fixtures/webhooks/` (sanitised: fake ids, no real repo names) produce the expected `GameEvent[]`; a test asserts the normalised object has no property outside the allowed set.
 
-- [ ] 5. **[v0]** Infra: SAM stack
+- [x] 5. **[v0]** Infra: SAM stack
   - `packages/infra/template.yaml`: table `mergescape` (PK/SK strings, provisioned 5/5, TTL attribute `ttl`, GSI1 on `GSI1PK`), `ingest` and `api` functions (Node 22, 256 MB, esbuild bundling, reserved concurrency 10 and 5), Function URLs (ingest auth NONE; api auth NONE with CORS restricted to the Pages origin parameter), SSM parameter names as env vars, log groups with 14-day retention, EventBridge rule `cron(5 0 ? * MON *)` → api with `{"action":"rollover"}`, CloudFront distribution for `/badge/*` to the api URL with 6 h default TTL, two AWS Budgets (1 and 10 USD).
-  - IAM per Requirement 12.2, no wildcards on resources.
+  - IAM per Requirement 12.2, no wildcards on resources. (Done; task 15 adds Scan on the GSI1 index ARN for the api role and narrows the GSI projection to INCLUDE badge fields.)
   - `README` section: the four `aws ssm put-parameter --type SecureString` commands the operator runs once.
   - GitHub Actions `deploy.yml` using OIDC role assumption; no AWS keys in repo.
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.7_
