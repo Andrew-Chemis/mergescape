@@ -6,6 +6,13 @@
   import type { MonsterId } from '@mergescape/shared';
   import Sprite from './Sprite.svelte';
 
+  /** The backdrops drawn so far, by biome name; see `backdrop`. */
+  const BACKDROPS: Readonly<Record<string, 'town' | 'sewers' | 'marsh'>> = {
+    Town: 'town',
+    'Sewers of Legacy': 'sewers',
+    'Flaky Marsh': 'marsh',
+  };
+
   interface Props {
     level: number;
     /** Where the character is standing, e.g. `Flaky Marsh`. */
@@ -56,6 +63,12 @@
     return () => clearTimeout(timer);
   });
 
+  /**
+   * The backdrop of the biome (game-design.md section 11: three Town backdrops in v1, five by month 6, six by
+   * month 12). The later biomes keep the last backdrop drawn until they get their own.
+   */
+  const backdrop = $derived(BACKDROPS[biome] ?? 'marsh');
+
   const description = $derived(
     asleep
       ? `Your character is asleep in ${biome}.`
@@ -65,7 +78,7 @@
   );
 </script>
 
-<div class="scene">
+<div class="scene {backdrop}" data-backdrop={backdrop}>
   <p class="say">{line ?? `${biome} · Renown ${renown}`}</p>
   <span class="torch left" aria-hidden="true"></span>
   <span class="torch right" aria-hidden="true"></span>
@@ -95,6 +108,16 @@
     border: 2px solid #000;
     overflow: hidden;
     background: linear-gradient(#1c2437 0 55%, #2e4a2a 55% 62%, #3b2a1a 62%);
+  }
+
+  /* The sewers: wet green-grey stone under a low ceiling. */
+  .scene.sewers {
+    background: linear-gradient(#18262a 0 55%, #2f4a45 55% 62%, #1f2e2a 62%);
+  }
+
+  /* The marsh: a murky sky over reeds and mud. */
+  .scene.marsh {
+    background: linear-gradient(#26303a 0 45%, #44603c 45% 60%, #2b3a2a 60%);
   }
 
   .cast {
