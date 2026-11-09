@@ -120,6 +120,37 @@ describe('Riposte credits', () => {
   });
 });
 
+describe("the Mentor Pledge's view of the author", () => {
+  async function approvalProgress(authorMerges: number, reviewerMerges: number): Promise<number> {
+    const g = makeGame();
+    await g.signIn(AUTHOR_ID);
+    await g.signIn(REVIEWER_ID);
+    await setProfile(g, { repoMerges: { '1': authorMerges } }, AUTHOR_ID);
+    await setProfile(g, { repoMerges: { '1': reviewerMerges } }, REVIEWER_ID);
+    expect(
+      (
+        await g.post(
+          '/pledges/play',
+          { requestId: 'play-mentor-0001', pledgeId: 'mentor' },
+          REVIEWER_ID,
+        )
+      ).status,
+    ).toBe(200);
+    await g.deliver(fixtureDelivery('pull_request.opened'));
+    await g.deliver(fixtureDelivery('pull_request_review.approved'));
+    return (await week(g, REVIEWER_ID)).pledgeProgress.mentor?.progress ?? -1;
+  }
+
+  it('counts an approval of an author with fewer merges than the reviewer', async () => {
+    expect(await approvalProgress(2, 9)).toBe(1);
+  });
+
+  it('does not count an approval of an author with as many merges or more', async () => {
+    expect(await approvalProgress(9, 9)).toBe(0);
+    expect(await approvalProgress(12, 9)).toBe(0);
+  });
+});
+
 describe('a rollover that fails for one profile', () => {
   const NEXT = Date.UTC(2026, 10, 16, 0, 5, 0);
 

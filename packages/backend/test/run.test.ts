@@ -6,7 +6,7 @@
  */
 import { interestOn, levelFor, startRun, zoneFor } from '@mergescape/shared';
 import { describe, expect, it } from 'vitest';
-import type { LogResponse, MeResponse, WeekSummary } from '../src/api-types';
+import type { LogResponse, MeResponse, MutationResponse, WeekSummary } from '../src/api-types';
 import { toPlayerState } from '../src/player';
 import { API_ROLE, DAY, HOUR, makeGame, playLife } from './game-harness';
 import type { Game } from './game-harness';
@@ -76,6 +76,9 @@ describe('a week of events', () => {
       'mentor',
       'defend',
     ]);
+    expect(
+      (await g.post('/pledges/play', { requestId: 'play-strike-0001', pledgeId: 'strike' })).status,
+    ).toBe(200);
 
     // The first PR: 90 XP to open it (a daily-first bonus included) and 703 to merge it.
     let result = await step(g, 'pull_request.opened', 17);
@@ -117,13 +120,37 @@ describe('a week of events', () => {
     expect(cleared?.shop?.voucher).not.toBeNull();
     expect(cleared?.freePack).toBeNull();
 
-    // Wednesday: the unplayed hand auto-plays after Tuesday, the top of the hand in draw order.
+    // Buy a Charm; replaying the same request id changes nothing and answers the same.
+    const goldBefore = result.after.gold;
+    const charm = cleared?.shop?.charms[0];
+    const buy = { requestId: 'buy-charm-000001', kind: 'charm', index: 0 };
+    const bought = await g.post('/shop/buy', buy);
+    expect(bought.status).toBe(200);
+    const boughtMe = (bought.body as unknown as MutationResponse).me;
+    expect(boughtMe.gold).toBe(goldBefore - (charm?.price ?? 0));
+    expect(boughtMe.charms.map((held) => held.id)).toEqual([charm?.charm.id]);
+    expect((bought.body as unknown as MutationResponse).week.shop?.charms[0]?.sold).toBe(true);
+    const replay = await g.post('/shop/buy', buy);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(bought.body);
+    expect((await me(g)).gold).toBe(goldBefore - (charm?.price ?? 0));
+
+    // Spending more than is held is a 409 and changes nothing.
+    const voucher = cleared?.shop?.voucher;
+    expect(voucher?.price).toBeGreaterThan(boughtMe.gold);
+    const broke = await g.post('/shop/buy', { requestId: 'buy-voucher-0001', kind: 'voucher' });
+    expect(broke).toEqual({ status: 409, body: { error: 'insufficient_gold' } });
+    expect((await me(g)).gold).toBe(boughtMe.gold);
+
+    // Wednesday: the unplayed hand auto-plays after Tuesday, and the third merge completes Strike.
     g.clock.now = START + 2 * DAY;
     const wed = await week(g);
     expect(wed.pledgeWindowOpen).toBe(false);
-    expect(wed.played.map((pledge) => pledge.id)).toEqual(['tidy', 'big-game-hunter', 'strike']);
-    expect(wed.pledgeProgress.strike).toEqual({ progress: 0, target: 3, completed: false });
-    expect((await g.db.getWeek(AUTHOR_ID, '2026-46'))?.played).toHaveLength(3);
+    expect(wed.played.map((pledge) => pledge.id)).toEqual(['strike', 'tidy', 'big-game-hunter']);
+    expect(wed.pledgeProgress.strike).toEqual({ progress: 2, target: 3, completed: false });
+    expect(
+      (await g.post('/pledges/play', { requestId: 'play-late-000001', pledgeId: 'mentor' })).body,
+    ).toEqual({ error: 'window_closed' });
 
     // Opening the next PR crosses the Raid target of 2,000: Act II clears, paying interest and 40, and
     // the free Pledge pack arrives.
@@ -138,14 +165,26 @@ describe('a week of events', () => {
     expect(result.after.week?.freePack).toBe('pledge');
     expect(result.after.week?.freePackOptions).toHaveLength(3);
 
-    // On a weekly XP of 3,000 the merge clears the Boss act: 100 gold, Renown +1, and the run is over with
-    // the shop still open. Strike, auto-played on Wednesday, has its first merge.
+    // Take the free pack: one of its 3 Pledges joins the deck.
+    const pickFree = await g.post('/shop/pick', {
+      requestId: 'pick-free-000001',
+      index: -1,
+      option: 0,
+    });
+    expect(pickFree.status).toBe(200);
+    const afterPick = pickFree.body as unknown as MutationResponse;
+    expect(afterPick.week.freePack).toBeNull();
+    expect(afterPick.me.deck).toHaveLength(6);
+
+    // The merge completes Strike (the third merge since it was played) and, on a weekly XP of 3,000, the
+    // Boss act: 100 gold, Renown +1, and the run is over with the shop still open.
     await step(g, 'pull_request_review.approved', 32);
     result = await step(g, 'pull_request.closed.merged', 32);
+    expect(result.row?.breakdown.some((line) => line.label === 'Pledge: Strike')).toBe(true);
     expect(result.after.week?.pledgeProgress.strike).toEqual({
-      progress: 1,
+      progress: 3,
       target: 3,
-      completed: false,
+      completed: true,
     });
     expect(result.after.gold).toBe(payout(result, 100));
     expect(result.after).toMatchObject({ renown: 1, biome: 'Town' });
@@ -311,6 +350,33 @@ describe('the Monday rollover', () => {
     const profile = await g.db.getProfile(AUTHOR_ID, true);
     // 793 from week 46, then weeks 47, 48 and 49 with nothing in them.
     expect(profile?.history).toEqual([793, 0, 0, 0]);
+  });
+
+  it('starts the new week with Pledge progress, the played hand and Loaded Dice reset', async () => {
+    const g = makeGame();
+    await g.signIn(AUTHOR_ID);
+    await g.signIn(REVIEWER_ID);
+    await g.post('/pledges/play', { requestId: 'play-strike-0002', pledgeId: 'strike' });
+    await playLife(g, 17);
+    const old = await week(g);
+    expect(old.pledgeProgress.strike?.progress).toBe(1);
+    // The week-scoped scorer state sits on the profile, stamped with the week it belongs to.
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.weekState?.week).toBe('2026-46');
+
+    g.clock.now = MONDAY_NEXT;
+    await g.rollover();
+    const next = await week(g);
+    expect(next.played).toEqual([]);
+    expect(next.pledgeProgress).toEqual({});
+
+    // Play it again and merge once: progress counts from zero, not from last week's one.
+    await g.post('/pledges/play', { requestId: 'play-strike-0003', pledgeId: 'strike' });
+    await playLife(g, 40);
+    expect((await week(g)).pledgeProgress.strike).toEqual({
+      progress: 1,
+      target: 3,
+      completed: false,
+    });
   });
 
   it('sets targets from the 8-week median, never above twice the previous week', async () => {

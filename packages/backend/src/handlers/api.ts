@@ -9,7 +9,15 @@
  * | GET /week               | yes          | bearer | the current run: acts, Pledges, the shop        |
  * | GET /log?cursor=        | yes          | bearer | Combat Log page, newest first                   |
  * | GET /installations      | yes          | bearer | the App installations the player can see        |
+ * | POST /shop/buy          | yes          | bearer | buy a Charm, pack or Voucher, or take the offer |
+ * | POST /shop/pick         | yes          | bearer | keep one of the 3 options of a bought pack     |
+ * | POST /shop/reroll       | yes          | bearer | re-roll the Charms and packs                    |
+ * | POST /shop/sell         | yes          | bearer | sell a held Charm for half its price            |
+ * | POST /shrine/remove     | yes          | bearer | remove a Pledge from the deck                   |
+ * | POST /pledges/play      | yes          | bearer | play a Pledge from the hand                     |
  *
+ * Mutations take `{ "requestId": "<client uuid>", ... }`, answer `{ me, week }` and are idempotent per
+ * request id (mutations.ts). A typed shop or Pledge error is a 409 with its code; bad input is a 400.
  * The two auth routes are browser navigations, which carry no `Origin` header the page controls, so they
  * are exempt from the Origin check (Requirement 12.3). Everything else must come from the Pages origin.
  * The same Lambda also receives the weekly EventBridge input `{"action":"rollover"}` (see `rollover.ts`).
@@ -19,18 +27,20 @@ import type { Config } from '../config';
 import type { Db } from '../db';
 import { authorizeUrl, SignInError, signInWithCode } from '../github';
 import type { FetchLike } from '../github';
-import { header, json, redirect } from '../http';
+import { header, json, rawBody, redirect } from '../http';
 import type { FunctionUrlEvent, FunctionUrlResult } from '../http';
 import { signSessionToken, verifySessionToken } from '../jwt';
 import type { Logger } from '../log';
 import { getRuntime } from '../runtime';
 import { isRolloverEvent, runRollover } from '../rollover';
 import type { RolloverEvent, RolloverResult } from '../rollover';
+import { mutate } from '../mutations';
+import type { MutationRequest } from '../mutations';
 import { loadCurrent } from '../runs';
 import type { RunContext } from '../runs';
 import { randomSeed } from '../seed';
 import type { Secrets } from '../secrets';
-import type { InstallationsResponse, LogResponse } from '../api-types';
+import type { InstallationsResponse, LogResponse, MutationResponse } from '../api-types';
 import {
   decodeCursor,
   encodeCursor,
@@ -47,14 +57,80 @@ const STATE_FORMAT = /^[A-Za-z0-9_-]{20,128}$/;
 const CODE_FORMAT = /^[A-Za-z0-9_-]{1,200}$/;
 const BEARER = /^Bearer ([A-Za-z0-9._-]+)$/i;
 
-type Route = { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' };
+/** A mutation body is a handful of short fields; anything larger is refused unread (413). */
+export const MAX_REQUEST_BYTES = 4 * 1024;
+const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const CONTENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const BUY_KINDS = ['charm', 'pack', 'voucher', 'legendary'] as const;
+
+type Route =
+  | { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' }
+  | { kind: 'post'; handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' };
 
 const ROUTES: Readonly<Record<string, Route>> = {
   '/me': { kind: 'get', handler: 'me' },
   '/week': { kind: 'get', handler: 'week' },
   '/log': { kind: 'get', handler: 'log' },
   '/installations': { kind: 'get', handler: 'installations' },
+  '/shop/buy': { kind: 'post', handler: 'buy' },
+  '/shop/pick': { kind: 'post', handler: 'pick' },
+  '/shop/reroll': { kind: 'post', handler: 'reroll' },
+  '/shop/sell': { kind: 'post', handler: 'sell' },
+  '/shrine/remove': { kind: 'post', handler: 'shrine' },
+  '/pledges/play': { kind: 'post', handler: 'play' },
 };
+
+/** The request id and the typed request in a mutation body, or null when the body is not valid. */
+function parseMutation(
+  handler: Extract<Route, { kind: 'post' }>['handler'],
+  body: Record<string, unknown>,
+): { requestId: string; request: MutationRequest } | null {
+  const requestId = body.requestId;
+  if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) {
+    return null;
+  }
+  const index = body.index;
+  const option = body.option;
+  const text = (value: unknown): string | null =>
+    typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
+  const whole = (value: unknown, min: number): number | null =>
+    typeof value === 'number' && Number.isInteger(value) && value >= min && value <= 99
+      ? value
+      : null;
+  switch (handler) {
+    case 'buy': {
+      const kind = BUY_KINDS.find((candidate) => candidate === body.kind);
+      if (kind === undefined) {
+        return null;
+      }
+      if (kind === 'voucher' || kind === 'legendary') {
+        return { requestId, request: { type: 'buy', kind } };
+      }
+      const slot = whole(index, 0);
+      return slot === null ? null : { requestId, request: { type: 'buy', kind, index: slot } };
+    }
+    case 'pick': {
+      const slot = whole(index, -1);
+      const chosen = whole(option, 0);
+      return slot === null || chosen === null
+        ? null
+        : { requestId, request: { type: 'pick', index: slot, option: chosen } };
+    }
+    case 'reroll':
+      return { requestId, request: { type: 'reroll' } };
+    case 'sell': {
+      const charmId = text(body.charmId);
+      return charmId === null ? null : { requestId, request: { type: 'sell', charmId } };
+    }
+    case 'shrine':
+    case 'play': {
+      const pledgeId = text(body.pledgeId);
+      return pledgeId === null
+        ? null
+        : { requestId, request: { type: handler === 'shrine' ? 'shrine' : 'play', pledgeId } };
+    }
+  }
+}
 
 export interface ApiDeps {
   db: Db;
@@ -174,6 +250,43 @@ export function createApiHandler(
       : json(404, { error: 'no_profile' });
   }
 
+  async function mutation(
+    userId: number,
+    event: FunctionUrlEvent,
+    handler: Extract<Route, { kind: 'post' }>['handler'],
+  ): Promise<FunctionUrlResult> {
+    const raw = rawBody(event, MAX_REQUEST_BYTES);
+    if (raw === 'too_large') {
+      return json(413, { error: 'payload_too_large' });
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return json(400, { error: 'invalid_json' });
+    }
+    const parsed =
+      typeof body === 'object' && body !== null && !Array.isArray(body)
+        ? parseMutation(handler, body as Record<string, unknown>)
+        : null;
+    if (parsed === null) {
+      return json(400, { error: 'invalid_request' });
+    }
+    const context = { ...runContext(), log };
+    const outcome = await mutate(context, userId, parsed.requestId, parsed.request);
+    if (outcome.status === 404) {
+      return json(404, { error: 'no_profile' });
+    }
+    if (outcome.status === 409) {
+      return json(409, { error: outcome.error });
+    }
+    const response: MutationResponse = {
+      me: toMeResponse(outcome.current, context.now),
+      week: toWeekSummary(outcome.current, context.now),
+    };
+    return json(200, response);
+  }
+
   async function combatLog(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
     const cursor = event.queryStringParameters?.cursor;
     let beforeSk: string | undefined;
@@ -237,12 +350,16 @@ export function createApiHandler(
       if (route === undefined) {
         return json(404, { error: 'not_found' });
       }
-      if (method !== 'GET') {
-        return json(405, { error: 'method_not_allowed' }, { allow: 'GET' });
+      const allowed = route.kind === 'get' ? 'GET' : 'POST';
+      if (method !== allowed) {
+        return json(405, { error: 'method_not_allowed' }, { allow: allowed });
       }
       const userId = await authenticate(event);
       if (userId === null) {
         return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
+      }
+      if (route.kind === 'post') {
+        return await mutation(userId, event, route.handler);
       }
       switch (route.handler) {
         case 'me':
