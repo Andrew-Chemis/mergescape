@@ -70,6 +70,8 @@ export interface Game {
   logs: string[];
   /** Seeds handed to new runs, in order; the last one repeats. Default: always `SEED`. */
   seeds: number[];
+  /** The seed every expedition and Forge order started from now on is rolled from. */
+  roll: { seed: number };
   signIn(id: number, installations?: number[], login?: string): Promise<void>;
   /** Deliver a signed webhook, then move the clock on one minute. */
   deliver(event: FunctionUrlEvent): Promise<FunctionUrlResult>;
@@ -110,6 +112,8 @@ export function makeGame(): Game {
   };
   const clock = { now: START };
   const seeds: number[] = [];
+  const roll = { seed: 0xc0ffee };
+  const rollSeed = (): number => roll.seed;
   const newSeed = (): number => (seeds.length > 1 ? (seeds.shift() as number) : (seeds[0] ?? SEED));
   const values: Record<SecretName, string> = {
     'github-webhook-secret': WEBHOOK_SECRET,
@@ -127,6 +131,7 @@ export function makeGame(): Game {
     log,
     now: () => clock.now,
     newSeed,
+    rollSeed,
   });
   const api = createApiHandler({
     db,
@@ -136,6 +141,7 @@ export function makeGame(): Game {
     now: () => clock.now,
     fetch: fakeGitHub().fetch,
     newSeed,
+    rollSeed,
   });
 
   const call = async (
@@ -162,6 +168,7 @@ export function makeGame(): Game {
     clock,
     logs,
     seeds,
+    roll,
     api,
     token: (userId = AUTHOR_ID) => signSessionToken(JWT_KEY, userId, clock.now),
     async signIn(id, installations = [INSTALLATION_ID], login = `player-${id}`) {

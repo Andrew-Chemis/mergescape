@@ -15,21 +15,52 @@
  * | POST /shop/sell         | yes          | bearer | sell a held Charm for half its price            |
  * | POST /shrine/remove     | yes          | bearer | remove a Pledge from the deck                   |
  * | POST /pledges/play      | yes          | bearer | play a Pledge from the hand                     |
+ * | GET /expedition         | yes          | bearer | the latest trip, the regions and the choices    |
+ * | POST /expedition/send   | yes          | bearer | send the character on an expedition             |
+ * | POST /expedition/collect| yes          | bearer | collect a returned expedition's loot            |
+ * | GET /packs/:seed        | yes          | bearer | the 3 Charms of an unopened loot pack           |
+ * | POST /packs/open        | yes          | bearer | keep one Charm of a loot pack                   |
+ * | GET /forge              | yes          | bearer | the stations, recipes and upgrades              |
+ * | POST /forge/start       | yes          | bearer | start an order at a station                     |
+ * | POST /forge/collect     | yes          | bearer | collect a finished order                        |
+ * | POST /forge/upgrade     | yes          | bearer | buy Bellows, Dyes or Index; choose a cape colour|
+ * | POST /gear/equip        | yes          | bearer | wear a piece or a pet, or take a slot off       |
+ * | GET /feats              | yes          | bearer | every Feat with its progress                    |
+ * | POST /feats/pin         | yes          | bearer | pin or unpin a Feat (at most three)             |
  * | GET /export             | yes          | bearer | every item under the player's USER# partition   |
  * | POST /delete            | yes          | bearer | delete the player's data (Requirement 13.2)     |
  * | GET /badge/{login}.svg  | no           | none   | the README badge, public, cached six hours      |
  *
- * Mutations take `{ "requestId": "<client uuid>", ... }`, answer `{ me, week }` and are idempotent per
- * request id (mutations.ts). A typed shop or Pledge error is a 409 with its code; bad input is a 400.
+ * Mutations take `{ "requestId": "<client uuid>", ... }`, answer `{ me, week }` (the shop, `mutations.ts`) or
+ * the depth-layer shapes of docs/api-contract.md (`depth.ts`), and are idempotent per request id. A typed
+ * game error is a 409 with its code; bad input is a 400.
  * The two auth routes are browser navigations, which carry no `Origin` header the page controls, so they
  * are exempt from the Origin check (Requirement 12.3). Everything else must come from the Pages origin.
  * The same Lambda also receives the weekly EventBridge input `{"action":"rollover"}` (see `rollover.ts`).
  */
 import { randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
+import {
+  GEAR_SLOTS,
+  isCapeColor,
+  isExpeditionChoice,
+  isRegionId,
+  lootPackOptions,
+  STATION_IDS,
+  UPGRADE_IDS,
+} from '@mergescape/shared';
+import type {
+  CapeColor,
+  ExpeditionState,
+  GearSlot,
+  StationId,
+  UpgradeId,
+} from '@mergescape/shared';
 import { BADGE_CACHE_CONTROL, BADGE_CONTENT_TYPE, renderBadge } from '../badge';
 import type { Config } from '../config';
 import type { Db } from '../db';
+import { mutateDepth } from '../depth';
+import type { DepthRequest } from '../depth';
 import { authorizeUrl, SignInError, signInWithCode } from '../github';
 import type { FetchLike } from '../github';
 import { header, json, rawBody, redirect } from '../http';
@@ -46,10 +77,22 @@ import { loadCurrent } from '../runs';
 import type { RunContext } from '../runs';
 import { randomSeed } from '../seed';
 import type { Secrets } from '../secrets';
-import type { InstallationsResponse, LogResponse, MutationResponse } from '../api-types';
+import type {
+  ExpeditionCollectResponse,
+  ExpeditionSendResponse,
+  ForgeCollectResponse,
+  InstallationsResponse,
+  LogResponse,
+  MeResult,
+  MutationResponse,
+  PackOptionsResponse,
+} from '../api-types';
 import {
   decodeCursor,
   encodeCursor,
+  toExpeditionView,
+  toFeatsView,
+  toForgeView,
   toInstallationSummary,
   toLogEntry,
   toMeResponse,
@@ -68,6 +111,10 @@ export const MAX_REQUEST_BYTES = 4 * 1024;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const CONTENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const BUY_KINDS = ['charm', 'pack', 'voucher', 'legendary'] as const;
+/** A recipe id: `forge:weapon:iron` or `scriptorium:affix`. */
+const RECIPE_ID = /^[a-z]{1,16}(?::[a-z]{1,16}){1,2}$/;
+/** The largest unsigned 32-bit seed (a Charm pack's seed). */
+const MAX_SEED = 0xffff_ffff;
 
 /**
  * The largest export body sent, gzipped when the client accepts it. A Function URL response is capped at
@@ -78,11 +125,57 @@ export const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
 /** `GET /badge/{login}.svg`: the login is one path segment; anything else under /badge/ is a 404. */
 const BADGE_PATH = /^\/badge\/([^/]+)\.svg$/;
 
-type Route =
-  | { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' | 'export' }
-  | { kind: 'post'; handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' | 'delete' };
+/** `GET /packs/:seed`: one path segment after `/packs/`. */
+const PACK_PATH = /^\/packs\/([^/]+)$/;
 
-type MutationHandler = Exclude<Extract<Route, { kind: 'post' }>['handler'], 'delete'>;
+type DepthHandler =
+  | 'expedition_send'
+  | 'expedition_collect'
+  | 'pack_open'
+  | 'forge_start'
+  | 'forge_collect'
+  | 'forge_upgrade'
+  | 'gear_equip'
+  | 'feat_pin';
+
+type Route =
+  | {
+      kind: 'get';
+      handler:
+        | 'me'
+        | 'week'
+        | 'log'
+        | 'installations'
+        | 'export'
+        | 'expedition'
+        | 'forge'
+        | 'feats'
+        | 'pack';
+    }
+  | {
+      kind: 'post';
+      handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' | 'delete' | DepthHandler;
+    };
+
+type MutationHandler = Exclude<
+  Extract<Route, { kind: 'post' }>['handler'],
+  'delete' | DepthHandler
+>;
+
+const DEPTH_HANDLERS: ReadonlySet<string> = new Set<DepthHandler>([
+  'expedition_send',
+  'expedition_collect',
+  'pack_open',
+  'forge_start',
+  'forge_collect',
+  'forge_upgrade',
+  'gear_equip',
+  'feat_pin',
+]);
+
+function isDepthHandler(handler: string): handler is DepthHandler {
+  return DEPTH_HANDLERS.has(handler);
+}
 
 /** The sort-key prefix of each group of `USER#` items in the export; anything else goes to `other`. */
 const EXPORT_GROUPS = [
@@ -106,7 +199,115 @@ const ROUTES: Readonly<Record<string, Route>> = {
   '/pledges/play': { kind: 'post', handler: 'play' },
   '/export': { kind: 'get', handler: 'export' },
   '/delete': { kind: 'post', handler: 'delete' },
+  '/expedition': { kind: 'get', handler: 'expedition' },
+  '/expedition/send': { kind: 'post', handler: 'expedition_send' },
+  '/expedition/collect': { kind: 'post', handler: 'expedition_collect' },
+  '/packs/open': { kind: 'post', handler: 'pack_open' },
+  '/forge': { kind: 'get', handler: 'forge' },
+  '/forge/start': { kind: 'post', handler: 'forge_start' },
+  '/forge/collect': { kind: 'post', handler: 'forge_collect' },
+  '/forge/upgrade': { kind: 'post', handler: 'forge_upgrade' },
+  '/gear/equip': { kind: 'post', handler: 'gear_equip' },
+  '/feats': { kind: 'get', handler: 'feats' },
+  '/feats/pin': { kind: 'post', handler: 'feat_pin' },
 };
+
+/** `GET /packs/:seed` is the one route with a path parameter. */
+const PACK_ROUTE: Route = { kind: 'get', handler: 'pack' };
+
+/** The request id and the typed request in a depth-layer body, or null when the body is not valid. */
+function parseDepth(
+  handler: DepthHandler,
+  body: Record<string, unknown>,
+): { requestId: string; request: DepthRequest } | null {
+  const requestId = body.requestId;
+  if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) {
+    return null;
+  }
+  const text = (value: unknown): string | null =>
+    typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
+  const member = <T extends string>(value: unknown, allowed: readonly T[]): T | null =>
+    allowed.find((candidate) => candidate === value) ?? null;
+  const done = (request: DepthRequest): { requestId: string; request: DepthRequest } => ({
+    requestId,
+    request,
+  });
+  switch (handler) {
+    case 'expedition_send': {
+      const { region, choice } = body;
+      return isRegionId(region) && isExpeditionChoice(choice)
+        ? done({ type: 'expedition_send', region, choice })
+        : null;
+    }
+    case 'expedition_collect':
+      return done({ type: 'expedition_collect' });
+    case 'pack_open': {
+      const { seed } = body;
+      const charmId = text(body.charmId);
+      return typeof seed === 'number' &&
+        Number.isInteger(seed) &&
+        seed >= 0 &&
+        seed <= MAX_SEED &&
+        charmId !== null
+        ? done({ type: 'pack_open', seed, charmId })
+        : null;
+    }
+    case 'forge_start': {
+      const { recipeId } = body;
+      if (typeof recipeId !== 'string' || !RECIPE_ID.test(recipeId)) {
+        return null;
+      }
+      if (body.pieceId === undefined) {
+        return done({ type: 'forge_start', recipeId });
+      }
+      const pieceId = text(body.pieceId);
+      return pieceId === null ? null : done({ type: 'forge_start', recipeId, pieceId });
+    }
+    case 'forge_collect': {
+      const station: StationId | null = member(body.station, STATION_IDS);
+      return station === null ? null : done({ type: 'forge_collect', station });
+    }
+    case 'forge_upgrade': {
+      // Either an upgrade to buy or a cape colour to choose (null for the natural cape), never both.
+      const dyeing = Object.hasOwn(body, 'capeColor');
+      if (dyeing === (body.upgrade !== undefined)) {
+        return null;
+      }
+      if (dyeing) {
+        const color = body.capeColor;
+        return color === null || isCapeColor(color)
+          ? done({ type: 'forge_dye', capeColor: color as CapeColor | null })
+          : null;
+      }
+      const upgrade: UpgradeId | null = member(body.upgrade, UPGRADE_IDS);
+      return upgrade === null ? null : done({ type: 'forge_upgrade', upgrade });
+    }
+    case 'gear_equip': {
+      // Exactly one of: a piece to wear, a slot to take off, a pet to wear.
+      const given = ['pieceId', 'unequip', 'petId'].filter((name) => body[name] !== undefined);
+      if (given.length !== 1) {
+        return null;
+      }
+      if (given[0] === 'unequip') {
+        const slot: GearSlot | null = member(body.unequip, GEAR_SLOTS);
+        return slot === null ? null : done({ type: 'unequip', slot });
+      }
+      const id = text(given[0] === 'pieceId' ? body.pieceId : body.petId);
+      if (id === null) {
+        return null;
+      }
+      return given[0] === 'pieceId'
+        ? done({ type: 'equip', pieceId: id })
+        : done({ type: 'equip_pet', petId: id });
+    }
+    case 'feat_pin': {
+      const featId = text(body.featId);
+      return featId === null || typeof body.pinned !== 'boolean'
+        ? null
+        : done({ type: 'pin', featId, pinned: body.pinned });
+    }
+  }
+}
 
 /** The request id and the typed request in a mutation body, or null when the body is not valid. */
 function parseMutation(
@@ -173,6 +374,8 @@ export interface ApiDeps {
   newSeed?: () => number;
   /** A fresh unguessable token for the OAuth `state`. */
   nonce?: () => string;
+  /** The seed of an expedition or Forge order a request starts (a random uint32 in production). */
+  rollSeed?: () => number;
 }
 
 export function createApiHandler(
@@ -325,6 +528,97 @@ export function createApiHandler(
     return json(200, response);
   }
 
+  /** The depth-layer mutations (expeditions, packs, the Forge, gear, Feats): see `depth.ts`. */
+  async function depthMutation(
+    userId: number,
+    event: FunctionUrlEvent,
+    handler: DepthHandler,
+  ): Promise<FunctionUrlResult> {
+    const read = jsonBody(event);
+    if ('refusal' in read) {
+      return read.refusal;
+    }
+    const parsed = parseDepth(handler, read.body);
+    if (parsed === null) {
+      return json(400, { error: 'invalid_request' });
+    }
+    const context = { ...runContext(), log, ...(deps.rollSeed ? { seed: deps.rollSeed } : {}) };
+    const outcome = await mutateDepth(context, userId, parsed.requestId, parsed.request);
+    if (outcome.status !== 200) {
+      return json(outcome.status, { error: outcome.error });
+    }
+    const me = toMeResponse(outcome.current, context.now);
+    const { result } = outcome;
+    switch (handler) {
+      case 'expedition_send': {
+        const body: ExpeditionSendResponse = {
+          me,
+          expedition: result.expedition as ExpeditionState,
+        };
+        return json(200, body);
+      }
+      case 'expedition_collect': {
+        const body: ExpeditionCollectResponse = {
+          me,
+          expedition: result.expedition as ExpeditionState,
+          loot: result.loot,
+          applied: result.applied,
+          featsUnlocked: result.featsUnlocked,
+        };
+        return json(200, body);
+      }
+      case 'forge_collect': {
+        const body: ForgeCollectResponse = { me, piece: result.piece, applied: result.applied };
+        return json(200, body);
+      }
+      default: {
+        const body: MeResult = { me };
+        return json(200, body);
+      }
+    }
+  }
+
+  async function expeditionView(userId: number): Promise<FunctionUrlResult> {
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current
+      ? json(200, toExpeditionView(current, context.now))
+      : json(404, { error: 'no_profile' });
+  }
+
+  async function forgeView(userId: number): Promise<FunctionUrlResult> {
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current
+      ? json(200, toForgeView(current, context.now))
+      : json(404, { error: 'no_profile' });
+  }
+
+  async function featsView(userId: number): Promise<FunctionUrlResult> {
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current
+      ? json(200, toFeatsView(current, context.now))
+      : json(404, { error: 'no_profile' });
+  }
+
+  /** `GET /packs/:seed`: the 3 Charms of an unopened pack (a pure function of the seed, kept by the player). */
+  async function packOptions(userId: number, rawSeed: string): Promise<FunctionUrlResult> {
+    const seed = /^\d{1,10}$/.test(rawSeed) ? Number(rawSeed) : Number.NaN;
+    if (!Number.isSafeInteger(seed) || seed > MAX_SEED) {
+      return json(400, { error: 'invalid_request' });
+    }
+    const current = await loadCurrent(runContext(), userId);
+    if (!current) {
+      return json(404, { error: 'no_profile' });
+    }
+    if (!(current.player.charmPacks ?? []).includes(seed)) {
+      return json(409, { error: 'no_such_pack' });
+    }
+    const body: PackOptionsResponse = { options: lootPackOptions(seed) };
+    return json(200, body);
+  }
+
   async function combatLog(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
     const cursor = event.queryStringParameters?.cursor;
     let beforeSk: string | undefined;
@@ -380,7 +674,10 @@ export function createApiHandler(
         'x-content-type-options': 'nosniff',
         'content-security-policy': "default-src 'none'; sandbox",
       },
-      body: renderBadge(player, player ? { login: player.login } : {}),
+      body: renderBadge(
+        player,
+        player ? { login: player.login, pins: player.pins, coin: player.coin } : {},
+      ),
     };
   }
 
@@ -505,7 +802,12 @@ export function createApiHandler(
         // Function URL CORS answers preflights itself; this is the fallback if one reaches the code.
         return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
       }
-      const route = Object.hasOwn(ROUTES, path) ? ROUTES[path] : undefined;
+      const packSeed = PACK_PATH.exec(path)?.[1];
+      const route = Object.hasOwn(ROUTES, path)
+        ? ROUTES[path]
+        : packSeed !== undefined
+          ? PACK_ROUTE
+          : undefined;
       if (route === undefined) {
         return json(404, { error: 'not_found' });
       }
@@ -518,8 +820,11 @@ export function createApiHandler(
         return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
       }
       if (route.kind === 'post') {
-        return route.handler === 'delete'
-          ? await deleteAccount(userId, event)
+        if (route.handler === 'delete') {
+          return await deleteAccount(userId, event);
+        }
+        return isDepthHandler(route.handler)
+          ? await depthMutation(userId, event, route.handler)
           : await mutation(userId, event, route.handler);
       }
       switch (route.handler) {
@@ -533,6 +838,14 @@ export function createApiHandler(
           return await installations(userId);
         case 'export':
           return await exportData(userId, event);
+        case 'expedition':
+          return await expeditionView(userId);
+        case 'forge':
+          return await forgeView(userId);
+        case 'feats':
+          return await featsView(userId);
+        case 'pack':
+          return await packOptions(userId, packSeed ?? '');
       }
     } catch (error) {
       log.error('api.failed', {}, error);

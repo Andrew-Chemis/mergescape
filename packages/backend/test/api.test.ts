@@ -601,6 +601,28 @@ describe('GET /me', () => {
         freePackOptions: null,
         legendaryOffer: null,
       }),
+      // The depth layer (docs/api-contract.md): a new character carries nothing and has not gone anywhere.
+      satchel: {
+        ore: 0,
+        timber: 0,
+        lore: 0,
+        ink: 0,
+        provisions: 0,
+        flux: 0,
+        silver: 0,
+        mithril: 0,
+        rune: 0,
+        dragon: 0,
+      },
+      inventory: [],
+      gear: { equipped: {}, setBonus: 0, capeColor: null },
+      pets: ['linter-cat'],
+      charmPacks: [],
+      forge: { upgrades: [], stations: {} },
+      titles: [],
+      pinnedFeats: [],
+      expedition: null,
+      tzOffsetMinutes: null,
     });
     expect((me.week as { hand: unknown[] }).hand).toHaveLength(5);
   });

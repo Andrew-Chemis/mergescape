@@ -2,27 +2,60 @@ import {
   biomeFor,
   charmSellPrice,
   charmSlotCount,
+  EXPEDITION_HOURS,
+  expeditionDurationMs,
+  expeditionPlan,
+  expeditionStatus,
+  featStatuses,
+  forgeOf,
+  hasUpgrade,
   interestCap,
   interestOn,
+  isCapeColor,
+  missingSupplies,
+  ownedPets,
   packOptions,
   pledgeDefinition,
   pledgeWindowOpen,
+  RECIPES,
+  recipeHours,
+  regionLean,
+  REGIONS,
+  regionUnlocked,
   revealedNextMogul,
   rerollCost,
+  satchelOf,
   shrineCost,
+  STATION_IDS,
+  STATION_UPGRADES,
+  tierUnlocked,
+  UPGRADE_IDS,
   visitOf,
 } from '@mergescape/shared';
-import type { PackOption } from '@mergescape/shared';
+import type {
+  ExpeditionChoice,
+  GearPiece,
+  GearSlot,
+  PackOption,
+  PlayerState,
+} from '@mergescape/shared';
 import type { InstallationItem, StoredEventRow } from './db';
 import type {
+  ExpeditionStatus,
+  ExpeditionView,
+  FeatsResponse,
+  ForgeView,
   InstallationSummary,
   LogEntry,
   LogEventKind,
   MeResponse,
   PackShelfKind,
+  PetKey,
   PledgeProgress,
   ShopOption,
   ShopView,
+  Station,
+  StationStatus,
   WeekSummary,
 } from './api-types';
 import { freePackOptions } from './free-pack';
@@ -119,9 +152,24 @@ export function toWeekSummary(current: Current, now: number): WeekSummary {
   };
 }
 
+/** The worn gear by slot, the set bonus, and the cape colour (null for the natural cape). */
+function toGearView(player: PlayerState): MeResponse['gear'] {
+  const equipped: Partial<Record<GearSlot, GearPiece>> = {};
+  for (const piece of player.gear.pieces) {
+    equipped[piece.slot] = piece;
+  }
+  const color = player.gear.capeColor;
+  return {
+    equipped,
+    setBonus: player.gear.setBonus,
+    capeColor: isCapeColor(color) ? color : null,
+  };
+}
+
 /** `GET /me`. */
 export function toMeResponse(current: Current, now: number): MeResponse {
   const { profile, player } = current;
+  const forge = forgeOf(player);
   return {
     githubId: profile.id,
     login: profile.login,
@@ -139,7 +187,93 @@ export function toMeResponse(current: Current, now: number): MeResponse {
     kills: profile.kills,
     firstSeen: profile.firstSeen,
     week: toWeekSummary(current, now),
+    satchel: satchelOf(player),
+    inventory: [...(player.inventory ?? [])],
+    gear: toGearView(player),
+    pets: [...ownedPets(player)] as PetKey[],
+    charmPacks: [...(player.charmPacks ?? [])],
+    forge: { upgrades: [...forge.upgrades], stations: forge.stations },
+    titles: [...(player.titles ?? [])],
+    pinnedFeats: [...(player.pinnedFeats ?? [])],
+    expedition: player.expedition ?? null,
+    tzOffsetMinutes: player.tzOffsetMinutes ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Expeditions, the Forge and Feats
+// ---------------------------------------------------------------------------------------------
+
+const iso = (ms: number): string => new Date(ms).toISOString();
+
+/** `GET /expedition`: the latest trip, the eight regions and the five ways to go. */
+export function toExpeditionView({ player }: Current, now: number): ExpeditionView {
+  const latest = player.expedition ?? null;
+  const status: ExpeditionStatus = latest ? expeditionStatus(latest, now) : 'none';
+  const provisions = satchelOf(player).provisions;
+  const choices: ExpeditionChoice[] = ['forage', ...EXPEDITION_HOURS];
+  return {
+    expedition: latest,
+    status,
+    returnsAt: latest ? iso(latest.returnsAt) : null,
+    regions: REGIONS.map((region) => ({
+      id: region.id,
+      name: region.name,
+      unlocked: regionUnlocked(player, region.id),
+      renownRequired: region.renown,
+      lean: regionLean(player, region.id),
+    })),
+    choices: choices.map((choice) => {
+      const plan = expeditionPlan(choice);
+      return {
+        choice,
+        hours: plan.hours,
+        provisions: plan.provisions,
+        affordable: provisions >= plan.provisions,
+        durationMs: expeditionDurationMs(player, plan.hours),
+      };
+    }),
+  };
+}
+
+/** `GET /forge`: the three stations, every recipe and the three upgrades. */
+export function toForgeView({ player }: Current, now: number): ForgeView {
+  const forge = forgeOf(player);
+  const stations = {} as ForgeView['stations'];
+  for (const id of STATION_IDS) {
+    const job = forge.stations[id] ?? null;
+    let status: StationStatus = 'idle';
+    if (job !== null) {
+      status = job.collected ? 'collected' : now < job.doneAt ? 'working' : 'ready';
+    }
+    stations[id as Station] = {
+      job,
+      status,
+      readyAt: job !== null && !job.collected ? iso(job.doneAt) : null,
+    };
+  }
+  return {
+    stations,
+    recipes: RECIPES.map((recipe) => ({
+      id: recipe.id,
+      station: recipe.station,
+      name: recipe.name,
+      inputs: { ...recipe.inputs },
+      hours: recipeHours(player, recipe),
+      unlocked: recipe.kind === 'craft' ? tierUnlocked(player, recipe.tier) : true,
+      affordable: Object.keys(missingSupplies(player, recipe.inputs)).length === 0,
+    })),
+    upgrades: UPGRADE_IDS.map((id) => ({
+      id,
+      owned: hasUpgrade(player, id),
+      cost: { ...STATION_UPGRADES[id].cost },
+    })),
+  };
+}
+
+/** `GET /feats`: progress for the visible Feats, "???" and a hint for the hidden ones. */
+export function toFeatsView({ player }: Current, now: number): FeatsResponse {
+  return { feats: featStatuses(player, now) };
 }
 
 // ---------------------------------------------------------------------------------------------

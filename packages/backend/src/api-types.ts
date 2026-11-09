@@ -6,13 +6,26 @@
 import type {
   ActId,
   BreakdownLine,
+  CapeColor,
   Charm,
+  ExpeditionChoice,
+  ExpeditionState,
+  FeatPetId,
+  FeatStatus,
+  ForgeJob,
+  GearPiece,
+  GearSlot,
+  LootItem,
   MogulId,
   MonsterId,
+  PetId,
   Pledge,
+  RegionId,
   ReviewState,
+  Satchel,
   Skill,
   SkillXp,
+  StationId,
   Supplies,
   VoucherId,
 } from '@mergescape/shared';
@@ -106,6 +119,121 @@ export interface MeResponse {
   kills: Partial<Record<MonsterId, number>>;
   firstSeen: Partial<Record<MonsterId, string>>;
   week: WeekSummary | null;
+  // The depth layer (tasks 22 and 23; docs/api-contract.md).
+  satchel: Satchel;
+  /** Gear owned and not worn. */
+  inventory: GearPiece[];
+  gear: {
+    equipped: Partial<Record<Slot, GearPiece>>;
+    setBonus: number;
+    capeColor: CapeColor | null;
+  };
+  /** Pets owned: the six core pets and the ones only Feats award. */
+  pets: PetKey[];
+  /** Seeds of unopened Charm packs, opened with `POST /packs/open`. */
+  charmPacks: number[];
+  forge: { upgrades: string[]; stations: Partial<Record<Station, ForgeJob>> };
+  titles: string[];
+  pinnedFeats: string[];
+  /** The latest expedition, collected or not; null before the first. */
+  expedition: ExpeditionState | null;
+  /** Minutes east of UTC for the local-time Feats; null means UTC. */
+  tzOffsetMinutes: number | null;
+}
+
+/** `Station`, `Slot`, `RecipeId` and `PetKey` are the names docs/api-contract.md uses for these shared types. */
+export type Station = StationId;
+export type Slot = GearSlot;
+export type RecipeId = string;
+export type PetKey = PetId | FeatPetId;
+
+export type ExpeditionStatus = 'none' | 'away' | 'returned' | 'collected';
+
+/** `GET /expedition` */
+export interface ExpeditionView {
+  expedition: ExpeditionState | null;
+  status: ExpeditionStatus;
+  /** ISO instant the character is back; null when there is no expedition. */
+  returnsAt: string | null;
+  regions: {
+    id: RegionId;
+    name: string;
+    unlocked: boolean;
+    renownRequired: number;
+    /** What the region leans toward; null until the Scriptorium's Index is bought. */
+    lean: string | null;
+  }[];
+  choices: {
+    choice: ExpeditionChoice;
+    /** The nominal duration: 4, 12, 24 or 48 (the Forage is 4). */
+    hours: number;
+    provisions: number;
+    affordable: boolean;
+    /**
+     * An addition to docs/api-contract.md: how long the trip takes this player, in milliseconds, with Quick
+     * gear and the pet's passive applied (`hours` is always the nominal one).
+     */
+    durationMs: number;
+  }[];
+}
+
+/** `POST /expedition/send` */
+export interface ExpeditionSendResponse {
+  me: MeResponse;
+  expedition: ExpeditionState;
+}
+
+/** `POST /expedition/collect` */
+export interface ExpeditionCollectResponse {
+  me: MeResponse;
+  expedition: ExpeditionState;
+  loot: LootItem[];
+  /** False when the trip was collected before: the stored loot is returned and nothing is granted again. */
+  applied: boolean;
+  featsUnlocked: string[];
+}
+
+/** `GET /packs/:seed` */
+export interface PackOptionsResponse {
+  options: Charm[];
+}
+
+export type StationStatus = 'idle' | 'working' | 'ready' | 'collected';
+
+/** `GET /forge` */
+export interface ForgeView {
+  stations: Record<
+    Station,
+    { job: ForgeJob | null; status: StationStatus; readyAt: string | null }
+  >;
+  recipes: {
+    id: RecipeId;
+    station: Station;
+    name: string;
+    inputs: Partial<Satchel>;
+    /** Hours this player's order takes (the Bellows already counted). */
+    hours: number;
+    unlocked: boolean;
+    affordable: boolean;
+  }[];
+  upgrades: { id: string; owned: boolean; cost: Partial<Satchel> }[];
+}
+
+/** `POST /forge/collect` */
+export interface ForgeCollectResponse {
+  me: MeResponse;
+  piece: GearPiece | null;
+  applied: boolean;
+}
+
+/** `GET /feats` */
+export interface FeatsResponse {
+  feats: FeatStatus[];
+}
+
+/** The answer of the depth mutations that return only the profile. */
+export interface MeResult {
+  me: MeResponse;
 }
 
 /** Every mutation answers with the whole new profile and run. */

@@ -2,15 +2,19 @@
  * The README badge (Requirement 11, design.md section 11): a 20 px shields-style SVG with the label
  * "mergescape" on the left and "Lv 41 Warden · Renown 17" on the right.
  *
- * Privacy (Requirement 11.1): the badge shows level, Vocation and Renown and nothing else. Its only inputs
- * are three validated values and, for the accessible name, the stored login; the numbers are rebuilt as
- * integers and the Vocation must be one of the five known names, so nothing a profile holds beyond those
- * fields can reach the markup, and every piece of text is XML-escaped anyway. An unknown login renders the
+ * Privacy (Requirement 11.1 and 17.7): the badge shows level, Vocation and Renown, then the glyphs of the
+ * (at most three) Feats the player pinned and the Old Coin if it was found, and nothing else. Its inputs are
+ * three validated values, a list of Feat ids that must name a Feat in the catalogue, a flag and, for the
+ * accessible name, the stored login; the numbers are rebuilt as integers and the Vocation must be one of the
+ * five known names, so nothing a profile holds beyond those fields can reach the markup (a Feat id is only
+ * ever looked up, never printed), and every piece of text is XML-escaped anyway. An unknown login renders the
  * neutral "unranked" badge and echoes nothing at all.
  *
  * The SVG has no script, style element, image, link or font file: a system font stack, presentation
  * attributes and a clip path. Colours come from the game palette (`packages/client/src/lib/theme.css`).
  */
+import { FEATS } from '@mergescape/shared';
+import type { FeatCategory } from '@mergescape/shared';
 import type { Vocation } from './api-types';
 
 /** `Cache-Control` of every badge, unranked ones included: six hours (Requirement 11.1 and 11.3). */
@@ -52,12 +56,33 @@ export interface BadgeData {
 }
 
 /**
- * Where pinned Feats will draw (Requirement 17.7, task 22): icon id to the `d` of a 16 by 16 path. Empty
- * until the Feat icons exist, so a pin that is not listed here is ignored, never echoed.
+ * The glyph of each kind of Feat, as the `d` of a path in a 16 by 16 box (filled, even-odd): a peak for
+ * Scale, an anvil for Craft, a shield for Endurance, a compass star for World, a mask for the jokes.
  */
-export const PIN_ICONS: Readonly<Record<string, string>> = {};
+export const FEAT_GLYPHS: Readonly<Record<FeatCategory, string>> = {
+  scale: 'M1 14L6 3l3 5 2-2 4 8z',
+  craft: 'M1 3h9c1 2 2.5 3 5 3v2h-4l-1 2v2h2v1H4v-1h2v-2L5 8H1z',
+  endurance: 'M8 1l6 2v5c0 3-2.5 5-6 7-3.5-2-6-4-6-7V3z',
+  world: 'M8 1l2 5 5 2-5 2-2 5-2-5-5-2 5-2z',
+  humour: 'M2 3h12v6c0 3-3 5-6 5S2 12 2 9zM5 6v2h2V6zm4 0v2h2V6zM6 10v1h4v-1z',
+};
 
-/** At most this many pinned Feat icons are drawn. */
+/** The coin dated 7960: a ring with a square hole, drawn beside the pins once it is found. */
+export const COIN_GLYPH =
+  'M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 2a5 5 0 1 1 0 10A5 5 0 0 1 8 3zM6 6h4v4H6z';
+
+/** The Feat that is the coin. */
+export const OLD_COIN_ID = 'the-old-coin';
+
+/**
+ * Where pinned Feats draw (Requirement 17.7): Feat id to the `d` of its glyph, from the shared catalogue.
+ * An id that is not listed here is ignored, never echoed.
+ */
+export const PIN_ICONS: Readonly<Record<string, string>> = Object.fromEntries(
+  FEATS.map((feat) => [feat.id, feat.id === OLD_COIN_ID ? COIN_GLYPH : FEAT_GLYPHS[feat.category]]),
+);
+
+/** At most this many pinned Feat icons are drawn (the coin is drawn in addition). */
 export const MAX_PINS = 3;
 const PIN_SIZE = 14;
 const PIN_GAP = 3;
@@ -67,6 +92,8 @@ export interface BadgeOptions {
   login?: string;
   /** Pinned Feat ids, most important first. */
   pins?: readonly string[];
+  /** The Old Coin has been found: its glyph is drawn after the pins (once, even if it is pinned too). */
+  coin?: boolean;
   /** The icon table (tests pass their own; production uses `PIN_ICONS`). */
   icons?: Readonly<Record<string, string>>;
 }
@@ -174,11 +201,17 @@ export function badgeValue(data: BadgeData | null): string {
 function pinIcons(options: BadgeOptions): string[] {
   const icons = options.icons ?? PIN_ICONS;
   const drawn: string[] = [];
+  const seen = new Set<string>();
   for (const id of options.pins ?? []) {
     const path = Object.hasOwn(icons, id) ? icons[id] : undefined;
-    if (path !== undefined && drawn.length < MAX_PINS) {
+    if (path !== undefined && !seen.has(id) && drawn.length < MAX_PINS) {
+      seen.add(id);
       drawn.push(path);
     }
+  }
+  const coin = Object.hasOwn(icons, OLD_COIN_ID) ? icons[OLD_COIN_ID] : undefined;
+  if (options.coin === true && coin !== undefined && !seen.has(OLD_COIN_ID)) {
+    drawn.push(coin);
   }
   return drawn;
 }
@@ -208,7 +241,7 @@ export function renderBadge(data: BadgeData | null, options: BadgeOptions = {}):
   const icons = pins
     .map((path, index) => {
       const x = labelWidth + PADDING + valueTextWidth + PIN_GAP + index * (PIN_SIZE + PIN_GAP);
-      return `<path transform="translate(${x} 3) scale(${PIN_SIZE / 16})" d="${escapeXml(path)}" fill="${foreground}"/>`;
+      return `<path transform="translate(${x} 3) scale(${PIN_SIZE / 16})" d="${escapeXml(path)}" fill="${foreground}" fill-rule="evenodd"/>`;
     })
     .join('');
 

@@ -1,11 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { FEATS } from '@mergescape/shared';
 import {
   badgeValue,
   BADGE_COLORS,
+  COIN_GLYPH,
   escapeXml,
+  FEAT_GLYPHS,
   MAX_PINS,
+  OLD_COIN_ID,
   PIN_ICONS,
   renderBadge,
   textWidth,
@@ -214,13 +218,52 @@ describe('renderBadge', () => {
   });
 });
 
-describe('pinned Feat icons (the hook for task 22)', () => {
+describe('pinned Feat icons (Requirement 17.7)', () => {
   const icons = { first_blood: 'M0 0h16v16H0z', mentor: 'M8 0l8 16H0z', dragon: 'M1 1h14v14H1z' };
 
-  it('draws nothing while the icon table is empty', () => {
-    expect(PIN_ICONS).toEqual({});
+  it('has a glyph for every Feat in the catalogue, one per category, and the coin for the Old Coin', () => {
+    expect(Object.keys(PIN_ICONS).sort()).toEqual(FEATS.map((feat) => feat.id).sort());
+    for (const feat of FEATS) {
+      expect(PIN_ICONS[feat.id]).toBe(
+        feat.id === OLD_COIN_ID ? COIN_GLYPH : FEAT_GLYPHS[feat.category],
+      );
+    }
+    expect(PIN_ICONS[OLD_COIN_ID]).toBe(COIN_GLYPH);
+  });
+
+  it('draws pinned Feats of the catalogue by default and ignores a pin it does not know', () => {
     const plain = renderBadge(RANKED, { login: 'octo-cat' });
-    expect(renderBadge(RANKED, { login: 'octo-cat', pins: ['first_blood', 'mentor'] })).toBe(plain);
+    const pinned = renderBadge(RANKED, {
+      login: 'octo-cat',
+      pins: ['surgeon', 'not-a-feat', 'goblin-slayer'],
+    });
+    expect(parseXml(pinned).elements.filter((element) => element === 'path')).toHaveLength(2);
+    expect(pinned).toContain(FEAT_GLYPHS.craft);
+    expect(pinned).toContain(FEAT_GLYPHS.world);
+    expect(pinned).not.toContain('not-a-feat');
+    expect(renderBadge(RANKED, { login: 'octo-cat', pins: ['not-a-feat'] })).toBe(plain);
+  });
+
+  it('draws the Old Coin after the pins once found, and only once if it is pinned as well', () => {
+    const coin = renderBadge(RANKED, { coin: true });
+    expect(coin).toContain(COIN_GLYPH);
+    const three = renderBadge(RANKED, {
+      pins: ['surgeon', 'goblin-slayer', 'mentor'],
+      coin: true,
+    });
+    // Three pins and the coin.
+    expect(parseXml(three).elements.filter((element) => element === 'path')).toHaveLength(4);
+    const pinnedCoin = renderBadge(RANKED, { pins: [OLD_COIN_ID, 'surgeon'], coin: true });
+    expect(pinnedCoin.split(COIN_GLYPH).length - 1).toBe(1);
+    expect(parseXml(pinnedCoin).elements.filter((element) => element === 'path')).toHaveLength(2);
+    // No coin flag, no coin; and never on the unranked badge.
+    expect(renderBadge(RANKED, {})).not.toContain(COIN_GLYPH);
+    expect(renderBadge(null, { coin: true })).toBe(renderBadge(null));
+  });
+
+  it('draws one glyph for a Feat pinned twice', () => {
+    const svg = renderBadge(RANKED, { pins: ['surgeon', 'surgeon'] });
+    expect(parseXml(svg).elements.filter((element) => element === 'path')).toHaveLength(1);
   });
 
   it('draws the known pins, at most three, and widens the badge to fit them', () => {
