@@ -10,6 +10,7 @@
  * installation is a TTL tombstone for that reason, and a failed delivery is "released" with an update.
  */
 import {
+  BatchWriteCommand,
   DeleteCommand,
   GetCommand,
   PutCommand,
@@ -41,6 +42,7 @@ import type {
 import type { Vocation } from './api-types';
 import {
   EVENT_SK_PREFIX,
+  GITHUB_LOGIN,
   deliveryKey,
   eventKey,
   inlineKey,
@@ -279,6 +281,30 @@ export interface InstallationItem {
   deleted: boolean;
 }
 
+/** What the badge reads from GSI1 (the projected attributes, nothing else). Values are as stored, unchecked. */
+export interface BadgeProfile {
+  id: number;
+  login: string;
+  level: number;
+  renown: number;
+  vocation: string;
+}
+
+/** What `Db#deleteUser` removed. */
+export interface DeletionReport {
+  /** Items under the player's `USER#` partition. */
+  userItems: number;
+  /** Items of `PR#` partitions the player was the only actor of. */
+  prItems: number;
+}
+
+/** DynamoDB takes at most 25 requests per BatchWriteItem. */
+const BATCH_WRITE_LIMIT = 25;
+/** Rounds of re-sending `UnprocessedItems` (throttled deletes) before a delete gives up. */
+const MAX_DELETE_ATTEMPTS = 8;
+/** PR partitions read at a time while looking for the records only the deleted player appears in. */
+const PR_READ_CONCURRENCY = 8;
+
 // ---------------------------------------------------------------------------------------------
 // Attribute helpers
 // ---------------------------------------------------------------------------------------------
@@ -320,6 +346,49 @@ function clean<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** A copy of a stored value in JSON terms: DynamoDB sets become sorted arrays, so `JSON.stringify` keeps them. */
+function plain(value: unknown): unknown {
+  if (value instanceof Set) {
+    return [...(value as Set<number | string>)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
+  if (Array.isArray(value)) {
+    return value.map(plain);
+  }
+  if (isPlainRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([name, entry]) => [name, plain(entry)]));
+  }
+  return value;
+}
+
+function keyOf(item: Attrs): Key {
+  return { PK: String(item.PK), SK: String(item.SK) };
+}
+
+/**
+ * True when `userId` is the only actor a PR partition refers to: the author, the merger, every reviewer and
+ * every inline commenter (Requirement 13.2). An attribute that is missing or not a number counts as an
+ * unknown actor, so a record this cannot read is kept rather than deleted.
+ */
+function referencesOnly(items: readonly Attrs[], userId: number): boolean {
+  let referenced = 0;
+  for (const item of items) {
+    const sk = String(item.SK);
+    const actors =
+      sk === 'META'
+        ? [item.author_id, ...(item.merged_by_id === undefined ? [] : [item.merged_by_id])]
+        : sk.startsWith('REVIEW#') || sk.startsWith('INLINE#')
+          ? [item.reviewer_id]
+          : [];
+    for (const id of actors) {
+      if (id !== userId) {
+        return false;
+      }
+      referenced += 1;
+    }
+  }
+  return referenced > 0;
+}
+
 function numberList(value: unknown): number[] {
   const entries = value instanceof Set ? [...(value as Set<unknown>)] : [];
   return entries
@@ -333,8 +402,6 @@ const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T[\d:.]{8,12}(?:Z|[+-]\d{2}:\d{2})$/;
 function isoOrUndefined(value: string | null): string | undefined {
   return value !== null && ISO_LIKE.test(value) ? value : undefined;
 }
-
-const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 const SKILL_ATTRIBUTE: Readonly<Record<Skill, string>> = {
   smithing: 'xp_smithing',
@@ -636,6 +703,9 @@ export class Db {
   constructor(
     private readonly client: DocClient,
     private readonly tableName: string,
+    /** Waits between rounds of re-sent deletes; replaced in tests. */
+    private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((done) => setTimeout(done, ms)),
   ) {}
 
   // ----- the two write choke points (schema guard) -----
@@ -889,6 +959,123 @@ export class Db {
       }
       startKey = output.LastEvaluatedKey;
     } while (startKey);
+  }
+
+  /**
+   * The badge's player for a login, read from GSI1 (`LOGIN#<lower-cased login>`), which projects exactly
+   * login, level, XP, Renown and Vocation (template.yaml). Null when nobody has signed in with that login.
+   * A login can sit on two profiles only after a GitHub rename; the newer account is the likelier holder.
+   */
+  async findBadgeByLogin(login: string): Promise<BadgeProfile | null> {
+    if (!GITHUB_LOGIN.test(login)) {
+      return null;
+    }
+    const output = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: 'GSI1',
+        KeyConditionExpression: '#pk = :pk',
+        ExpressionAttributeNames: { '#pk': 'GSI1PK' },
+        ExpressionAttributeValues: { ':pk': `LOGIN#${login.toLowerCase()}` },
+      }),
+    );
+    const players = ((output.Items ?? []) as Attrs[])
+      .map((item) => ({
+        id: Number(String(item.PK).slice('USER#'.length)),
+        login: str(item, 'login') ?? login,
+        level: num(item, 'level', 1),
+        renown: num(item, 'renown', 0),
+        vocation: str(item, 'vocation') ?? 'Journeyman',
+      }))
+      .filter((player) => Number.isSafeInteger(player.id));
+    return players.reduce<BadgeProfile | null>(
+      (best, player) => (best === null || player.id > best.id ? player : best),
+      null,
+    );
+  }
+
+  // ----- export and deletion (Requirement 13) -----
+
+  /**
+   * Every item under the player's `USER#` partition, paginated, as stored: raw attribute names, sets as
+   * sorted arrays, in sort-key order (profile, Combat Log, weeks and the rest). Eventually consistent: an
+   * export is a snapshot and costs half the read units.
+   */
+  async listUserItems(userId: number): Promise<Record<string, unknown>[]> {
+    return (await this.queryAll(userPk(userId), false)).map((item) => plain(item) as Attrs);
+  }
+
+  /**
+   * Delete everything stored about a player (Requirement 13.2): the `PR#` records they are the only actor
+   * of, then every `USER#` item. All deletes are BatchWriteItem in chunks of 25 (the `api` role has it; the
+   * `ingest` role never deletes).
+   *
+   * The order makes a failed run repeatable. The PR records are found through the player's Combat Log rows
+   * (`repo_id` and `pr_number`), so they go first; the profile goes last, so while it exists the player can
+   * sign in again and repeat the delete. A final pass removes anything written in between.
+   *
+   * Not deleted: a `PR#` record with another human on it (they are a participant too, and the record is a
+   * shared fact), and records whose Combat Log rows have already expired (90 days).
+   */
+  async deleteUser(userId: number): Promise<DeletionReport> {
+    const partition = userPk(userId);
+    const items = await this.queryAll(partition, true);
+    const prKeys = await this.soleOwnedPrKeys(userId, items);
+    await this.deleteKeys(prKeys);
+
+    const keys = items.map(keyOf);
+    await this.deleteKeys(keys.filter((key) => key.SK !== 'PROFILE'));
+    await this.deleteKeys(keys.filter((key) => key.SK === 'PROFILE'));
+    const late = (await this.queryAll(partition, true)).map(keyOf);
+    await this.deleteKeys(late);
+    return { userItems: keys.length + late.length, prItems: prKeys.length };
+  }
+
+  /** Keys of every item of the `PR#` partitions the player's Combat Log rows point at and nobody else is on. */
+  private async soleOwnedPrKeys(userId: number, userItems: readonly Attrs[]): Promise<Key[]> {
+    const partitions = new Set<string>();
+    for (const item of userItems) {
+      if (String(item.SK).startsWith(EVENT_SK_PREFIX)) {
+        const repoId = item.repo_id;
+        const number = item.pr_number;
+        if (typeof repoId === 'number' && typeof number === 'number') {
+          partitions.add(prPk(repoId, number));
+        }
+      }
+    }
+    const keys: Key[] = [];
+    const queue = [...partitions];
+    for (let start = 0; start < queue.length; start += PR_READ_CONCURRENCY) {
+      const batch = queue.slice(start, start + PR_READ_CONCURRENCY);
+      const read = await Promise.all(batch.map((partition) => this.queryAll(partition, true)));
+      for (const prItems of read) {
+        if (referencesOnly(prItems, userId)) {
+          keys.push(...prItems.map(keyOf));
+        }
+      }
+    }
+    return keys;
+  }
+
+  /** Delete items by key, 25 per BatchWriteItem, re-sending whatever DynamoDB reports as unprocessed. */
+  private async deleteKeys(keys: readonly Key[]): Promise<void> {
+    for (let start = 0; start < keys.length; start += BATCH_WRITE_LIMIT) {
+      let pending = keys
+        .slice(start, start + BATCH_WRITE_LIMIT)
+        .map((key) => ({ DeleteRequest: { Key: key } }));
+      for (let attempt = 0; pending.length > 0; attempt += 1) {
+        if (attempt >= MAX_DELETE_ATTEMPTS) {
+          throw new Error('BatchWriteItem left deletes unprocessed');
+        }
+        if (attempt > 0) {
+          await this.sleep(Math.min(100 * 2 ** (attempt - 1), 2000));
+        }
+        const output = await this.client.send(
+          new BatchWriteCommand({ RequestItems: { [this.tableName]: pending } }),
+        );
+        pending = (output.UnprocessedItems?.[this.tableName] ?? []) as typeof pending;
+      }
+    }
   }
 
   // ----- Combat Log: USER#<id> / EVT#<ts>#<delivery> -----

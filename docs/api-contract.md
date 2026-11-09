@@ -75,9 +75,9 @@ Served from `MeResponse.kills` and `firstSeen`; no extra route.
 
 ## Badge, export, delete (task 18)
 
-- `GET /badge/:login.svg` → `image/svg+xml`, no auth, no Origin check, `Cache-Control: public, max-age=21600`.
-- `GET /export` → `application/json` `{ exportedAt, profile, events, weeks, feats, expeditions, jobs }` (all the user's items, raw attribute names).
-- `POST /delete` `{ requestId, confirmLogin: string }` → 204 when `confirmLogin` equals the user's login (case-insensitive), else 400 `confirm_mismatch`.
+- `GET /badge/{login}.svg` → `image/svg+xml; charset=utf-8`, 20 px tall, "mergescape" on the left and `Lv 41 Warden · Renown 17` on the right. No auth and no Origin check. `Cache-Control: public, max-age=21600`, also for the neutral `unranked` badge served for an unknown or malformed login (the login is never echoed). Only `GET` and `HEAD`; any other path under `/badge/` is a 404. Served through CloudFront; level, Vocation and Renown are read from GSI1 and nothing else is.
+- `GET /export` → `application/json` `{ exportedAt, profile, events, weeks, feats, expeditions, jobs }` (every item under the user's `USER#` partition, raw attribute names, DynamoDB sets as arrays). `Content-Disposition: attachment; filename="mergescape-<login>.json"`. Sent gzipped (`Content-Encoding: gzip`) when the request accepts it; an export still over 4 MiB is a 413 `export_too_large`. An item of a kind the export does not know yet appears under an extra `other` key, so nothing is ever left out. 404 `no_profile` without a profile.
+- `POST /delete` `{ requestId, confirmLogin: string }` → 204 when `confirmLogin` equals the user's login (case-insensitive), else 400 `confirm_mismatch`. Deletes every `USER#` item and every `PR#` record whose only actor (author, merger, reviewers, inline commenters) is the user, found through the user's Combat Log rows. The next sign-in creates a fresh level-1 profile. Repeating a delete that succeeded (no profile left) also answers 204. If it fails part-way the profile is still there, so the same request can be sent again.
 
 ## Client behaviour notes
 

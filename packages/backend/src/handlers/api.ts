@@ -15,6 +15,9 @@
  * | POST /shop/sell         | yes          | bearer | sell a held Charm for half its price            |
  * | POST /shrine/remove     | yes          | bearer | remove a Pledge from the deck                   |
  * | POST /pledges/play      | yes          | bearer | play a Pledge from the hand                     |
+ * | GET /export             | yes          | bearer | every item under the player's USER# partition   |
+ * | POST /delete            | yes          | bearer | delete the player's data (Requirement 13.2)     |
+ * | GET /badge/{login}.svg  | no           | none   | the README badge, public, cached six hours      |
  *
  * Mutations take `{ "requestId": "<client uuid>", ... }`, answer `{ me, week }` and are idempotent per
  * request id (mutations.ts). A typed shop or Pledge error is a 409 with its code; bad input is a 400.
@@ -23,6 +26,8 @@
  * The same Lambda also receives the weekly EventBridge input `{"action":"rollover"}` (see `rollover.ts`).
  */
 import { randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import { BADGE_CACHE_CONTROL, BADGE_CONTENT_TYPE, renderBadge } from '../badge';
 import type { Config } from '../config';
 import type { Db } from '../db';
 import { authorizeUrl, SignInError, signInWithCode } from '../github';
@@ -30,6 +35,7 @@ import type { FetchLike } from '../github';
 import { header, json, rawBody, redirect } from '../http';
 import type { FunctionUrlEvent, FunctionUrlResult } from '../http';
 import { signSessionToken, verifySessionToken } from '../jwt';
+import { GITHUB_LOGIN } from '../keys';
 import type { Logger } from '../log';
 import { getRuntime } from '../runtime';
 import { isRolloverEvent, runRollover } from '../rollover';
@@ -63,9 +69,29 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const CONTENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const BUY_KINDS = ['charm', 'pack', 'voucher', 'legendary'] as const;
 
+/**
+ * The largest export body sent, gzipped when the client accepts it. A Function URL response is capped at
+ * 6 MB, base64 included, so 4 MiB of payload leaves room for the encoding.
+ */
+export const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
+
+/** `GET /badge/{login}.svg`: the login is one path segment; anything else under /badge/ is a 404. */
+const BADGE_PATH = /^\/badge\/([^/]+)\.svg$/;
+
 type Route =
-  | { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' }
-  | { kind: 'post'; handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' };
+  | { kind: 'get'; handler: 'me' | 'week' | 'log' | 'installations' | 'export' }
+  | { kind: 'post'; handler: 'buy' | 'pick' | 'reroll' | 'sell' | 'shrine' | 'play' | 'delete' };
+
+type MutationHandler = Exclude<Extract<Route, { kind: 'post' }>['handler'], 'delete'>;
+
+/** The sort-key prefix of each group of `USER#` items in the export; anything else goes to `other`. */
+const EXPORT_GROUPS = [
+  ['EVT#', 'events'],
+  ['WEEK#', 'weeks'],
+  ['FEAT#', 'feats'],
+  ['EXPEDITION#', 'expeditions'],
+  ['JOB#', 'jobs'],
+] as const;
 
 const ROUTES: Readonly<Record<string, Route>> = {
   '/me': { kind: 'get', handler: 'me' },
@@ -78,11 +104,13 @@ const ROUTES: Readonly<Record<string, Route>> = {
   '/shop/sell': { kind: 'post', handler: 'sell' },
   '/shrine/remove': { kind: 'post', handler: 'shrine' },
   '/pledges/play': { kind: 'post', handler: 'play' },
+  '/export': { kind: 'get', handler: 'export' },
+  '/delete': { kind: 'post', handler: 'delete' },
 };
 
 /** The request id and the typed request in a mutation body, or null when the body is not valid. */
 function parseMutation(
-  handler: Extract<Route, { kind: 'post' }>['handler'],
+  handler: MutationHandler,
   body: Record<string, unknown>,
 ): { requestId: string; request: MutationRequest } | null {
   const requestId = body.requestId;
@@ -250,25 +278,35 @@ export function createApiHandler(
       : json(404, { error: 'no_profile' });
   }
 
-  async function mutation(
-    userId: number,
+  /** The JSON object in a request body, or the 413 / 400 answer to send instead. */
+  function jsonBody(
     event: FunctionUrlEvent,
-    handler: Extract<Route, { kind: 'post' }>['handler'],
-  ): Promise<FunctionUrlResult> {
+  ): { body: Record<string, unknown> } | { refusal: FunctionUrlResult } {
     const raw = rawBody(event, MAX_REQUEST_BYTES);
     if (raw === 'too_large') {
-      return json(413, { error: 'payload_too_large' });
+      return { refusal: json(413, { error: 'payload_too_large' }) };
     }
     let body: unknown;
     try {
       body = JSON.parse(raw.toString('utf8'));
     } catch {
-      return json(400, { error: 'invalid_json' });
+      return { refusal: json(400, { error: 'invalid_json' }) };
     }
-    const parsed =
-      typeof body === 'object' && body !== null && !Array.isArray(body)
-        ? parseMutation(handler, body as Record<string, unknown>)
-        : null;
+    return typeof body === 'object' && body !== null && !Array.isArray(body)
+      ? { body: body as Record<string, unknown> }
+      : { refusal: json(400, { error: 'invalid_request' }) };
+  }
+
+  async function mutation(
+    userId: number,
+    event: FunctionUrlEvent,
+    handler: MutationHandler,
+  ): Promise<FunctionUrlResult> {
+    const read = jsonBody(event);
+    if ('refusal' in read) {
+      return read.refusal;
+    }
+    const parsed = parseMutation(handler, read.body);
     if (parsed === null) {
       return json(400, { error: 'invalid_request' });
     }
@@ -325,6 +363,118 @@ export function createApiHandler(
     return json(200, body);
   }
 
+  // ----- badge (public) -----
+
+  /**
+   * The README badge: no auth and no Origin check, because an `<img>` in someone's README sends neither.
+   * It reads GSI1 for level, Vocation and Renown and nothing else. An unknown or malformed login gets the
+   * neutral "unranked" badge with the same caching (Requirement 11.3) and is never echoed.
+   */
+  async function badge(login: string): Promise<FunctionUrlResult> {
+    const player = GITHUB_LOGIN.test(login) ? await db.findBadgeByLogin(login) : null;
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': BADGE_CONTENT_TYPE,
+        'cache-control': BADGE_CACHE_CONTROL,
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'none'; sandbox",
+      },
+      body: renderBadge(player, player ? { login: player.login } : {}),
+    };
+  }
+
+  // ----- export and deletion (Requirement 13) -----
+
+  /**
+   * Every item under the player's `USER#` partition, raw attribute names, grouped by kind. Gzipped when the
+   * client accepts it (browsers do), so a long history stays under the Function URL's 6 MB response cap.
+   */
+  async function exportData(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
+    const items = await db.listUserItems(userId);
+    const profile = items.find((item) => item.SK === 'PROFILE');
+    if (!profile) {
+      return json(404, { error: 'no_profile' });
+    }
+    const groups: Record<string, Record<string, unknown>[]> = {
+      events: [],
+      weeks: [],
+      feats: [],
+      expeditions: [],
+      jobs: [],
+    };
+    const other: Record<string, unknown>[] = [];
+    for (const item of items) {
+      const sk = String(item.SK);
+      const group = EXPORT_GROUPS.find(([prefix]) => sk.startsWith(prefix));
+      if (group) {
+        groups[group[1]]?.push(item);
+      } else if (sk !== 'PROFILE') {
+        other.push(item);
+      }
+    }
+    const text = JSON.stringify({
+      exportedAt: new Date(now()).toISOString(),
+      profile,
+      ...groups,
+      // Only present if a kind of item was added without teaching the export about it.
+      ...(other.length > 0 ? { other } : {}),
+    });
+    const login =
+      typeof profile.login === 'string' && GITHUB_LOGIN.test(profile.login)
+        ? profile.login
+        : 'player';
+    const headers = {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'content-disposition': `attachment; filename="mergescape-${login}.json"`,
+    };
+    const compress = /\bgzip\b/i.test(header(event, 'accept-encoding') ?? '');
+    const payload = compress ? gzipSync(text) : Buffer.from(text, 'utf8');
+    if (payload.length > MAX_EXPORT_BYTES) {
+      return json(413, { error: 'export_too_large' });
+    }
+    return compress
+      ? {
+          statusCode: 200,
+          headers: { ...headers, 'content-encoding': 'gzip' },
+          body: payload.toString('base64'),
+          isBase64Encoded: true,
+        }
+      : { statusCode: 200, headers, body: text };
+  }
+
+  /**
+   * `POST /delete { requestId, confirmLogin }`: 204 once everything is gone, 400 `confirm_mismatch` unless
+   * `confirmLogin` equals the player's login (case-insensitive). A player with no profile has nothing left to
+   * confirm against, so a repeat of a delete that succeeded answers 204 again (it also sweeps any item a
+   * concurrent webhook wrote after the profile went, which a new character would otherwise inherit).
+   */
+  async function deleteAccount(
+    userId: number,
+    event: FunctionUrlEvent,
+  ): Promise<FunctionUrlResult> {
+    const read = jsonBody(event);
+    if ('refusal' in read) {
+      return read.refusal;
+    }
+    const { requestId, confirmLogin } = read.body;
+    if (
+      typeof requestId !== 'string' ||
+      !REQUEST_ID.test(requestId) ||
+      typeof confirmLogin !== 'string' ||
+      confirmLogin.length > 100
+    ) {
+      return json(400, { error: 'invalid_request' });
+    }
+    const profile = await db.getProfile(userId, true);
+    if (profile && confirmLogin.toLowerCase() !== profile.login.toLowerCase()) {
+      return json(400, { error: 'confirm_mismatch' });
+    }
+    await db.deleteUser(userId);
+    return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+  }
+
   // ----- router -----
 
   return async (event) => {
@@ -336,6 +486,15 @@ export function createApiHandler(
       }
       if (method === 'GET' && path === '/auth/callback') {
         return await callback(event);
+      }
+
+      // The badge is public: a README's <img> sends no Origin and no token (Requirement 11).
+      if (path.startsWith('/badge/')) {
+        if (method !== 'GET' && method !== 'HEAD') {
+          return json(405, { error: 'method_not_allowed' }, { allow: 'GET, HEAD' });
+        }
+        const login = BADGE_PATH.exec(path)?.[1];
+        return login ? await badge(login) : json(404, { error: 'not_found' });
       }
 
       // Everything below is the client's API: it must come from the Pages origin (Requirement 12.3).
@@ -359,7 +518,9 @@ export function createApiHandler(
         return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
       }
       if (route.kind === 'post') {
-        return await mutation(userId, event, route.handler);
+        return route.handler === 'delete'
+          ? await deleteAccount(userId, event)
+          : await mutation(userId, event, route.handler);
       }
       switch (route.handler) {
         case 'me':
@@ -370,6 +531,8 @@ export function createApiHandler(
           return await combatLog(userId, event);
         case 'installations':
           return await installations(userId);
+        case 'export':
+          return await exportData(userId, event);
       }
     } catch (error) {
       log.error('api.failed', {}, error);

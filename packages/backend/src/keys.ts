@@ -7,6 +7,9 @@ export interface Key {
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
+/** A GitHub login: letters, digits and hyphens, at most 39 characters, not starting with a hyphen. */
+export const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
 /** Numeric GitHub ids and counters: non-negative safe integers only, so a key can never be injected. */
 export function assertId(value: number, what: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
