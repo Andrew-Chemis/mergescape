@@ -12,6 +12,7 @@ import {
   GEAR_TIER_LEVELS,
   INTEREST,
   MAX_CHARM_COPIES,
+  MOGUL_RULES,
   OVERCLOCK_ZONE_EXPONENT,
   PLEDGE_PLAY_WINDOW_DAYS,
   PLEDGE_RULES,
@@ -126,6 +127,37 @@ describe('constants match the spec tables', () => {
       mentor: { approvals: 2, powerBonus: 0.5 },
       tidy: { merges: 3, maxLoc: 150, bonusPoints: 200 },
       pairUp: { merges: 3, bonusPoints: 600 },
+    });
+  });
+
+  it('Moguls (design.md 6.2 as audited)', () => {
+    expect(MOGUL_RULES.rocketMan).toEqual({ deletionWeight: 2, netNegativePower: 1 });
+    expect(MOGUL_RULES.leatherJacket).toEqual({ powerPerMerge: 0.1, maxPower: 1.5 });
+    expect(MOGUL_RULES.turtleneck).toEqual({
+      smallMaxLoc: 100,
+      smallMultiplier: 3,
+      largeMinLoc: 400,
+      largeMultiplier: 0.5,
+      designReviewInlineComments: 1,
+      designReviewMultiplier: 2,
+    });
+    expect(MOGUL_RULES.hoodie).toEqual({
+      windowHours: 48,
+      fastMultiplier: 2,
+      slowMultiplier: 0.75,
+    });
+    expect(MOGUL_RULES.founder).toEqual({
+      pointsMultiplier: 0.5,
+      goldMultiplier: 4,
+      removalDay: 2,
+      returnDay: 4,
+      returnPower: 0.25,
+    });
+    expect(MOGUL_RULES.twoPizza).toEqual({
+      minReviewers: 2,
+      teamMultiplier: 2.5,
+      soloMultiplier: 0.25,
+      partyMultiplier: 3,
     });
   });
 });

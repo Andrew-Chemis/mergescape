@@ -349,6 +349,7 @@ export function evaluatePledges(
         factors.push({
           label: `Pledge: ${definition.name} x${definition.completionMultiplier}`,
           factor: definition.completionMultiplier,
+          target: 'all',
         });
       }
     }

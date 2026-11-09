@@ -267,9 +267,9 @@ export function riposteMultiplier(player: PlayerState): number {
 // Slots, stacking and selling (Requirements 9.1 and 8.4)
 // ---------------------------------------------------------------------------------------------
 
-/** Charm slots in use. */
+/** Charm slots in use, counting the one the Founder's Board is holding. */
 export function charmSlotsUsed(player: PlayerState): number {
-  return player.charms.length;
+  return player.charms.length + (player.moguls.benched === null ? 0 : 1);
 }
 
 export function freeCharmSlots(player: PlayerState): number {

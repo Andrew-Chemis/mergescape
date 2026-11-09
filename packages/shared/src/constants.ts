@@ -209,6 +209,51 @@ export const PLEDGE_RULES = {
   pairUp: { merges: 3, bonusPoints: 600 },
 } as const;
 
+/** Mogul modifiers (design.md 6.2 as audited in game-design.md 8.3). "Under" and "over" are strict. */
+export const MOGUL_RULES = {
+  rocketMan: {
+    /** Deletions count this many times toward size points. */
+    deletionWeight: 2,
+    /** Power on a merge with more deletions than additions. */
+    netNegativePower: 1,
+  },
+  leatherJacket: {
+    /** Power per successive reviewed merge this week, up to `maxPower`. */
+    powerPerMerge: 0.1,
+    maxPower: 1.5,
+  },
+  turtleneck: {
+    smallMaxLoc: 100,
+    smallMultiplier: 3,
+    largeMinLoc: 400,
+    largeMultiplier: 0.5,
+    /** An approval with exactly this many inline comments is a "design review". */
+    designReviewInlineComments: 1,
+    designReviewMultiplier: 2,
+  },
+  hoodie: {
+    /** A merge this many hours or fewer after the PR's first review scores `fastMultiplier`. */
+    windowHours: 48,
+    fastMultiplier: 2,
+    slowMultiplier: 0.75,
+  },
+  founder: {
+    pointsMultiplier: 0.5,
+    goldMultiplier: 4,
+    /** The Board removes a Charm this many days after Monday 00:00 UTC (Wednesday) ... */
+    removalDay: 2,
+    /** ... and returns it this many days after (Friday), with this much extra Power. */
+    returnDay: 4,
+    returnPower: 0.25,
+  },
+  twoPizza: {
+    minReviewers: 2,
+    teamMultiplier: 2.5,
+    soloMultiplier: 0.25,
+    partyMultiplier: 3,
+  },
+} as const;
+
 // ---------------------------------------------------------------------------------------------
 // Weekly run (design.md 6.1; requirements.md 6)
 // ---------------------------------------------------------------------------------------------

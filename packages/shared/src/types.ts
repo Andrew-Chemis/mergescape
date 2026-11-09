@@ -141,11 +141,27 @@ export interface FeatLoadout {
   powerBonus: number;
 }
 
+/** A Charm the Founder's Board has removed; it returns on Friday with +0.25 Power. */
+export interface BenchedCharm {
+  charm: Charm;
+  /** The week the Board took it. */
+  weekKey: string;
+}
+
 export interface MogulHook {
   /** This week's Mogul, or null when no run is active. */
   current: MogulId | null;
-  /** Shuffled bag of Moguls not yet seen in this cycle. */
+  /**
+   * Shuffled bag of the Moguls still to come in this cycle, in draw order, so `bag[0]` is next week's
+   * Mogul. After a draw the bag is never empty: it is refilled when the last Mogul of a cycle is drawn.
+   */
   bag: readonly MogulId[];
+  /** The Leather Jacket chain: successive reviewed merges since the last solo merge this week. */
+  chain: number;
+  /** The Charm the Founder's Board holds, if any. It keeps its slot while away. */
+  benched: BenchedCharm | null;
+  /** The week the Board last acted, so it acts once a week. */
+  boardWeek: string | null;
 }
 
 /** Week-scoped state of the Charms. Reset each Monday by `startRun`. */
@@ -181,6 +197,8 @@ export interface ReviewerCounters {
 export interface ReviewRecord {
   reviewerId: number;
   state: ReviewState;
+  /** ISO instant the review was submitted; the Hoodie reads the first one. Absent when unknown. */
+  submittedAt?: string | null;
 }
 
 export interface PlayerState {
@@ -413,6 +431,8 @@ export interface CounterUpdates {
   };
   /** The new `PlayerState.pledges` (progress and completions), when this event changed it. */
   pledges?: PledgeLoadout;
+  /** The new Leather Jacket chain (`PlayerState.moguls.chain`), when this event changed it. */
+  mogulChain?: number;
   /** Loaded Dice fired on this event: set `PlayerState.week.loadedDiceUsed`. */
   loadedDiceUsed?: true;
   /** The new lifetime scored merge count of one repository (`PlayerState.repoMerges`). */
@@ -425,6 +445,8 @@ export interface ScoreResult {
   /** Sum of the `points` breakdown lines. */
   points: number;
   power: number;
+  /** Multiplier on the gold earned from this event's points: 4 under the Founder, otherwise 1. */
+  goldMultiplier: number;
   zone: number;
   /** Character level used for Zone. */
   level: number;
@@ -469,6 +491,8 @@ export interface PowerContext {
 export interface PointsFactor {
   label: string;
   factor: number;
+  /** `all` multiplies every event term; `party` only the party-bonus term. */
+  target: 'all' | 'party';
 }
 
 /** A flat points bonus (a completed Pledge) added after the multipliers. */

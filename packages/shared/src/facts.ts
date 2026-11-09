@@ -50,6 +50,21 @@ export function mergeFacts(event: PRMergedEvent, pr: PRState): MergeFacts {
   };
 }
 
+/**
+ * Epoch milliseconds of the earliest review with a known time, or null. The epoch itself is the
+ * placeholder stored when a payload carried no time, so it counts as unknown.
+ */
+export function firstReviewTime(pr: PRState): number | null {
+  let earliest: number | null = null;
+  for (const review of pr.reviews) {
+    const time = review.submittedAt ? Date.parse(review.submittedAt) : Number.NaN;
+    if (time > 0 && (earliest === null || time < earliest)) {
+      earliest = time;
+    }
+  }
+  return earliest;
+}
+
 /** Hours from `from` to `to` (ISO instants); null when either is missing or unparseable. */
 export function hoursBetween(from: string | null, to: string | null): number | null {
   if (from === null || to === null) {

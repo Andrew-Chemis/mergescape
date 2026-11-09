@@ -1,6 +1,7 @@
 import { BASE_POWER, CHARM_RULES, POWER_CAP } from './constants';
 import { charmPowerLines, loadedDiceFires } from './charms';
 import { tidy } from './math';
+import { mogulPowerLines } from './moguls';
 import { pledgePower } from './pledges';
 import type { BreakdownLine, GameEvent, PlayerState, PowerContext, PRState } from './types';
 
@@ -25,8 +26,9 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
  * final negative "Power cap" line makes the lines sum to the capped Power.
  *
  * Without a context this is the unconditional baseline (what the Character sheet shows): Charms'
- * conditional Power and Defend's review-only bonus need an event. With a context:
+ * conditional Power, Defend's review-only bonus and the Mogul modifiers need an event. With a context:
  * - event-conditional Charms (Rubber Duck's extra, Lantern, Small Hands, Hot Potato, Grey Beard) apply;
+ * - the Rocket Man's and the Leather Jacket's Power lines apply when their Mogul is active;
  * - Loaded Dice, once a week, replaces the capped Power with 10 through a final positive line. This is the
  *   one way past the cap of 9, and the line makes the lines sum to exactly 10.
  */
@@ -45,6 +47,9 @@ export function powerBreakdown(player: PlayerState, ctx?: PowerContext): Breakdo
     if (value !== 0) {
       lines.push({ label, value, kind: 'power' });
     }
+  }
+  if (ctx !== undefined) {
+    lines.push(...mogulPowerLines(player, ctx));
   }
   const raw = powerOf(lines);
   if (raw > POWER_CAP) {

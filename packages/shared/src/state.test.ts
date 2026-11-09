@@ -28,7 +28,7 @@ describe('createPlayerState', () => {
       gear: { pieces: [], setBonus: 0 },
       pledges: { played: [], progress: {}, completed: [] },
       feats: { unlocked: [], powerBonus: 0 },
-      moguls: { current: null, bag: [] },
+      moguls: { current: null, bag: [], chain: 0, benched: null, boardWeek: null },
       week: { loadedDiceUsed: false },
       vouchers: [],
       deck: [

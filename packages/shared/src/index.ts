@@ -8,6 +8,7 @@ export * from './credit';
 export * from './d2table';
 export * from './facts';
 export * from './math';
+export * from './moguls';
 export * from './normalize';
 export * from './pledges';
 export * from './power';

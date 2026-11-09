@@ -12,6 +12,7 @@ import { actWindow, DAY_MS, utcDay } from './calendar';
 import { hasCharm, partyBonusPoints, riposteMultiplier } from './charms';
 import { levelFor } from './d2table';
 import { mergeFacts } from './facts';
+import { activeMogul, mogulFactors, mogulGoldMultiplier, mogulSizeLines } from './moguls';
 import { evaluatePledges } from './pledges';
 import { computePower, powerBreakdown, powerContext, powerOf } from './power';
 import { stateUpdates } from './progress';
@@ -20,6 +21,7 @@ import type {
   BreakdownLine,
   CounterUpdates,
   GameEvent,
+  MogulId,
   MonsterId,
   PlayerState,
   PRMergedEvent,
@@ -75,6 +77,8 @@ interface Term {
   points: number;
   /** Halved when the merge is a solo kill. */
   solo?: boolean;
+  /** The party-bonus term: the one Mogul factors with target `party` touch. */
+  party?: boolean;
 }
 
 interface Scored {
@@ -195,16 +199,26 @@ function scoreOpened(event: PROpenedEvent, player: PlayerState, pr: PRState, now
   };
 }
 
-function scoreMerged(event: PRMergedEvent, player: PlayerState, pr: PRState, now: number): Outcome {
+function scoreMerged(
+  event: PRMergedEvent,
+  player: PlayerState,
+  pr: PRState,
+  now: number,
+  mogul: MogulId | null,
+): Outcome {
   if (!event.pr.merged) {
     return skipped('not_scoring');
   }
   const facts = mergeFacts(event, pr);
-  const size = sizePoints(facts.lines);
+  const sized = mogulSizeLines(mogul, facts.additions, facts.deletions);
+  const size = sizePoints(sized.lines);
 
   const terms: Term[] = [{ label: 'PR merged', points: POINTS.merged, solo: true }];
   if (size > 0) {
-    terms.push({ label: `Size (log-scaled, ${facts.lines} lines)`, points: size, solo: true });
+    const label = sized.weighted
+      ? `Size (log-scaled, ${sized.lines} lines, deletions count double)`
+      : `Size (log-scaled, ${sized.lines} lines)`;
+    terms.push({ label, points: size, solo: true });
   }
   const supplies: Partial<Supplies> = {
     ore: SUPPLY_DROPS.mergeOreBase + sizeTier(facts.lines),
@@ -219,6 +233,7 @@ function scoreMerged(event: PRMergedEvent, player: PlayerState, pr: PRState, now
           : 'Reviewed by another human',
       points: partyPoints,
       solo: true,
+      party: true,
     });
     supplies.provisions = SUPPLY_DROPS.partyProvisions;
   }
@@ -416,7 +431,13 @@ function scoreStreak(event: WeeklyStreakEvent, player: PlayerState): Outcome {
 }
 
 /** Route an event to its handler after the exclusions that apply to every event. */
-function classify(event: GameEvent, player: PlayerState, pr: PRState, now: number): Outcome {
+function classify(
+  event: GameEvent,
+  player: PlayerState,
+  pr: PRState,
+  now: number,
+  mogul: MogulId | null,
+): Outcome {
   if (event.kind === 'pr_synchronized') {
     // Counted for the Flaky Test Wraith and never scored, whoever pushed.
     return skipped('not_scoring', { player: {}, pr: { syncCount: pr.syncCount + 1 } });
@@ -437,7 +458,7 @@ function classify(event: GameEvent, player: PlayerState, pr: PRState, now: numbe
     case 'pr_opened':
       return scoreOpened(event, player, pr, now);
     case 'pr_merged':
-      return scoreMerged(event, player, pr, now);
+      return scoreMerged(event, player, pr, now, mogul);
     case 'review_submitted':
       return event.actor.id === event.pr.author.id
         ? skipped('own_pr')
@@ -484,7 +505,10 @@ export function score(
   pr: PRState,
   now: number,
 ): ScoreResult {
-  const outcome = classify(event, player, pr, now);
+  // The Mogul whose modifier applies to this event (none for the weekly streak, and outside the Boss
+  // window for the Moguls that only take effect then).
+  const mogul = activeMogul(player, event, now);
+  const outcome = classify(event, player, pr, now, mogul);
   const level = levelFor(player.xp);
   const zone = zoneFor(level, player.zoneExponent);
 
@@ -493,6 +517,7 @@ export function score(
       skip: outcome.skip,
       points: 0,
       power: computePower(player),
+      goldMultiplier: 1,
       zone,
       level,
       xp: 0,
@@ -505,15 +530,16 @@ export function score(
     };
   }
 
-  // Power for this event: Charms and their conditions, gear, Pledges and Feats.
+  // Power for this event: Charms and their conditions, gear, Pledges, Feats and the Mogul's Power lines.
   const ctx = powerContext(event, pr, now);
   const powerLines = powerBreakdown(player, ctx);
   const power = powerOf(powerLines);
 
   // Multipliers: every point of a PR is halved off the default branch; merge, size and party points
-  // are also halved on a solo kill; a completed Big Game Hunter adds its factor.
+  // are also halved on a solo kill; the Mogul and a completed Big Game Hunter add their own factors.
   // Each term is floored so the breakdown lines add up to `points`.
   const pledge = evaluatePledges(player, event, pr);
+  const factors = [...mogulFactors(mogul, event, pr), ...pledge.factors];
   const offDefaultBranch = 'pr' in event && !event.pr.baseRefIsDefault;
   const breakdown: BreakdownLine[] = [];
   let points = 0;
@@ -528,9 +554,11 @@ export function score(
       multiplier *= NON_DEFAULT_BRANCH_MULTIPLIER;
       modifiers.push(`non-default branch x${NON_DEFAULT_BRANCH_MULTIPLIER}`);
     }
-    for (const factor of pledge.factors) {
-      multiplier *= factor.factor;
-      modifiers.push(factor.label);
+    for (const factor of factors) {
+      if (factor.target === 'all' || term.party) {
+        multiplier *= factor.factor;
+        modifiers.push(factor.label);
+      }
     }
     const value = Math.floor(term.points * multiplier);
     points += value;
@@ -547,7 +575,7 @@ export function score(
   const today = utcDay(now);
   const counterUpdates = Object.assign(
     outcome.counters,
-    stateUpdates({ player, event, pledge, ctx }),
+    stateUpdates({ player, event, pr, mogul, pledge, ctx }),
   );
   const supplies = { ...zeroSupplies(), ...outcome.supplies };
   let dailyPoints = 0;
@@ -578,6 +606,7 @@ export function score(
     skip: null,
     points,
     power,
+    goldMultiplier: mogulGoldMultiplier(mogul),
     zone,
     level,
     xp,

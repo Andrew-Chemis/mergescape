@@ -18,7 +18,7 @@ export function createPlayerState(id: number): PlayerState {
     gear: { pieces: [], setBonus: 0 },
     pledges: { played: [], progress: {}, completed: [] },
     feats: { unlocked: [], powerBonus: 0 },
-    moguls: { current: null, bag: [] },
+    moguls: { current: null, bag: [], chain: 0, benched: null, boardWeek: null },
     week: { loadedDiceUsed: false },
     vouchers: [],
     deck: starterDeck(),
@@ -43,7 +43,7 @@ export function createPRState(facts: PullRequestFacts): PRState {
 
 /**
  * Apply a ScoreResult to the states it was computed from: XP, skill XP and every
- * counter update (including Pledge progress, Loaded Dice and repository merge
+ * counter update (including Pledge progress, the Leather Jacket chain, Loaded Dice and repository merge
  * counts). Pure; the backend does the same with DynamoDB writes, tests and previews use this.
  */
 export function applyScoreResult(
@@ -62,10 +62,11 @@ export function applyScoreResult(
     skillXp,
     counters: { ...player.counters, ...playerUpdates },
   };
-  const { pledges, loadedDiceUsed, repoMerges } = result.counterUpdates;
+  const { pledges, mogulChain, loadedDiceUsed, repoMerges } = result.counterUpdates;
   const nextPlayer: PlayerState = {
     ...earned,
     pledges: pledges ?? earned.pledges,
+    moguls: mogulChain === undefined ? earned.moguls : { ...earned.moguls, chain: mogulChain },
     week: loadedDiceUsed ? { ...earned.week, loadedDiceUsed: true } : earned.week,
     repoMerges: repoMerges
       ? { ...earned.repoMerges, [String(repoMerges.repoId)]: repoMerges.count }

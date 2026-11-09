@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventLines, hoursBetween, mergeFacts } from './facts';
+import { eventLines, firstReviewTime, hoursBetween, mergeFacts } from './facts';
 import {
   AUTHOR_ID,
   facts,
@@ -67,6 +67,38 @@ describe('mergeFacts', () => {
       deletions: 12,
       lines: 42,
     });
+  });
+});
+
+describe('firstReviewTime', () => {
+  const review = (submittedAt: string | null | undefined) => ({
+    reviewerId: REVIEWER_ID,
+    state: 'APPROVED' as const,
+    ...(submittedAt === undefined ? {} : { submittedAt }),
+  });
+
+  it('is the earliest usable review time', () => {
+    const pr = prStateFor(facts(), {
+      reviews: [
+        review('2026-11-09T10:00:00Z'),
+        review('2026-11-09T08:00:00Z'),
+        review('2026-11-09T09:00:00Z'),
+      ],
+    });
+    expect(firstReviewTime(pr)).toBe(Date.parse('2026-11-09T08:00:00Z'));
+  });
+
+  it('ignores missing, unparseable and epoch placeholder times', () => {
+    const pr = prStateFor(facts(), {
+      reviews: [
+        review(undefined),
+        review(null),
+        review('nonsense'),
+        review('1970-01-01T00:00:00Z'),
+      ],
+    });
+    expect(firstReviewTime(pr)).toBeNull();
+    expect(firstReviewTime(prStateFor(facts()))).toBeNull();
   });
 });
 
