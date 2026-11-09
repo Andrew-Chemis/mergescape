@@ -4,10 +4,16 @@ packages:
   - packages/client
   - packages/infra
 
+# Install scripts are denied unless listed here. esbuild works without its optional postinstall
+# (used by `sam build` for the Lambda bundles).
+allowBuilds:
+  esbuild: false
+
 # Single source of truth for pinned tool versions. Packages reference these as `catalog:`.
 catalog:
   '@eslint/js': 10.0.1
   '@sveltejs/vite-plugin-svelte': 7.3.1
+  esbuild: 0.28.2
   eslint: 10.14.0
   prettier: 3.9.10
   svelte: 5.57.3
@@ -16,3 +22,4 @@ catalog:
   typescript-eslint: 8.72.1
   vite: 8.3.6
   vitest: 5.1.0
+  yaml: 2.9.1

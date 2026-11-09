@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "validate": "node scripts/validate.mjs",
+    "sam:build": "sam build",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
-    "typescript": "catalog:"
+    "esbuild": "catalog:",
+    "typescript": "catalog:",
+    "yaml": "catalog:"
   }
 }

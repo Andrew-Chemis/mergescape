@@ -1,5 +1,366 @@
-# Placeholder. The SAM stack (DynamoDB table, ingest and api functions, Function URLs,
-# CloudFront, EventBridge rollover, budgets) is written in task 5.
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Mergescape (placeholder, no resources yet)
+Description: >-
+  Mergescape: webhook ingest and API Lambdas behind Function URLs, one provisioned DynamoDB table,
+  a CloudFront distribution for badges, a weekly rollover schedule and cost budgets.
+
+Parameters:
+  PagesOrigin:
+    Type: String
+    Description: >-
+      Origin of the GitHub Pages site that hosts the client, for example https://owner.github.io
+      (scheme and host only, no path or trailing slash). Used for CORS and the Origin check.
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'
+    ConstraintDescription: An https origin with no path and no trailing slash.
+  SsmPrefix:
+    Type: String
+    Default: /mergescape
+    Description: >-
+      SSM Parameter Store prefix under which the four SecureString secrets live
+      (github-app-private-key, github-webhook-secret, github-oauth-client-secret, jwt-key).
+    AllowedPattern: '^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$'
+    ConstraintDescription: Starts with a slash and does not end with one.
+  Stage:
+    Type: String
+    Default: prod
+    Description: Deployment stage. Appears in resource names and the STAGE environment variable.
+    AllowedPattern: '^[a-z][a-z0-9-]{0,15}$'
+    ConstraintDescription: Lowercase letters, digits and hyphens, at most 16 characters.
+  AlertEmail:
+    Type: String
+    Description: Address that receives the AWS Budgets e-mail alerts (no SNS topic is created).
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be an e-mail address.
+
+Conditions:
+  IsProd: !Equals [!Ref Stage, prod]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    MemorySize: 256
+    Timeout: 10
+    Tracing: Disabled
+    # CodeUri is packages/, which deliberately has no package.json. With one, SAM would run
+    # `npm install` there, and npm cannot read pnpm's `catalog:` and `workspace:` specifiers. Without
+    # one, SAM runs esbuild in place and esbuild follows the pnpm workspace links on disk.
+    # Entry points in each function's Metadata are therefore relative to packages/.
+    CodeUri: ../
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref Table
+        SSM_PREFIX: !Ref SsmPrefix
+        PAGES_ORIGIN: !Ref PagesOrigin
+        STAGE: !Ref Stage
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Data
+  # ---------------------------------------------------------------------------
+  Table:
+    Type: AWS::DynamoDB::Table
+    # Player data outlives the stack. Delete the table by hand when decommissioning.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !If [IsProd, mergescape, !Sub 'mergescape-${Stage}']
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+
+  # ---------------------------------------------------------------------------
+  # Logs (14-day retention; the functions write to these groups)
+  # ---------------------------------------------------------------------------
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/mergescape-${Stage}-ingest'
+      RetentionInDays: 14
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/mergescape-${Stage}-api'
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------------
+  # Functions
+  # ---------------------------------------------------------------------------
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - backend/src/handlers/ingest.ts
+        Minify: true
+        Sourcemap: false
+        Target: node22
+    Properties:
+      FunctionName: !Sub 'mergescape-${Stage}-ingest'
+      Description: Verifies GitHub webhook signatures, scores events and writes the results.
+      Handler: ingest.handler
+      ReservedConcurrentExecutions: 10
+      LoggingConfig:
+        LogGroup: !Ref IngestLogGroup
+      FunctionUrlConfig:
+        # Security is the HMAC signature check inside the handler.
+        AuthType: NONE
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: TableAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt Table.Arn
+                - !Sub '${Table.Arn}/index/GSI1'
+            - Sid: ReadSecrets
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/*'
+            # SecureString parameters use the AWS managed key alias/aws/ssm. Its key id is not
+            # known at template time, so the key ARN is a wildcard that the conditions narrow to
+            # that one key, used through SSM only.
+            - Sid: DecryptSecrets
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+              Condition:
+                ForAnyValue:StringEquals:
+                  kms:ResourceAliases: alias/aws/ssm
+                StringEquals:
+                  kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - backend/src/handlers/api.ts
+        Minify: true
+        Sourcemap: false
+        Target: node22
+    Properties:
+      FunctionName: !Sub 'mergescape-${Stage}-api'
+      Description: OAuth callback, JWT-protected game API, badge SVG and the weekly rollover.
+      Handler: api.handler
+      ReservedConcurrentExecutions: 5
+      LoggingConfig:
+        LogGroup: !Ref ApiLogGroup
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - !Ref PagesOrigin
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - authorization
+            - content-type
+          MaxAge: 600
+      Events:
+        Rollover:
+          Type: Schedule
+          Properties:
+            Description: Monday 00:05 UTC weekly run rollover
+            Schedule: cron(5 0 ? * MON *)
+            Enabled: true
+            Input: '{"action":"rollover"}'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: TableAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+              Resource:
+                - !GetAtt Table.Arn
+                - !Sub '${Table.Arn}/index/GSI1'
+            - Sid: ReadSecrets
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/*'
+            # Same reasoning as on IngestFunction.
+            - Sid: DecryptSecrets
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+              Condition:
+                ForAnyValue:StringEquals:
+                  kms:ResourceAliases: alias/aws/ssm
+                StringEquals:
+                  kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+  # ---------------------------------------------------------------------------
+  # CloudFront in front of the api Function URL, for /badge/* only
+  # ---------------------------------------------------------------------------
+  BadgeCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-${AWS::Region}-badge'
+        Comment: Badges are cached for 6 hours unless the origin says otherwise.
+        MinTTL: 0
+        DefaultTTL: 21600
+        MaxTTL: 86400
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig:
+            CookieBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  # Anything outside /badge/* gets a 404 at the edge and never reaches the api.
+  BadgeNotFoundFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-${AWS::Region}-not-found'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Return 404 for every path that is not a badge.
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler() {
+          return { statusCode: 404, statusDescription: 'Not Found' };
+        }
+
+  BadgeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'Mergescape ${Stage} badges'
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: api
+            # https://<id>.lambda-url.<region>.on.aws/ -> <id>.lambda-url.<region>.on.aws
+            DomainName: !Select [2, !Split ['/', !GetAtt ApiFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        DefaultCacheBehavior:
+          TargetOriginId: api
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt BadgeNotFoundFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /badge/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: !Ref BadgeCachePolicy
+            Compress: true
+
+  # ---------------------------------------------------------------------------
+  # Cost guards. Budgets cover the whole AWS account, not just this stack.
+  # ---------------------------------------------------------------------------
+  Budget1Usd:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'mergescape-${Stage}-monthly-1-usd'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 1
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+  Budget10Usd:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'mergescape-${Stage}-monthly-10-usd'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 10
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  TableName:
+    Description: DynamoDB table name.
+    Value: !Ref Table
+  IngestUrl:
+    Description: Function URL of the ingest Lambda. Set it as the GitHub App webhook URL.
+    Value: !GetAtt IngestFunctionUrl.FunctionUrl
+  ApiUrl:
+    Description: Function URL of the api Lambda. Used as VITE_API_ORIGIN for the client build.
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  BadgeDomain:
+    Description: CloudFront domain that serves /badge/{login}.svg.
+    Value: !GetAtt BadgeDistribution.DomainName
