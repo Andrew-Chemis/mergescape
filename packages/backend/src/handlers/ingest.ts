@@ -2,8 +2,11 @@
  * The `ingest` Lambda behind a Function URL (auth NONE): the HMAC signature is the only credential.
  *
  * Order of checks, each writing nothing on failure: method, size (413), signature (401), headers (400),
- * JSON (400); then the delivery is normalised and processed (`processDelivery`).
+ * JSON (400); then the delivery is normalised and processed (`processDelivery`). The delivery id header is not
+ * covered by the signature, so the delivery is deduplicated on the SHA-256 of the signed body as well: a
+ * captured body replayed under fresh GUIDs is the same body.
  */
+import { createHash } from 'node:crypto';
 import { normalize } from '@mergescape/shared';
 import type { Db } from '../db';
 import { header, json, rawBody } from '../http';
@@ -98,6 +101,7 @@ export function createIngestHandler(
         },
         deliveryId,
         events,
+        createHash('sha256').update(body).digest('hex'),
       );
       return json(200, { ok: true });
     } catch (error) {

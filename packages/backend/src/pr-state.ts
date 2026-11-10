@@ -11,12 +11,12 @@ import type { PRBundle } from './db';
  * @param bundle everything stored for the PR (an empty bundle for an unseen PR)
  * @param facts the PR facts on the event being scored; its size wins over the stored one
  * @param authorMerges lifetime merges of the PR's author when they are a player (the Mentor Pledge compares
- *   them to the reviewer's own); 0 for an author the game does not know
+ *   them to the reviewer's own); null for an author the game does not know
  */
 export function buildPRState(
   bundle: PRBundle,
   facts: PullRequestFacts,
-  authorMerges: number = 0,
+  authorMerges: number | null = null,
 ): PRState {
   const base = createPRState(facts);
   const meta = bundle.meta;
@@ -52,6 +52,10 @@ export function buildPRState(
     authorId: meta?.authorId ?? base.authorId,
     additions: facts.stats?.additions ?? meta?.additions ?? 0,
     deletions: facts.stats?.deletions ?? meta?.deletions ?? 0,
+    // The size is known when this event or the stored PR carries it; a review event that finds neither must
+    // not read the zeros above as a tiny PR.
+    sizeKnown:
+      facts.stats !== null || (meta !== null && meta.additions !== null && meta.deletions !== null),
     reviewRoundCount: meta?.reviewRoundCount ?? 0,
     syncCount: meta?.syncCount ?? 0,
     reviews,

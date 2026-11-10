@@ -70,7 +70,7 @@ Deliberately **not** requested: Contents, Issues, Discussions, Members, write an
 
 ### 3.3 Linking a player to events
 
-1. Player clicks **Sign in with GitHub** → App user-authorization flow (`/login/oauth/authorize` with the App's client id, `state` nonce stored server-side, code exchanged in Lambda). We store the numeric GitHub `user.id` and `login`, nothing else from the profile.
+1. Player clicks **Sign in with GitHub** → App user-authorization flow (`/login/oauth/authorize` with the App's client id, `state` a signed nonce-and-expiry token that is also bound to the browser by a cookie, so `/auth/login` needs no database write; code exchanged in Lambda). We store the numeric GitHub `user.id` and `login`, nothing else from the profile.
 2. Player installs the App on the repos they want counted (GitHub's install page; we deep-link to it after sign in).
 3. Every webhook carries `sender.id`, `pull_request.user.id`, `review.user.id`. An event credits a player only if that numeric id matches a signed-in player **and** the installation is one they can see (installation-to-user mapping stored on `installation` events, refreshed on login via `GET /user/installations`).
 
@@ -377,7 +377,7 @@ Navigation: left rail on desktop (Town, Log, Character, Map, Bestiary, Settings)
 
 * No installations yet → Town shows the Maintainer pointing at the install button.
 * Event for an un-linked user → silently dropped (counted in metrics, not shown).
-* Webhook replay / duplicate → idempotent on `X-GitHub-Delivery`.
+* Webhook replay / duplicate → idempotent on `X-GitHub-Delivery` and on the hash of the signed body; a delivery that failed half way is finished by its redelivery, never credited twice.
 * Private repo → monster shows "a private repo" unless you're logged in as owner.
 
 ---
@@ -419,8 +419,8 @@ Scheduled work (weekly run roll-over, auto-picks) runs as an EventBridge rule �
 | `USER#<gh_id>` | `FEAT#<feat_id>` | unlocked_at, unlocking event key, pinned(bool) |
 | `PR#<repo_id>#<number>` | `META` | PR metadata from 3.4 (shared across users) |
 | `INSTALL#<installation_id>` | `META` | account id, repo ids, suspended flag |
-| `DELIVERY#<X-GitHub-Delivery>` | — | TTL 7 days, idempotency guard |
-| `STATE#<nonce>` | — | OAuth state, TTL 10 min |
+| `DELIVERY#<X-GitHub-Delivery>` | — | TTL 7 days, idempotency guard: `status` (`processing` with a 30 s lease, or `done`) and the ledger of what the delivery decided to credit, so a redelivery finishes it. `DELIVERY#body-<sha256>` guards the signed body the same way |
+| `STATE#<nonce>` | — | an OAuth state that has been used (single use), TTL 10 min; the state itself is signed, not stored |
 
 GSI1: `GSI1PK=LOGIN#<login>` for badge lookups.
 
@@ -431,7 +431,8 @@ GSI1: `GSI1PK=LOGIN#<login>` for badge lookups.
 | Threat | Mitigation |
 |---|---|
 | Forged webhooks | Verify `X-Hub-Signature-256` HMAC with timing-safe compare before parsing; reject if absent. Secret ≥ 32 random bytes in SSM |
-| Replay | `X-GitHub-Delivery` idempotency item with TTL |
+| Replay | `X-GitHub-Delivery` idempotency item with TTL, plus one on the SHA-256 of the signed body (the delivery id is not covered by the signature, so a captured body cannot be replayed under fresh ids). A claim is a 30 s lease, so a timed-out delivery can be redelivered; every credit carries a commit marker, so a redelivery never scores twice |
+| Login CSRF / state replay | The OAuth `state` is an HMAC over a nonce and an expiry (key derived from the JWT key), bound to the browser by an `HttpOnly; Secure; SameSite=Lax` `__Host-` cookie, and recorded as used once GitHub has accepted the code. `/auth/login` writes nothing, so it cannot be used to exhaust the table's write capacity |
 | XP farming via fake repos | Opens capped/day; merges require a real merge event; solo merges ×0.5; the Two-Pizza Boss zeroes them; **leaderboards are out of v1** so there's no incentive to cheat yourself |
 | Bot inflation | `type: Bot` and `[bot]` logins excluded as actors; agent PRs merged by *you* still count as your merge (that's the point) |
 | Token theft | No GitHub tokens are stored for users at all. The App private key lives in SSM, read at cold start, never logged. Installation tokens (backfill only) are minted on demand and discarded |

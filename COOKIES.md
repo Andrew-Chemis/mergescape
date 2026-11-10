@@ -2,7 +2,7 @@
 
 _Last updated: 9 November 2026_
 
-**Mergescape sets no cookies.** It keeps three small items in your browser's local storage on this device, and nothing else. This page lists them, says how to clear them, explains what GitHub's own cookies do while you sign in, and describes the sound and analytics choices. The client shows the same page at `#/cookies`, and the two are kept in step. For everything else about your data, see [PRIVACY.md](PRIVACY.md).
+**Mergescape sets no tracking cookies.** It keeps three small items in your browser's local storage on this device, and nothing else. While you sign in, the game's server sets one strictly necessary cookie (`__Host-mergescape-oauth`) on its own address for at most ten minutes, to tie the sign-in that comes back from GitHub to the browser that started it; it holds a random token and nothing about you, and the server clears it when the sign-in finishes. This page lists them, says how to clear them, explains what GitHub's own cookies do while you sign in, and describes the sound and analytics choices. The client shows the same page at `#/cookies`, and the two are kept in step. For everything else about your data, see [PRIVACY.md](PRIVACY.md).
 
 ## What is stored on this device
 
@@ -14,7 +14,7 @@ Local storage is a small store that only this site can read. Unlike cookies, its
 | `mergescape.mogulSeen` | The number of the week for which the Mogul reveal last played, for example `2026-46`.                                | So that reloading the page does not replay the reveal.                                                                                           | By Clear local data.                                                                                    |
 | `mergescape.consent`   | Your choices, as `{ "analytics": false, "sound": false, "updatedAt": "..." }`: analytics on or off, sound on or off. | To remember what you chose. It is written only when you use a switch: the analytics switch on the Cookies page, or the sound switch in Settings. | By Clear local data.                                                                                    |
 
-All three are either needed for the game to work or record a choice you made, so there is no cookie banner. Nothing else is written to local storage, session storage, IndexedDB or cookies.
+All three are either needed for the game to work or record a choice you made, so there is no cookie banner. Nothing else is written to local storage, session storage, IndexedDB or cookies; the only cookie is the ten-minute sign-in one above, set by the server.
 
 ## How to clear them
 

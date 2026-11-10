@@ -3,7 +3,7 @@
  *
  * | Route                   | Origin check | Auth   | Purpose                                         |
  * |-------------------------|--------------|--------|-------------------------------------------------|
- * | GET /auth/login         | no           | none   | 302 to GitHub with a single-use `state`         |
+ * | GET /auth/login         | no           | none   | 302 to GitHub with a signed `state`, no write   |
  * | GET /auth/callback      | no           | none   | exchange code, upsert profile, 302 with a JWT   |
  * | GET /me                 | yes          | bearer | the player's profile and current run            |
  * | GET /week               | yes          | bearer | the current run: acts, Pledges, the shop        |
@@ -71,6 +71,13 @@ import { signSessionToken, verifySessionToken } from '../jwt';
 import type { Refusal } from '../idempotent';
 import { GITHUB_LOGIN } from '../keys';
 import type { Logger } from '../log';
+import {
+  clearedStateCookie,
+  hasStateCookie,
+  signState,
+  stateCookie,
+  verifyState,
+} from '../oauth-state';
 import { getRuntime } from '../runtime';
 import { isRolloverEvent, runRollover } from '../rollover';
 import type { RolloverEvent, RolloverResult } from '../rollover';
@@ -106,7 +113,6 @@ import {
 /** Combat Log rows per page. */
 export const LOG_PAGE_SIZE = 20;
 
-const STATE_FORMAT = /^[A-Za-z0-9_-]{20,128}$/;
 const CODE_FORMAT = /^[A-Za-z0-9_-]{1,200}$/;
 const BEARER = /^Bearer ([A-Za-z0-9._-]+)$/i;
 
@@ -392,7 +398,7 @@ export interface ApiDeps {
   fetch?: FetchLike;
   /** Seeds for a run started by a player's first request of a week (a random uint32 in production). */
   newSeed?: () => number;
-  /** A fresh unguessable token for the OAuth `state`. */
+  /** A fresh unguessable token for the nonce of the OAuth `state`. */
   nonce?: () => string;
   /** The seed of an expedition or Forge order a request starts (a random uint32 in production). */
   rollSeed?: () => number;
@@ -407,18 +413,33 @@ export function createApiHandler(
   const nonce = deps.nonce ?? (() => randomBytes(32).toString('base64url'));
   const clientUrl = `${config.pagesOrigin}${config.clientBasePath}`;
 
-  /** The browser is sent back to the client; the outcome is in the fragment so it never reaches a server. */
+  /**
+   * The browser is sent back to the client; the outcome is in the fragment so it never reaches a server. The
+   * sign-in is over, however it went, so the state cookie goes too.
+   */
   const toClient = (fragment: string): FunctionUrlResult =>
-    redirect(`${clientUrl}${fragment}`, { 'referrer-policy': 'no-referrer' });
+    redirect(`${clientUrl}${fragment}`, { 'referrer-policy': 'no-referrer' }, [
+      clearedStateCookie(),
+    ]);
 
   // ----- /auth/login -----
 
+  /**
+   * Anyone can call this, so it writes nothing: the `state` is signed (`oauth-state.ts`), and its nonce goes
+   * to the browser in a cookie that the callback must see again.
+   */
   async function login(): Promise<FunctionUrlResult> {
     try {
-      const clientId = await secrets.get('github-oauth-client-id');
-      const state = nonce();
-      await db.putOAuthState(state, now());
-      return redirect(authorizeUrl(clientId, state), { 'referrer-policy': 'no-referrer' });
+      const [clientId, key] = await Promise.all([
+        secrets.get('github-oauth-client-id'),
+        secrets.get('jwt-key'),
+      ]);
+      const value = nonce();
+      return redirect(
+        authorizeUrl(clientId, signState(key, value, now())),
+        { 'referrer-policy': 'no-referrer' },
+        [stateCookie(value)],
+      );
     } catch (error) {
       log.error('api.login_failed', {}, error);
       return toClient('#error=server_error');
@@ -430,9 +451,11 @@ export function createApiHandler(
   async function callback(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
     const params = event.queryStringParameters ?? {};
     try {
-      // Requirement 2.1: the state is single use and expires after ten minutes.
-      const state = params.state;
-      if (!state || !STATE_FORMAT.test(state) || !(await db.consumeOAuthState(state, now()))) {
+      // Requirement 2.1: the state is signed, expires after ten minutes and belongs to this browser (the
+      // cookie the login set). It is single use too, which is recorded once GitHub has accepted the code.
+      const jwtKey = await secrets.get('jwt-key');
+      const state = params.state ? verifyState(jwtKey, params.state, now()) : null;
+      if (!state || !hasStateCookie(event, state.nonce)) {
         return toClient('#error=invalid_state');
       }
       if (params.error) {
@@ -450,13 +473,16 @@ export function createApiHandler(
       ]);
       // The user token exists only inside this call (Requirement 2.2).
       const identity = await signInWithCode(fetchFn, { clientId, clientSecret, code });
+      if (!(await db.consumeOAuthState(state.nonce, state.expiresAtMs))) {
+        return toClient('#error=invalid_state');
+      }
       const profile = await db.upsertProfileOnLogin({
         id: identity.id,
         login: identity.login,
         installations: identity.installations,
         nowMs: now(),
       });
-      const token = await signSessionToken(await secrets.get('jwt-key'), profile.id, now());
+      const token = await signSessionToken(jwtKey, profile.id, now());
       return toClient(`#token=${token}`);
     } catch (error) {
       if (error instanceof SignInError) {

@@ -321,6 +321,8 @@ describe('buildPRState', () => {
       syncCount: 5,
       // The author's lifetime merges, for the Mentor Pledge; the Hoodie reads the review times.
       authorMerges: 14,
+      // The stored PR carries its size.
+      sizeKnown: true,
     });
     expect(state.reviews).toEqual([
       { reviewerId: 20, state: 'CHANGES_REQUESTED', submittedAt: 'a' },
@@ -341,13 +343,52 @@ describe('buildPRState', () => {
       additions: 0,
       deletions: 0,
       reviews: [],
-      authorMerges: 0,
+      // An author the game does not know has no merges to compare, which is not the same as none.
+      authorMerges: null,
+      // Neither the event nor a stored PR says how big it is: the zeros are placeholders.
+      sizeKnown: false,
     });
+    expect(buildPRState(empty, facts, 0)).toMatchObject({ authorMerges: 0 });
     const withStats = {
       ...facts,
       stats: { additions: 5, deletions: 6, changedFiles: 1, commits: 1 },
     };
-    expect(buildPRState(empty, withStats)).toMatchObject({ additions: 5, deletions: 6 });
+    expect(buildPRState(empty, withStats)).toMatchObject({
+      additions: 5,
+      deletions: 6,
+      sizeKnown: true,
+    });
+  });
+
+  it('knows the size only when the stored PR has both numbers', () => {
+    const stored = (additions: number | null, deletions: number | null): PRBundle => ({
+      meta: {
+        installationId: 1,
+        repoId: 2,
+        repoPrivate: false,
+        number: 3,
+        authorId: 10,
+        openedAt: null,
+        mergedAt: null,
+        closedAt: null,
+        merged: false,
+        mergedById: null,
+        additions,
+        deletions,
+        changedFiles: null,
+        commits: null,
+        reviewRoundCount: 0,
+        syncCount: 0,
+        draft: false,
+        baseRefIsDefault: true,
+      },
+      reviews: [],
+      inline: [],
+    });
+    expect(buildPRState(stored(3, 4), facts).sizeKnown).toBe(true);
+    expect(buildPRState(stored(3, null), facts).sizeKnown).toBe(false);
+    expect(buildPRState(stored(null, 4), facts).sizeKnown).toBe(false);
+    expect(buildPRState(stored(null, null), facts).sizeKnown).toBe(false);
   });
 });
 

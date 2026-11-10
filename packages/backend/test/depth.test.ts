@@ -608,6 +608,55 @@ describe('POST /expedition/send and /expedition/collect', () => {
     expect(SK_PREFIX(g, 'EXPEDITION#')).toHaveLength(1);
   });
 
+  it('leaves the trip uncollected on its item when the collect is refused, so the export shows no loot the player never got', async () => {
+    const g = await newcomer({ provisions: 10 });
+    const trip = sentOf(
+      await g.post('/expedition/send', { requestId: rid(), region: 'koko-woods', choice: 4 }),
+    ).expedition;
+    g.clock.now += 4 * HOUR;
+    const request = { requestId: rid() };
+    // The profile never stops moving under the collect: it gives up with 409 `conflict`.
+    let raced = 0;
+    g.intercept.api = async (input) => {
+      const names = Object.values(input.ExpressionAttributeNames ?? {});
+      if (input.Key?.SK === 'PROFILE' && names.includes('expedition')) {
+        raced += 1;
+        await g.db.addPayout(AUTHOR_ID, { gold: 1, renown: 0 });
+      }
+    };
+    const refused = await g.post('/expedition/collect', request);
+    g.intercept.api = undefined;
+    expect(raced).toBeGreaterThan(1);
+    expect(refused).toEqual({ status: 409, body: { error: 'conflict' } });
+    expect(SK_PREFIX(g, 'EXPEDITION#')[0]).toMatchObject({ collected: false });
+    expect(SK_PREFIX(g, 'EXPEDITION#')[0]?.loot).toBeUndefined();
+    expect((await me(g)).expedition?.collected).toBe(false);
+
+    // The same request goes through once it settles, and only now does the item say collected.
+    const retry = await g.post('/expedition/collect', request);
+    expect(collectedOf(retry)).toMatchObject({ applied: true, loot: rollLoot(trip) });
+    expect(SK_PREFIX(g, 'EXPEDITION#')[0]).toMatchObject({
+      collected: true,
+      loot: rollLoot(trip),
+    });
+  });
+
+  it('leaves the trip uncollected on its item when the profile write throws', async () => {
+    const g = await newcomer({ provisions: 10 });
+    await g.post('/expedition/send', { requestId: rid(), region: 'koko-woods', choice: 4 });
+    g.clock.now += 4 * HOUR;
+    g.intercept.api = (input) => {
+      const names = Object.values(input.ExpressionAttributeNames ?? {});
+      if (input.Key?.SK === 'PROFILE' && names.includes('expedition')) {
+        throw new Error('the table is having a moment');
+      }
+    };
+    expect((await g.post('/expedition/collect', { requestId: rid() })).status).toBe(500);
+    g.intercept.api = undefined;
+    expect(SK_PREFIX(g, 'EXPEDITION#')[0]).toMatchObject({ collected: false });
+    expect(SK_PREFIX(g, 'EXPEDITION#')[0]?.loot).toBeUndefined();
+  });
+
   it('answers the typed 409s and 404', async () => {
     const g = await newcomer({ provisions: 0 });
     expect(await g.post('/expedition/collect', { requestId: rid() })).toEqual({

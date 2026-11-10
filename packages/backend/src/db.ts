@@ -11,7 +11,6 @@
  */
 import {
   BatchWriteCommand,
-  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -93,8 +92,13 @@ const seconds = (ms: number): number => Math.floor(ms / 1000);
 
 /** Requirement 1.6: dedupe records expire after 7 days. */
 export const DELIVERY_TTL_SECONDS = seconds(WEEK_MS);
-/** Requirement 2.1: the OAuth state nonce expires after 10 minutes. */
+/** Requirement 2.1: the OAuth state expires after 10 minutes (a consumed one is remembered that long). */
 export const OAUTH_STATE_TTL_SECONDS = seconds(10 * MINUTE_MS);
+/**
+ * How long a claimed delivery is held before another attempt may take it over. The ingest Lambda is killed
+ * at 10 s, so after 30 s the claimant is certainly gone (a timeout or an out-of-memory kill never releases).
+ */
+export const DELIVERY_LEASE_MS = 30_000;
 /** research.md section 6: scored event rows (the Combat Log) expire after 90 days. */
 export const EVENT_TTL_SECONDS = seconds(90 * DAY_MS);
 
@@ -187,6 +191,15 @@ export interface ProfileItem {
   tzOffsetMinutes: number | null;
   /** May the public badge show this player? `badge_public`; true unless the player turned it off (Requirement 11.4). */
   badgePublic: boolean;
+  /**
+   * Proof that a write happened, committed in the same guarded profile write as the change itself (see
+   * `idempotent.ts` and `ingest.ts`): the client request ids of the last few player mutations, the
+   * (delivery, player) credits of the last few scored events, and the Act clears of this week whose
+   * payout has been paid. An id found here means "this was applied", whatever else happened to it.
+   */
+  appliedRequests: string[];
+  creditedDeliveries: string[];
+  actsPaid: string[];
   /** Optimistic-lock counter, bumped by every score write. */
   version: number;
 }
@@ -240,6 +253,10 @@ export interface ProfilePatch {
   oldCoin?: boolean;
   tzOffsetMinutes?: number;
   badgePublic?: boolean;
+  /** The commit markers (see `ProfileItem`); the Act-clear one is cleared with `null` at the rollover. */
+  appliedRequests?: readonly string[];
+  creditedDeliveries?: readonly string[];
+  actsPaid?: null;
 }
 
 /** What one scored event changes on a profile. */
@@ -359,6 +376,28 @@ export interface BadgeProfile {
   coin: boolean;
   /** The player has not turned the public badge off (`badge_public`, true when never set). */
   badgePublic: boolean;
+}
+
+/**
+ * What a scored event decided to credit to one player, written to the delivery's ledger before the credit
+ * is committed. It carries everything the steps after the commit need, so a later attempt can finish them
+ * without scoring again.
+ */
+export interface DeliveryCredit {
+  /** The week the XP belongs to. */
+  week: string;
+  xp: number;
+  merge: boolean;
+  review: boolean;
+  /** The Combat Log row of the event; null when it earned none. */
+  row: EventRow | null;
+  /** The credit changes the profile, so the profile carries its commit marker once it has happened. */
+  commits: boolean;
+}
+
+/** The ledger of a claimed delivery: the credits earlier attempts decided on, by credit id. */
+export interface DeliveryClaim {
+  credits: Record<string, DeliveryCredit>;
 }
 
 /** What `Db#deleteUser` removed. */
@@ -535,8 +574,17 @@ function toProfile(item: Attrs): ProfileItem {
     oldCoin: bool(item, 'old_coin', false),
     tzOffsetMinutes: numOrNull(item, 'tz_offset'),
     badgePublic: bool(item, 'badge_public', true),
+    appliedRequests: stringList(item.applied_requests),
+    creditedDeliveries: stringList(item.credited),
+    actsPaid: stringSet(item.acts_paid),
     version: num(item, 'version', 0),
   };
+}
+
+/** The strings in a stored string set, sorted; anything else is ignored. */
+function stringSet(value: unknown): string[] {
+  const entries = value instanceof Set ? [...(value as Set<unknown>)] : [];
+  return entries.filter((entry): entry is string => typeof entry === 'string').sort();
 }
 
 /** The strings in a stored list; anything else in it is ignored. */
@@ -579,6 +627,24 @@ function toWeekState(item: Attrs): WeekScorerState | null {
     mogulChain: num(item, 'wk_chain', 0),
     loadedDiceUsed: bool(item, 'wk_dice', false),
   };
+}
+
+/** The credits a delivery item holds; an item without them (or with damaged ones) has none. */
+function toCredits(value: unknown): Record<string, DeliveryCredit> {
+  const credits: Record<string, DeliveryCredit> = {};
+  for (const [id, entry] of Object.entries(record<unknown>(value))) {
+    if (isRecord(entry) && typeof entry.week === 'string' && typeof entry.xp === 'number') {
+      credits[id] = {
+        week: entry.week,
+        xp: entry.xp,
+        merge: entry.merge === true,
+        review: entry.review === true,
+        row: isRecord(entry.row) ? (entry.row as unknown as EventRow) : null,
+        commits: entry.commits === true,
+      };
+    }
+  }
+  return credits;
 }
 
 function toEventRow(item: Attrs): StoredEventRow {
@@ -811,6 +877,8 @@ function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
     ['titles', patch.titles],
     ['pinned_feats', patch.pinnedFeats],
     ['feat_counters', patch.featCounters],
+    ['applied_requests', patch.appliedRequests],
+    ['credited', patch.creditedDeliveries],
   ];
   for (const [attribute, value] of nested) {
     if (value !== undefined) {
@@ -841,6 +909,9 @@ function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
   }
   if (patch.badgePublic !== undefined) {
     set.badge_public = patch.badgePublic;
+  }
+  if (patch.actsPaid === null) {
+    remove.push('acts_paid');
   }
   if (patch.weekState !== undefined) {
     set.wk_week = patch.weekState.week;
@@ -1088,8 +1159,17 @@ export class Db {
   /**
    * Credit what an act clear paid: gold and Renown added atomically, with no version guard (addition
    * commutes with a concurrent score), bumping the version so an in-flight score re-reads.
+   *
+   * It only ever credits a profile that exists (a deleted player must not come back as a ghost holding gold),
+   * and with `once` (the clear's own name, `<week>:<act>`) only once: the name is recorded in the same write,
+   * so a repeat of the clear finds it there and pays nothing.
+   * @returns `'paid'`; `'already'` when `once` was paid before; `'gone'` when there is no profile
    */
-  async addPayout(userId: number, payout: { gold: number; renown: number }): Promise<void> {
+  async addPayout(
+    userId: number,
+    payout: { gold: number; renown: number },
+    once?: string,
+  ): Promise<'paid' | 'already' | 'gone'> {
     const add: Attrs = { version: 1 };
     if (payout.gold > 0) {
       add.gold = payout.gold;
@@ -1097,7 +1177,27 @@ export class Db {
     if (payout.renown > 0) {
       add.renown = payout.renown;
     }
-    await this.update('PROFILE', profileKey(userId), { add });
+    if (once !== undefined) {
+      add.acts_paid = new Set([once]);
+    }
+    const paid = await this.conditionalWrite(() =>
+      this.update(
+        'PROFILE',
+        profileKey(userId),
+        { add },
+        once === undefined
+          ? ITEM_EXISTS
+          : {
+              expression: 'attribute_exists(#c0) AND NOT contains(#c1, :c0)',
+              names: { '#c0': 'PK', '#c1': 'acts_paid' },
+              values: { ':c0': once },
+            },
+      ),
+    );
+    if (paid) {
+      return 'paid';
+    }
+    return (await this.getItem(profileKey(userId), true)) ? 'already' : 'gone';
   }
 
   /**
@@ -1365,10 +1465,16 @@ export class Db {
    * Upsert the PR facts of Requirement 3.1 and add to the review-round and push counters.
    * The facts never regress `merged`: an out-of-order event that says "not merged" cannot overwrite a
    * stored merge. In that case only the counters are added and `'kept'` is returned.
+   *
+   * The counters are added once per delivery: `countedBy` (the delivery id) is recorded on the item in the
+   * same write that adds them, and a write that finds its id there adds nothing. A delivery that is
+   * processed again (its first attempt died, or GitHub redelivered it) therefore cannot count its push or
+   * review round twice.
    */
   async upsertPR(
     facts: PullRequestFacts,
     deltas: { syncCount?: number; reviewRoundCount?: number } = {},
+    countedBy?: string,
   ): Promise<'written' | 'kept'> {
     const key = prMetaKey(facts.repoId, facts.number);
     const set: Attrs = {
@@ -1410,17 +1516,33 @@ export class Db {
     if (deltas.reviewRoundCount) {
       add.review_round_count = deltas.reviewRoundCount;
     }
+    // Counters are only added by a delivery that has not added them yet.
+    const counting = countedBy !== undefined && Object.keys(add).length > 0;
+    if (counting) {
+      add.counted = new Set([countedBy]);
+    }
+    const notCounted = counting ? 'attribute_not_exists(#c2) OR NOT contains(#c2, :c1)' : undefined;
+    const notRegressed = facts.merged
+      ? undefined
+      : 'attribute_not_exists(#c0) OR attribute_not_exists(#c1) OR #c1 = :c0';
+    const clauses = [notRegressed, notCounted].filter((clause) => clause !== undefined);
     const written = await this.conditionalWrite(() =>
       this.update(
         'PR',
         key,
         { set, add },
-        facts.merged
+        clauses.length === 0
           ? undefined
           : {
-              expression: 'attribute_not_exists(#c0) OR attribute_not_exists(#c1) OR #c1 = :c0',
-              names: { '#c0': 'PK', '#c1': 'merged' },
-              values: { ':c0': false },
+              expression: clauses.map((clause) => `(${clause})`).join(' AND '),
+              names: {
+                ...(notRegressed ? { '#c0': 'PK', '#c1': 'merged' } : {}),
+                ...(counting ? { '#c2': 'counted' } : {}),
+              },
+              values: {
+                ...(notRegressed ? { ':c0': false } : {}),
+                ...(counting ? { ':c1': countedBy } : {}),
+              },
             },
       ),
     );
@@ -1428,7 +1550,20 @@ export class Db {
       return 'written';
     }
     if (Object.keys(add).length > 0) {
-      await this.update('PR', key, { add });
+      await this.conditionalWrite(() =>
+        this.update(
+          'PR',
+          key,
+          { add },
+          counting
+            ? {
+                expression: notCounted as string,
+                names: { '#c2': 'counted' },
+                values: { ':c1': countedBy },
+              }
+            : undefined,
+        ),
+      );
     }
     return 'kept';
   }
@@ -1549,56 +1684,91 @@ export class Db {
   // ----- webhook idempotency: DELIVERY#<guid> -----
 
   /**
-   * Claim a delivery id. Returns false when it was already claimed (a duplicate), via
-   * `attribute_not_exists(PK)`. A delivery whose processing failed before any credit was `released`
-   * and may be claimed again, so GitHub's "Redeliver" button works after a transient error.
+   * Claim a delivery for processing, with a lease. A claim succeeds when nothing is stored under the id, or
+   * when the stored claim is still `processing` and its lease has run out: the Lambda that held it timed out
+   * or was killed (neither releases anything), so GitHub's redelivery takes it over after `DELIVERY_LEASE_MS`.
+   * A delivery that finished (`done`) can never be claimed again, so a duplicate stops here (Requirement 1.5).
+   * @returns what the earlier attempts left (the credits they had decided on), or null when the delivery is
+   *   done or another attempt still holds the lease
    */
-  async claimDelivery(deliveryId: string, nowMs: number): Promise<boolean> {
-    return this.conditionalWrite(() =>
-      this.put(
+  async claimDelivery(deliveryId: string, nowMs: number): Promise<DeliveryClaim | null> {
+    const attributes = await this.claimed(() =>
+      this.update(
         'DELIVERY',
         deliveryKey(deliveryId),
-        { ttl: seconds(nowMs) + DELIVERY_TTL_SECONDS },
         {
-          expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
-          names: { '#c0': 'PK', '#c1': 'released' },
-          values: { ':c0': true },
+          set: {
+            status: 'processing',
+            lease_until: nowMs + DELIVERY_LEASE_MS,
+            ttl: seconds(nowMs) + DELIVERY_TTL_SECONDS,
+          },
+        },
+        {
+          expression: 'attribute_not_exists(#c0) OR (#c1 = :c0 AND #c2 < :c1)',
+          names: { '#c0': 'PK', '#c1': 'status', '#c2': 'lease_until' },
+          values: { ':c0': 'processing', ':c1': nowMs },
+        },
+      ),
+    );
+    return attributes === null ? null : { credits: toCredits(attributes.credits) };
+  }
+
+  /** Like `conditionalWrite` for an update: the new item, or null when the condition failed. */
+  private async claimed(write: () => Promise<Attrs | undefined>): Promise<Attrs | null> {
+    let item: Attrs | undefined;
+    const applied = await this.conditionalWrite(async () => {
+      item = await write();
+    });
+    return applied ? (item ?? {}) : null;
+  }
+
+  /**
+   * Remember what a claimed delivery has decided to credit, before any of it is written. A later attempt at
+   * the same delivery finishes these from the ledger instead of scoring again (see `ingest.ts`).
+   */
+  async saveDeliveryCredits(
+    deliveryId: string,
+    credits: Readonly<Record<string, DeliveryCredit>>,
+  ): Promise<void> {
+    await this.update('DELIVERY', deliveryKey(deliveryId), { set: { credits: clean(credits) } });
+  }
+
+  /** The delivery is fully processed: later attempts are duplicates. */
+  async completeDelivery(deliveryId: string): Promise<void> {
+    await this.update('DELIVERY', deliveryKey(deliveryId), { set: { status: 'done' } });
+  }
+
+  /**
+   * Give up a claim whose processing failed, so the next attempt can take it at once instead of waiting for
+   * the lease to run out. Does nothing to a delivery that has been completed in the meantime.
+   */
+  async releaseDelivery(deliveryId: string): Promise<void> {
+    await this.conditionalWrite(() =>
+      this.update(
+        'DELIVERY',
+        deliveryKey(deliveryId),
+        { set: { lease_until: 0 } },
+        {
+          expression: '#c1 = :c0',
+          names: { '#c1': 'status' },
+          values: { ':c0': 'processing' },
         },
       ),
     );
   }
 
-  /** Mark a claimed delivery as failed-before-credit so a redelivery can claim it again. */
-  async releaseDelivery(deliveryId: string): Promise<void> {
-    await this.update('DELIVERY', deliveryKey(deliveryId), { set: { released: true } });
-  }
-
   // ----- OAuth state: STATE#<nonce> -----
-
-  async putOAuthState(nonce: string, nowMs: number): Promise<void> {
-    await this.put(
-      'STATE',
-      stateKey(nonce),
-      { ttl: seconds(nowMs) + OAUTH_STATE_TTL_SECONDS },
-      ITEM_ABSENT,
-    );
-  }
+  //
+  // The state itself is stateless (an HMAC over a nonce and an expiry, see `oauth-state.ts`), so signing in
+  // starts without a write. A used state is remembered here, which is what makes it single use.
 
   /**
-   * Single use: deletes the state and returns true only if it existed and had not expired. DynamoDB's
-   * TTL sweep is lazy, so expiry is checked in the condition rather than trusted to the sweep.
+   * Record that the state with this nonce has been used. True the first time, false for a replay.
+   * @param expiresAtMs when the state stops being valid; the record outlives it by the TTL sweep's slack
    */
-  async consumeOAuthState(nonce: string, nowMs: number): Promise<boolean> {
+  async consumeOAuthState(nonce: string, expiresAtMs: number): Promise<boolean> {
     return this.conditionalWrite(() =>
-      this.client.send(
-        new DeleteCommand({
-          TableName: this.tableName,
-          Key: stateKey(nonce),
-          ConditionExpression: 'attribute_exists(#pk) AND #ttl > :now',
-          ExpressionAttributeNames: { '#pk': 'PK', '#ttl': 'ttl' },
-          ExpressionAttributeValues: { ':now': seconds(nowMs) },
-        }),
-      ),
+      this.put('STATE', stateKey(nonce), { ttl: seconds(expiresAtMs) + 60 }, ITEM_ABSENT),
     );
   }
 
@@ -1729,11 +1899,15 @@ export class Db {
   /**
    * Add a scored event's XP to the week, and count it toward the weekly streak, in one atomic update.
    * Returns the week as it is afterwards, or null when there is no such week.
+   *
+   * With `id` (the credit's name) the credit is added once: the id is recorded in the same update, and an
+   * update that finds it there adds nothing and returns the week as it is, so finishing a credit again after
+   * a failure cannot count it twice.
    */
   async addWeekCredit(
     userId: number,
     weekKey: string,
-    credit: { xp: number; merge: boolean; review: boolean },
+    credit: { xp: number; merge: boolean; review: boolean; id?: string },
   ): Promise<WeekItem | null> {
     const add: Attrs = { weekly_xp: credit.xp };
     if (credit.merge) {
@@ -1742,16 +1916,28 @@ export class Db {
     if (credit.review) {
       add.reviews = 1;
     }
-    const written: { attributes?: Attrs } = {};
-    const applied = await this.conditionalWrite(async () => {
-      written.attributes = await this.update(
+    if (credit.id !== undefined) {
+      add.credited = new Set([credit.id]);
+    }
+    const written = await this.claimed(() =>
+      this.update(
         'WEEK',
         weekKeyOf(userId, weekKey),
         { add },
-        ITEM_EXISTS,
-      );
-    });
-    return applied && written.attributes ? toWeekItem(written.attributes) : null;
+        credit.id === undefined
+          ? ITEM_EXISTS
+          : {
+              expression: 'attribute_exists(#c0) AND NOT contains(#c1, :c0)',
+              names: { '#c0': 'PK', '#c1': 'credited' },
+              values: { ':c0': credit.id },
+            },
+      ),
+    );
+    if (written !== null) {
+      return toWeekItem(written);
+    }
+    // Already added, or no such week.
+    return credit.id === undefined ? null : this.getWeekItem(userId, weekKey);
   }
 
   /**
@@ -1781,6 +1967,12 @@ export class Db {
     assign('free_pack', patch.freePack);
     assign('legendary', patch.legendary);
     assign('request_ids', patch.requestIds);
+    assign(
+      'pending',
+      patch.pending === null || (patch.pending && Object.keys(patch.pending).length === 0)
+        ? null
+        : patch.pending,
+    );
     const clauses = ['attribute_exists(#c0)'];
     const names: Record<string, string> = { '#c0': 'PK' };
     const values: Record<string, unknown> = {};
@@ -1871,8 +2063,13 @@ export interface WeekItem {
   run: RunState;
   /** Optimistic-lock counter of the shop and Pledge endpoints and the act-clear claim. */
   version: number;
-  /** The last 20 client request ids, oldest first. */
+  /** The last 20 client request ids that were applied, oldest first. */
   requestIds: string[];
+  /**
+   * Requests that hold the week lock and have not been promoted to `requestIds` yet, by request id. Such a
+   * request is "applied" only once the profile carries its commit marker (see `idempotent.ts`).
+   */
+  pending: Record<string, PendingLock>;
   /** Merged PRs and scored reviews this week (the weekly streak needs a merge or three reviews). */
   merges: number;
   reviews: number;
@@ -1891,6 +2088,19 @@ export interface WeekPatch {
   freePack?: PackKind | null;
   legendary?: Charm | null;
   requestIds?: readonly string[];
+  /** The whole map of locks; `null` (or an empty map) removes it. */
+  pending?: Readonly<Record<string, PendingLock>> | null;
+}
+
+/** The game fields of a week a mutation can change (everything in `WeekPatch` but the bookkeeping). */
+export type WeekFields = Omit<WeekPatch, 'requestIds' | 'pending'>;
+
+/** A request's hold on the week: when it took it, and the fields it changed, before and after. */
+export interface PendingLock {
+  /** Epoch milliseconds the lock was taken at. */
+  at: number;
+  before: WeekFields;
+  after: WeekFields;
 }
 
 const WEEK_ATTRIBUTE: Readonly<Record<string, string>> = {
@@ -1947,12 +2157,27 @@ function toRunState(item: Attrs): RunState {
   };
 }
 
+function toPending(value: unknown): Record<string, PendingLock> {
+  const pending: Record<string, PendingLock> = {};
+  for (const [id, lock] of Object.entries(record<unknown>(value))) {
+    if (isRecord(lock) && typeof lock.at === 'number') {
+      pending[id] = {
+        at: lock.at,
+        before: (isRecord(lock.before) ? lock.before : {}) as WeekFields,
+        after: (isRecord(lock.after) ? lock.after : {}) as WeekFields,
+      };
+    }
+  }
+  return pending;
+}
+
 function toWeekItem(item: Attrs): WeekItem {
   const freePack = str(item, 'free_pack');
   return {
     run: toRunState(item),
     version: num(item, 'version', 0),
     requestIds: list<string>(item.request_ids),
+    pending: toPending(item.pending),
     merges: num(item, 'merges', 0),
     reviews: num(item, 'reviews', 0),
     freePack:

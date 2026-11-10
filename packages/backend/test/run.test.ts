@@ -5,13 +5,15 @@
  * lacks), so this also proves the new code uses only the operations Requirement 12.2 grants.
  */
 import { interestOn, levelFor, startRun, zoneFor } from '@mergescape/shared';
+import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it } from 'vitest';
 import type { LogResponse, MeResponse, MutationResponse, WeekSummary } from '../src/api-types';
 import { toPlayerState } from '../src/player';
+import { ensureRun, loadCurrent } from '../src/runs';
 import { API_ROLE, DAY, HOUR, makeGame, playLife } from './game-harness';
 import type { Game } from './game-harness';
 import { INGEST_ROLE, START } from './harness';
-import { auditSchema, itemsWithPrefix } from './support';
+import { auditSchema, itemsWithPrefix, TABLE_NAME } from './support';
 import { AUTHOR_ID, fixtureDelivery, REVIEWER_ID } from './webhooks';
 
 const MONDAY_NEXT = Date.UTC(2026, 10, 16, 0, 5, 0);
@@ -401,5 +403,102 @@ describe('the Monday rollover', () => {
     // A quiet week of 800 XP caps every target at 1,600 (a vacation does not wreck the next week).
     expect((await week(g, REVIEWER_ID)).targets).toEqual({ scout: 1600, raid: 1600, boss: 1600 });
     expect((await g.db.getProfile(AUTHOR_ID, true))?.history).toEqual([...history, 3600]);
+  });
+});
+
+describe('a request whose clock is just behind the rollover', () => {
+  const LAST_SECOND = MONDAY_NEXT - 6 * 60_000;
+
+  async function playedWeek(): Promise<Game> {
+    const g = makeGame();
+    await g.signIn(AUTHOR_ID);
+    await g.signIn(REVIEWER_ID);
+    await playLife(g, 17);
+    return g;
+  }
+
+  const context = (g: Game, now: number) => ({ db: g.db, now, newSeed: () => 99 });
+
+  it('never rolls a profile that is already in the next week back, so the streak is not paid twice', async () => {
+    const g = await playedWeek();
+    g.clock.now = MONDAY_NEXT;
+    await g.rollover();
+    const profile = await g.db.getProfile(AUTHOR_ID, true);
+    const rows = (await log(g)).length;
+    const writes = g.fake.writeCalls;
+    expect(profile).toMatchObject({ runWeek: '2026-47', streakWeeks: 1 });
+
+    // A request that read its clock at 23:59 Sunday arrives after the rollover.
+    const rolled = await ensureRun(context(g, LAST_SECOND), AUTHOR_ID);
+    expect(rolled?.week.run.weekKey).toBe('2026-47');
+    expect(rolled?.profile).toEqual(profile);
+    const current = await loadCurrent(context(g, LAST_SECOND), AUTHOR_ID);
+    expect(current?.run.weekKey).toBe('2026-47');
+
+    // Nothing was written: no second streak, no second XP, no row.
+    expect(g.fake.writeCalls).toBe(writes);
+    expect(await g.db.getProfile(AUTHOR_ID, true)).toEqual(profile);
+    expect((await log(g)).length).toBe(rows);
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.history).toEqual([793]);
+  });
+
+  it('builds a week that is missing for a profile that is ahead of its clock, for the week the profile is in', async () => {
+    const g = await playedWeek();
+    g.clock.now = MONDAY_NEXT;
+    await g.rollover();
+    const profile = await g.db.getProfile(AUTHOR_ID, true);
+    // The profile is in 2026-47 but its week item is gone.
+    await g.fake.forRole('test', ['DeleteItem']).send(
+      new DeleteCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: `USER#${AUTHOR_ID}`, SK: 'WEEK#2026-47' },
+      }),
+    );
+    expect(await g.db.getWeekItem(AUTHOR_ID, '2026-47')).toBeNull();
+
+    const served = await ensureRun(context(g, LAST_SECOND), AUTHOR_ID);
+    expect(served?.week.run.weekKey).toBe('2026-47');
+    expect(served?.week.run.shopSeed).toBe(99);
+    // The profile is untouched: it was already rolled, only its week item was made again.
+    expect(await g.db.getProfile(AUTHOR_ID, true)).toEqual(profile);
+    expect((await g.db.getWeekItem(AUTHOR_ID, '2026-47'))?.run.weekKey).toBe('2026-47');
+  });
+
+  it('reads the profile first and the week after it, one after the other', async () => {
+    const g = await playedWeek();
+    const events: string[] = [];
+    const watched = Object.create(g.db) as typeof g.db;
+    for (const name of ['getProfile', 'getWeekItem'] as const) {
+      const original = g.db[name].bind(g.db) as (...args: unknown[]) => Promise<unknown>;
+      (watched as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        events.push(`${name} start`);
+        const found = await original(...args);
+        events.push(`${name} end`);
+        return found;
+      };
+    }
+    await ensureRun({ db: watched, now: g.clock.now, newSeed: () => 1 }, AUTHOR_ID);
+    expect(events.slice(0, 4)).toEqual([
+      'getProfile start',
+      'getProfile end',
+      'getWeekItem start',
+      'getWeekItem end',
+    ]);
+  });
+});
+
+describe('the Act clears paid in a week', () => {
+  it('are forgotten at the rollover, so next week can pay its own', async () => {
+    const g = makeGame();
+    await g.signIn(AUTHOR_ID);
+    await g.signIn(REVIEWER_ID);
+    await playLife(g, 17);
+    await playLife(g, 31);
+    // The Scout act was cleared and paid.
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.actsPaid).toEqual(['2026-46:scout']);
+    g.clock.now = MONDAY_NEXT;
+    await g.rollover();
+    expect((await g.db.getProfile(AUTHOR_ID, true))?.actsPaid).toEqual([]);
+    auditSchema(g.fake);
   });
 });

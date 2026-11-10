@@ -266,8 +266,10 @@ describe('Privacy, Terms and Cookies say the same as PRIVACY.md, TERMS.md and CO
       expect(page, key).toContain(key);
       expect(cookiesMd, key).toContain(key);
     }
-    expect(page).toContain('Mergescape sets no cookies.');
-    expect(cookiesMd).toContain('**Mergescape sets no cookies.**');
+    expect(page).toContain('Mergescape sets no tracking cookies.');
+    expect(cookiesMd).toContain('**Mergescape sets no tracking cookies.**');
+    expect(page).toContain('one strictly necessary cookie');
+    expect(cookiesMd).toContain('one strictly necessary cookie');
     for (const fact of [
       'Clear local data',
       'Sign out',

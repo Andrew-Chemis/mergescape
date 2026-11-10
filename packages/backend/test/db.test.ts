@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_TTL_SECONDS,
   EVENT_TTL_SECONDS,
+  DELIVERY_LEASE_MS,
   OAUTH_STATE_TTL_SECONDS,
   VersionConflictError,
 } from '../src/db';
@@ -449,15 +450,76 @@ describe('installations', () => {
   });
 });
 
-describe('delivery dedupe', () => {
-  it('claims once; the second put fails with ConditionalCheckFailed; ttl is 7 days', async () => {
+describe('counters added once per delivery', () => {
+  it('adds the push and review round of a delivery once, however often it is written', async () => {
     const { fake, db } = makeDb();
-    expect(await db.claimDelivery('delivery-1', NOW)).toBe(true);
-    expect(await db.claimDelivery('delivery-1', NOW + 5000)).toBe(false);
+    await db.upsertPR(pr(), { syncCount: 1 }, 'delivery-1');
+    await db.upsertPR(pr(), { syncCount: 1 }, 'delivery-1');
+    await db.upsertPR(pr(), { syncCount: 1, reviewRoundCount: 1 }, 'delivery-2');
+    await db.upsertPR(pr(), { syncCount: 1, reviewRoundCount: 1 }, 'delivery-2');
+    expect((await db.getPR(424242, 17)).meta).toMatchObject({ syncCount: 2, reviewRoundCount: 1 });
+    expect(fake.peek('PR#424242#17', 'META')?.counted).toEqual(
+      new Set(['delivery-1', 'delivery-2']),
+    );
+    auditSchema(fake);
+  });
+
+  it('adds it once on a merged PR too, where a stale "not merged" event only adds counters', async () => {
+    const { db } = makeDb();
+    const merged = pr({ merged: true, mergedBy: { id: USER, isBot: false } });
+    await db.upsertPR(merged, { syncCount: 1 }, 'delivery-1');
+    await db.upsertPR(merged, { syncCount: 1 }, 'delivery-1');
+    expect(await db.upsertPR(pr({ draft: true }), { syncCount: 1 }, 'delivery-2')).toBe('kept');
+    expect(await db.upsertPR(pr({ draft: true }), { syncCount: 1 }, 'delivery-2')).toBe('kept');
+    expect((await db.getPR(424242, 17)).meta).toMatchObject({ syncCount: 2, merged: true });
+  });
+
+  it('does not guard a write that adds no counters', async () => {
+    const { fake, db } = makeDb();
+    await db.upsertPR(pr(), {}, 'delivery-1');
+    await db.upsertPR(pr(), { syncCount: 0 }, 'delivery-1');
+    expect(fake.peek('PR#424242#17', 'META')?.counted).toBeUndefined();
+  });
+
+  it('credits the week once per credit id, and says what the week is when it was already credited', async () => {
+    const { fake, db } = makeDb();
+    await db.createWeek(USER, {
+      weekKey: '2026-46',
+      act: 'scout',
+      clearedActs: [],
+      weeklyXp: 0,
+      targets: { scout: 1200, raid: 2000, boss: 3000 },
+      mogul: 'two-pizza-boss',
+      hand: [],
+      played: [],
+      shopSeed: 1,
+      shop: null,
+    });
+    const credit = { xp: 90, merge: true, review: false, id: 'delivery-1' };
+    expect((await db.addWeekCredit(USER, '2026-46', credit))?.run.weeklyXp).toBe(90);
+    // The repeat adds nothing and still answers with the week.
+    const again = await db.addWeekCredit(USER, '2026-46', credit);
+    expect(again?.run.weeklyXp).toBe(90);
+    expect(again?.merges).toBe(1);
+    expect(
+      (await db.addWeekCredit(USER, '2026-46', { ...credit, id: 'delivery-2' }))?.run.weeklyXp,
+    ).toBe(180);
+    expect(await db.addWeekCredit(USER, '2026-47', credit)).toBeNull();
+    auditSchema(fake);
+  });
+});
+
+describe('delivery dedupe', () => {
+  it('claims once; the second claim finds the lease held; ttl is 7 days', async () => {
+    const { fake, db } = makeDb();
+    expect(await db.claimDelivery('delivery-1', NOW)).toEqual({ credits: {} });
+    expect(await db.claimDelivery('delivery-1', NOW + 5000)).toBeNull();
     expect(fake.peek('DELIVERY#delivery-1', 'META')).toEqual({
       PK: 'DELIVERY#delivery-1',
       SK: 'META',
       ttl: NOW_S + DELIVERY_TTL_SECONDS,
+      status: 'processing',
+      lease_until: NOW + DELIVERY_LEASE_MS,
     });
     // The raw conditional put, as the spec words it, really is rejected by the table.
     await expect(
@@ -478,8 +540,57 @@ describe('delivery dedupe', () => {
     const { db } = makeDb();
     await db.claimDelivery('delivery-1', NOW);
     await db.releaseDelivery('delivery-1');
-    expect(await db.claimDelivery('delivery-1', NOW + 1000)).toBe(true);
-    expect(await db.claimDelivery('delivery-1', NOW + 2000)).toBe(false);
+    expect(await db.claimDelivery('delivery-1', NOW + 1000)).not.toBeNull();
+    expect(await db.claimDelivery('delivery-1', NOW + 2000)).toBeNull();
+  });
+
+  it('lets an expired lease be taken over, once, and not a moment before', async () => {
+    const { db } = makeDb();
+    await db.claimDelivery('delivery-1', NOW);
+    // The Lambda that held the claim was killed: nothing released it.
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_LEASE_MS - 1)).toBeNull();
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_LEASE_MS + 1)).not.toBeNull();
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_LEASE_MS + 2)).toBeNull();
+  });
+
+  it('outlasts the Lambda timeout, so a live attempt is never taken over', () => {
+    // The ingest Lambda is killed at 10 s (packages/infra/lib/mergescape-stack.ts).
+    expect(DELIVERY_LEASE_MS).toBeGreaterThan(10_000);
+  });
+
+  it('never claims a finished delivery again, expired lease or not', async () => {
+    const { db } = makeDb();
+    await db.claimDelivery('delivery-1', NOW);
+    await db.completeDelivery('delivery-1');
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_LEASE_MS * 100)).toBeNull();
+    // A late release does not reopen it either.
+    await db.releaseDelivery('delivery-1');
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_LEASE_MS * 100)).toBeNull();
+  });
+
+  it('hands the next attempt what the earlier ones decided to credit', async () => {
+    const { fake, db } = makeDb();
+    await db.claimDelivery('delivery-1', NOW);
+    const credit = {
+      week: '2026-46',
+      xp: 90,
+      merge: false,
+      review: true,
+      commits: true,
+      row: null,
+    };
+    await db.saveDeliveryCredits('delivery-1', { 'delivery-1': credit });
+    await db.releaseDelivery('delivery-1');
+    expect(await db.claimDelivery('delivery-1', NOW + 1000)).toEqual({
+      credits: { 'delivery-1': credit },
+    });
+    // Damaged entries are ignored rather than trusted.
+    await db.update('DELIVERY', deliveryKey('delivery-1'), {
+      set: { credits: { odd: 'x', 'delivery-1': { week: 4 } } },
+    });
+    await db.releaseDelivery('delivery-1');
+    expect(await db.claimDelivery('delivery-1', NOW + 2000)).toEqual({ credits: {} });
+    auditSchema(fake);
   });
 
   it('refuses a delivery id that is not a plain token', async () => {
@@ -491,35 +602,30 @@ describe('delivery dedupe', () => {
   it('claims again after the TTL sweep removed the old record', async () => {
     const { fake, db } = makeDb();
     await db.claimDelivery('delivery-1', NOW);
+    await db.completeDelivery('delivery-1');
     fake.expireTtl(NOW_S + DELIVERY_TTL_SECONDS);
-    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_TTL_SECONDS * 1000)).toBe(true);
+    expect(await db.claimDelivery('delivery-1', NOW + DELIVERY_TTL_SECONDS * 1000)).not.toBeNull();
   });
 });
 
 describe('OAuth state', () => {
-  it('is single use', async () => {
+  it('is recorded as used once, and the record outlives the state by a minute', async () => {
     const { fake, db } = makeDb();
-    await db.putOAuthState('nonce-1', NOW);
-    expect(fake.peek('STATE#nonce-1', 'META')?.ttl).toBe(NOW_S + OAUTH_STATE_TTL_SECONDS);
-    expect(await db.consumeOAuthState('nonce-1', NOW + 1000)).toBe(true);
-    expect(await db.consumeOAuthState('nonce-1', NOW + 2000)).toBe(false);
-    expect(fake.size).toBe(0);
-  });
-
-  it('expires after ten minutes even before the TTL sweep, and an unknown nonce fails', async () => {
-    const { fake, db } = makeDb();
-    await db.putOAuthState('nonce-1', NOW);
-    expect(await db.consumeOAuthState('nonce-1', NOW + OAUTH_STATE_TTL_SECONDS * 1000)).toBe(false);
-    expect(fake.size).toBe(1);
-    expect(await db.consumeOAuthState('nope', NOW)).toBe(false);
-  });
-
-  it('does not let a nonce be overwritten', async () => {
-    const { db } = makeDb();
-    await db.putOAuthState('nonce-1', NOW);
-    await expect(db.putOAuthState('nonce-1', NOW)).rejects.toMatchObject({
-      name: 'ConditionalCheckFailedException',
+    const expiresAt = NOW + OAUTH_STATE_TTL_SECONDS * 1000;
+    expect(await db.consumeOAuthState('nonce-1', expiresAt)).toBe(true);
+    expect(fake.peek('STATE#nonce-1', 'META')).toEqual({
+      PK: 'STATE#nonce-1',
+      SK: 'META',
+      ttl: NOW_S + OAUTH_STATE_TTL_SECONDS + 60,
     });
+    expect(await db.consumeOAuthState('nonce-1', expiresAt)).toBe(false);
+    expect(await db.consumeOAuthState('nonce-2', expiresAt)).toBe(true);
+    auditSchema(fake);
+  });
+
+  it('needs only PutItem, which the api role has', async () => {
+    const { db } = makeDb({ allowedOperations: ['PutItem'] });
+    expect(await db.consumeOAuthState('nonce-1', NOW)).toBe(true);
   });
 });
 
@@ -743,6 +849,33 @@ describe('run-layer profile fields', () => {
     expect(await db.getProfile(USER, true)).toMatchObject({ gold: 35, renown: 1, version: 3 });
   });
 
+  it('credits a payout only to a profile that exists: a deleted player does not come back with gold', async () => {
+    const { fake, db } = makeDb();
+    expect(await db.addPayout(USER, { gold: 25, renown: 1 })).toBe('gone');
+    expect(await db.addPayout(USER, { gold: 25, renown: 1 }, '2026-46:scout')).toBe('gone');
+    expect(fake.size).toBe(0);
+
+    await db.upsertProfileOnLogin({ id: USER, login: 'octo', installations: [], nowMs: NOW });
+    expect(await db.addPayout(USER, { gold: 25, renown: 1 })).toBe('paid');
+    await db.deleteUser(USER);
+    expect(await db.addPayout(USER, { gold: 25, renown: 1 })).toBe('gone');
+    expect(await db.getProfile(USER, true)).toBeNull();
+    expect(fake.size).toBe(0);
+  });
+
+  it('pays an Act clear once: its name is recorded with the payout, and a repeat finds it there', async () => {
+    const { fake, db } = makeDb();
+    await db.upsertProfileOnLogin({ id: USER, login: 'octo', installations: [], nowMs: NOW });
+    expect(await db.addPayout(USER, { gold: 20, renown: 0 }, '2026-46:scout')).toBe('paid');
+    expect(await db.addPayout(USER, { gold: 20, renown: 0 }, '2026-46:scout')).toBe('already');
+    expect(await db.addPayout(USER, { gold: 30, renown: 0 }, '2026-46:raid')).toBe('paid');
+    expect(await db.getProfile(USER, true)).toMatchObject({
+      gold: 50,
+      actsPaid: ['2026-46:raid', '2026-46:scout'],
+    });
+    auditSchema(fake);
+  });
+
   it('lists every profile id through the GSI, page by page', async () => {
     const { db } = makeDb();
     for (const id of [3, 1, 2, 4]) {
@@ -803,6 +936,7 @@ describe('week items', () => {
       run: baseRun(),
       version: 0,
       requestIds: [],
+      pending: {},
       merges: 0,
       reviews: 0,
       freePack: null,
@@ -914,6 +1048,8 @@ describe('schema guard', () => {
         'sync_count',
         'draft',
         'base_ref_is_default',
+        // Bookkeeping, not a fact: the deliveries that added to the two counters.
+        'counted',
       ].sort(),
     );
     expect([...ALLOWED_ATTRIBUTES.REVIEW].sort()).toEqual(
@@ -996,6 +1132,10 @@ describe('schema guard', () => {
         'old_coin',
         'tz_offset',
         'badge_public',
+        // Commit markers.
+        'applied_requests',
+        'credited',
+        'acts_paid',
       ].sort(),
     );
     expect([...ALLOWED_ATTRIBUTES.EXPEDITION].sort()).toEqual(
@@ -1045,6 +1185,8 @@ describe('schema guard', () => {
         'reviews',
         'free_pack',
         'legendary',
+        'pending',
+        'credited',
       ].sort(),
     );
     // Game state is ids, counts and timestamps: never text from a pull request.

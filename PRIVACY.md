@@ -108,7 +108,7 @@ There is one narrow exception, because some rules (the party bonus, solo-kill ha
 
 ## Cookies and local storage
 
-Mergescape sets **no cookies**. It keeps three small items in your browser's local storage on this device: your sign-in token, the week for which the Mogul reveal last played, and your analytics choice. The exact list, how to clear them, and what GitHub's own cookies do while you sign in are on the Cookies page (`#/cookies` in the client, and [COOKIES.md](COOKIES.md)).
+Mergescape sets **no tracking cookies**; the only cookie is a strictly necessary one the server sets for ten minutes while you sign in. It keeps three small items in your browser's local storage on this device: your sign-in token, the week for which the Mogul reveal last played, and your analytics choice. The exact list, how to clear them, and what GitHub's own cookies do while you sign in are on the Cookies page (`#/cookies` in the client, and [COOKIES.md](COOKIES.md)).
 
 ## Future analytics
 

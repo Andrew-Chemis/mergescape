@@ -1,9 +1,10 @@
 /**
  * The shop, shrine and Pledge mutations (tasks.md 16, Requirements 8.6, 8.7, 9.3): each takes a client
  * request id and either applies once or answers the same way again. The write order (the week lock, the
- * profile write, the undo) is `idempotent.ts`; this module says what a request changes. A shop request
- * changes the week (shelves, the Pledges played, a free pack or Legendary offer) and the profile (gold,
- * Charms, Vouchers, the deck), and if the purchase fails on the fresh profile the week is put back as it was.
+ * profile write that commits it, the undo) is `idempotent.ts`; this module says what a request changes. A shop
+ * request changes the week (shelves, the Pledges played, a free pack or Legendary offer) and the profile (gold,
+ * Charms, Vouchers, the deck), and if the purchase fails on the fresh profile the change to the week is
+ * taken back.
  *
  * Every rule is a shared pure function; this module only chooses which one.
  */
@@ -20,7 +21,7 @@ import {
   sellHeldCharm,
 } from '@mergescape/shared';
 import type { Charm, PackKind, PlayerState, RunState } from '@mergescape/shared';
-import type { WeekPatch } from './db';
+import type { WeekFields } from './db';
 import { freePackOptions } from './free-pack';
 import { runIdempotentMutation } from './idempotent';
 import type { MutationContext, Plan, Refusal, WeekChange } from './idempotent';
@@ -125,8 +126,8 @@ const weekParts = ({ run, freePack, legendary }: State) => ({
 function weekChange(before: State, after: State): WeekChange {
   const was = weekParts(before);
   const now = weekParts(after);
-  const patch: WeekPatch = {};
-  const undo: WeekPatch = {};
+  const patch: WeekFields = {};
+  const undo: WeekFields = {};
   for (const field of Object.keys(was) as (keyof typeof was)[]) {
     if (!same(was[field], now[field])) {
       Object.assign(patch, { [field]: now[field] });

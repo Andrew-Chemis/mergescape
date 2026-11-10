@@ -5,8 +5,14 @@ import { createApiHandler, LOG_PAGE_SIZE } from '../src/handlers/api';
 import { isRolloverEvent } from '../src/rollover';
 import type { FunctionUrlResult } from '../src/http';
 import { JWT_AUDIENCE, JWT_ISSUER, JWT_TTL_SECONDS } from '../src/jwt';
-import { OAUTH_STATE_TTL_SECONDS } from '../src/db';
 import type { EventRow } from '../src/db';
+import {
+  OAUTH_STATE_LIFETIME_MS,
+  signState,
+  STATE_COOKIE,
+  STATE_FORMAT,
+  verifyState,
+} from '../src/oauth-state';
 import {
   apiRequest,
   CONFIG,
@@ -15,13 +21,13 @@ import {
   GITHUB_USER_TOKEN,
   jsonResponse,
   JWT_KEY,
+  loginOf,
   makeApiHarness,
   OAUTH_CLIENT_ID,
   OAUTH_CLIENT_SECRET,
   PAGES_ORIGIN,
-  stateOf,
 } from './api-harness';
-import type { ApiHarness } from './api-harness';
+import type { ApiHarness, Login } from './api-harness';
 import { START } from './harness';
 import { auditSchema } from './support';
 
@@ -33,16 +39,25 @@ function location(result: FunctionUrlResult): string {
   return String(result.headers?.location ?? '');
 }
 
-/** Run the login redirect and return the state it issued. */
-async function startLogin(h: ApiHarness): Promise<string> {
+/** Run the login redirect and return the state it issued and the cookie the browser keeps for the callback. */
+async function startLogin(h: ApiHarness): Promise<Login> {
   const result = await h.handler(apiRequest({ path: '/auth/login', origin: null }));
   expect(result.statusCode).toBe(302);
-  return stateOf(location(result));
+  return loginOf(result);
+}
+
+/** The callback navigation a browser makes after GitHub sends it back. */
+function callbackRequest(login: Login, query: Record<string, string> = {}) {
+  return apiRequest({
+    path: '/auth/callback',
+    origin: null,
+    query: { state: login.state, ...query },
+    cookies: login.cookies,
+  });
 }
 
 async function signIn(h: ApiHarness, code = 'abc123') {
-  const state = await startLogin(h);
-  return h.handler(apiRequest({ path: '/auth/callback', origin: null, query: { code, state } }));
+  return h.handler(callbackRequest(await startLogin(h), { code }));
 }
 
 afterEach(() => {
@@ -54,7 +69,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------------------------
 
 describe('GET /auth/login', () => {
-  it('redirects to GitHub with the client id and a fresh state, and stores the state for ten minutes', async () => {
+  it('redirects to GitHub with the client id and a signed state, and writes nothing', async () => {
     const h = makeApiHarness();
     const result = await h.handler(apiRequest({ path: '/auth/login', origin: null }));
     expect(result.statusCode).toBe(302);
@@ -62,28 +77,65 @@ describe('GET /auth/login', () => {
     expect(`${target.origin}${target.pathname}`).toBe('https://github.com/login/oauth/authorize');
     expect(target.searchParams.get('client_id')).toBe(OAUTH_CLIENT_ID);
     const state = target.searchParams.get('state') ?? '';
-    expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(h.fake.peek(`STATE#${state}`, 'META')).toEqual({
-      PK: `STATE#${state}`,
-      SK: 'META',
-      ttl: START / 1000 + OAUTH_STATE_TTL_SECONDS,
+    expect(state).toMatch(STATE_FORMAT);
+    expect(verifyState(JWT_KEY, state, START)).toMatchObject({
+      expiresAtMs: START + OAUTH_STATE_LIFETIME_MS,
     });
+    // Anyone can call this route, so it never touches the table.
+    expect(h.fake.calls).toEqual([]);
+    expect(h.fake.snapshot()).toEqual([]);
     expect(result.headers?.['cache-control']).toBe('no-store');
     // No secret leaves in the redirect.
     expect(location(result)).not.toContain(OAUTH_CLIENT_SECRET);
+    expect(location(result)).not.toContain(JWT_KEY);
   });
 
-  it('issues a different state each time', async () => {
+  it('binds the sign-in to the browser with an HttpOnly, Secure, SameSite=Lax __Host- cookie holding the nonce', async () => {
     const h = makeApiHarness();
-    const states = new Set([await startLogin(h), await startLogin(h), await startLogin(h)]);
-    expect(states.size).toBe(3);
-  });
-
-  it('sends the browser back to the client with an error when the table is unavailable', async () => {
-    const h = makeApiHarness();
-    vi.spyOn(h.fake, 'send').mockRejectedValue(Object.assign(new Error('x'), { name: 'Boom' }));
     const result = await h.handler(apiRequest({ path: '/auth/login', origin: null }));
+    const state = loginOf(result).state;
+    const nonce = state.split('.')[0];
+    expect(result.cookies).toEqual([
+      `${STATE_COOKIE}=${nonce}; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    ]);
+    expect(STATE_COOKIE.startsWith('__Host-')).toBe(true);
+    // The cookie holds the nonce only: the signature stays in the URL.
+    expect(String(result.cookies?.[0])).not.toContain('.');
+  });
+
+  it('issues a different state and cookie each time', async () => {
+    const h = makeApiHarness();
+    const logins = [await startLogin(h), await startLogin(h), await startLogin(h)];
+    expect(new Set(logins.map((login) => login.state)).size).toBe(3);
+    expect(new Set(logins.map((login) => login.cookies[0])).size).toBe(3);
+  });
+
+  it('survives any number of calls without a single write', async () => {
+    const h = makeApiHarness();
+    for (let i = 0; i < 25; i += 1) {
+      await startLogin(h);
+    }
+    expect(h.fake.calls).toEqual([]);
+  });
+
+  it('sends the browser back to the client with an error when a secret is unavailable', async () => {
+    const h = makeApiHarness();
+    const failing = createApiHandler({
+      db: h.db,
+      secrets: { get: () => Promise.reject(Object.assign(new Error('x'), { name: 'Boom' })) },
+      config: CONFIG,
+      log: {
+        error: (event, _context, error) =>
+          h.logs.push(JSON.stringify({ event, error: (error as Error).name })),
+      },
+      now: () => h.clock.now,
+    });
+    const result = await failing(apiRequest({ path: '/auth/login', origin: null }));
     expect(location(result)).toBe(`${PAGES_ORIGIN}/#error=server_error`);
+    // Whatever the failure, no sign-in cookie is left behind.
+    expect(result.cookies).toEqual([
+      `${STATE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    ]);
     expect(h.logs).toEqual([JSON.stringify({ event: 'api.login_failed', error: 'Boom' })]);
   });
 });
@@ -115,6 +167,10 @@ describe('GET /auth/callback', () => {
     const profile = await h.db.getProfile(1001001, true);
     expect(profile).toMatchObject({ login: 'Octo-Cat', installations: [777001, 777002], xp: 0 });
     expect(result.headers?.['referrer-policy']).toBe('no-referrer');
+    // The sign-in is over: the state cookie is removed.
+    expect(result.cookies).toEqual([
+      `${STATE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    ]);
   });
 
   it('writes no GitHub token anywhere: not in the table, not in the logs', async () => {
@@ -157,8 +213,13 @@ describe('GET /auth/callback', () => {
     for (const spy of consoleSpies) {
       expect(JSON.stringify(spy.mock.calls)).not.toContain(GITHUB_USER_TOKEN);
     }
-    // What remains in the table is the profile alone: the state was consumed.
-    expect(h.fake.snapshot().map((item) => item.PK)).toEqual(['USER#1001001']);
+    // What remains in the table is the profile and the record that the state was used.
+    expect(
+      h.fake
+        .snapshot()
+        .map((item) => String(item.PK).split('#')[0])
+        .sort(),
+    ).toEqual(['STATE', 'USER']);
     auditSchema(h.fake);
   });
 
@@ -189,28 +250,35 @@ describe('GET /auth/callback', () => {
     });
   });
 
-  it('accepts a state once: the second use is rejected without calling GitHub', async () => {
+  it('accepts a state once: the second use is rejected, whatever GitHub says about the code', async () => {
     const h = makeApiHarness();
-    const state = await startLogin(h);
-    const request = apiRequest({
-      path: '/auth/callback',
-      origin: null,
-      query: { code: 'abc', state },
-    });
-    expect(fragmentOf(location(await h.handler(request)))).toMatch(/^#token=/);
-    const callsAfterFirst = h.github.calls.length;
-    const replay = await h.handler(request);
+    const login = await startLogin(h);
+    expect(fragmentOf(location(await h.handler(callbackRequest(login, { code: 'abc' }))))).toMatch(
+      /^#token=/,
+    );
+    // The state was recorded as used (a write only a completed sign-in makes).
+    expect(h.fake.snapshot().filter((item) => String(item.PK).startsWith('STATE#'))).toHaveLength(
+      1,
+    );
+    const replay = await h.handler(callbackRequest(login, { code: 'fresh-code' }));
     expect(fragmentOf(location(replay))).toBe('#error=invalid_state');
-    expect(h.github.calls).toHaveLength(callsAfterFirst);
+  });
+
+  it('writes nothing for a callback GitHub does not accept: only a completed sign-in consumes a state', async () => {
+    const h = makeApiHarness({ exchange: () => jsonResponse({ error: 'bad_verification_code' }) });
+    const login = await startLogin(h);
+    for (let i = 0; i < 3; i += 1) {
+      const result = await h.handler(callbackRequest(login, { code: 'junk' }));
+      expect(fragmentOf(location(result))).toBe('#error=auth_failed');
+    }
+    expect(h.fake.calls).toEqual([]);
   });
 
   it('rejects a state after ten minutes, and does not let a late callback sign in', async () => {
     const h = makeApiHarness();
-    const state = await startLogin(h);
-    h.clock.now += OAUTH_STATE_TTL_SECONDS * 1000;
-    const result = await h.handler(
-      apiRequest({ path: '/auth/callback', origin: null, query: { code: 'abc', state } }),
-    );
+    const login = await startLogin(h);
+    h.clock.now += OAUTH_STATE_LIFETIME_MS;
+    const result = await h.handler(callbackRequest(login, { code: 'abc' }));
     expect(fragmentOf(location(result))).toBe('#error=invalid_state');
     expect(h.github.calls).toHaveLength(0);
     expect(await h.db.getProfile(1001001)).toBeNull();
@@ -218,24 +286,78 @@ describe('GET /auth/callback', () => {
 
   it('accepts a state just inside the ten minutes', async () => {
     const h = makeApiHarness();
-    const state = await startLogin(h);
-    h.clock.now += OAUTH_STATE_TTL_SECONDS * 1000 - 1000;
+    const login = await startLogin(h);
+    h.clock.now += OAUTH_STATE_LIFETIME_MS - 1000;
+    const result = await h.handler(callbackRequest(login, { code: 'abc' }));
+    expect(fragmentOf(location(result))).toMatch(/^#token=/);
+  });
+
+  it('refuses a callback from a browser that did not start the sign-in (login CSRF)', async () => {
+    const h = makeApiHarness();
+    // The attacker starts a sign-in and keeps the cookie; the victim is sent the state without it.
+    const attacker = await startLogin(h);
+    const another = await startLogin(h);
+    for (const cookies of [
+      [],
+      ['other=value'],
+      [`${STATE_COOKIE}=`],
+      // A cookie from a different sign-in holds a different nonce.
+      another.cookies,
+    ]) {
+      const result = await h.handler(
+        apiRequest({
+          path: '/auth/callback',
+          origin: null,
+          query: { code: 'abc', state: attacker.state },
+          cookies,
+        }),
+      );
+      expect(fragmentOf(location(result))).toBe('#error=invalid_state');
+    }
+    expect(h.github.calls).toHaveLength(0);
+    expect(await h.db.getProfile(1001001)).toBeNull();
+    // The right browser still signs in with that state.
+    expect(
+      fragmentOf(location(await h.handler(callbackRequest(attacker, { code: 'abc' })))),
+    ).toMatch(/^#token=/);
+  });
+
+  it('reads the cookie from the Cookie header too', async () => {
+    const h = makeApiHarness();
+    const login = await startLogin(h);
     const result = await h.handler(
-      apiRequest({ path: '/auth/callback', origin: null, query: { code: 'abc', state } }),
+      apiRequest({
+        path: '/auth/callback',
+        origin: null,
+        query: { code: 'abc', state: login.state },
+        headers: { cookie: `theme=dark; ${login.cookies[0]}` },
+      }),
     );
     expect(fragmentOf(location(result))).toMatch(/^#token=/);
   });
 
-  it('rejects an unknown, missing or malformed state', async () => {
+  it('rejects an unknown, tampered, missing or malformed state', async () => {
     const h = makeApiHarness();
+    const login = await startLogin(h);
+    const [nonce = '', expiry = '', mac = ''] = login.state.split('.');
+    const flipped = `${mac.slice(0, -1)}${mac.endsWith('A') ? 'B' : 'A'}`;
+    const forged = signState('another-jwt-key-0123456789abcdef0123456789', nonce, h.clock.now);
     for (const query of [
       { code: 'abc', state: 'A'.repeat(43) },
       { code: 'abc' },
       { code: 'abc', state: 'short' },
       { code: 'abc', state: '../../etc/passwd' + 'x'.repeat(20) },
+      // The signature does not cover a different expiry, a different nonce, or a flipped bit.
+      { code: 'abc', state: `${nonce}.${(Number.parseInt(expiry, 36) + 600).toString(36)}.${mac}` },
+      { code: 'abc', state: `${'B'.repeat(43)}.${expiry}.${mac}` },
+      { code: 'abc', state: `${nonce}.${expiry}.${flipped}` },
+      // A state signed with some other key.
+      { code: 'abc', state: forged },
     ] as Record<string, string>[]) {
-      const result = await h.handler(apiRequest({ path: '/auth/callback', origin: null, query }));
-      expect(fragmentOf(location(result))).toBe('#error=invalid_state');
+      const result = await h.handler(
+        apiRequest({ path: '/auth/callback', origin: null, query, cookies: login.cookies }),
+      );
+      expect(fragmentOf(location(result)), JSON.stringify(query)).toBe('#error=invalid_state');
     }
     expect(h.github.calls).toHaveLength(0);
   });
@@ -243,28 +365,15 @@ describe('GET /auth/callback', () => {
   it('reports a declined authorization and a missing code without echoing GitHub text', async () => {
     const h = makeApiHarness();
     const declined = await h.handler(
-      apiRequest({
-        path: '/auth/callback',
-        origin: null,
-        query: {
-          error: 'access_denied',
-          error_description: '<script>alert(1)</script>',
-          state: await startLogin(h),
-        },
+      callbackRequest(await startLogin(h), {
+        error: 'access_denied',
+        error_description: '<script>alert(1)</script>',
       }),
     );
     expect(location(declined)).toBe(`${PAGES_ORIGIN}/#error=access_denied`);
-    const noCode = await h.handler(
-      apiRequest({ path: '/auth/callback', origin: null, query: { state: await startLogin(h) } }),
-    );
+    const noCode = await h.handler(callbackRequest(await startLogin(h)));
     expect(fragmentOf(location(noCode))).toBe('#error=invalid_request');
-    const badCode = await h.handler(
-      apiRequest({
-        path: '/auth/callback',
-        origin: null,
-        query: { code: 'a b&c', state: await startLogin(h) },
-      }),
-    );
+    const badCode = await h.handler(callbackRequest(await startLogin(h), { code: 'a b&c' }));
     expect(fragmentOf(location(badCode))).toBe('#error=invalid_request');
     expect(h.github.calls).toHaveLength(0);
   });

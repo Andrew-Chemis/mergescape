@@ -12,7 +12,7 @@ import { Db } from '../src/db';
 import type { DocClient } from '../src/db';
 import { MAX_EXPORT_BYTES } from '../src/handlers/api';
 import type { FunctionUrlEvent, FunctionUrlResult } from '../src/http';
-import { apiRequest, fragmentOf, stateOf } from './api-harness';
+import { apiRequest, fragmentOf, loginOf } from './api-harness';
 import { FakeDynamo } from './fake-dynamo';
 import type { FakeOperation } from './fake-dynamo';
 import { API_ROLE, DAY, makeGame, playLife } from './game-harness';
@@ -712,10 +712,14 @@ describe('POST /delete', () => {
 
     // Sign in again through the OAuth flow (the scripted GitHub answers as Octo-Cat, id 1001001).
     game.clock.now += 3 * DAY;
-    const login = await game.api(apiRequest({ path: '/auth/login', origin: null }));
-    const state = stateOf(String(login.headers?.location));
+    const login = loginOf(await game.api(apiRequest({ path: '/auth/login', origin: null })));
     const callback = await game.api(
-      apiRequest({ path: '/auth/callback', origin: null, query: { code: 'abc123', state } }),
+      apiRequest({
+        path: '/auth/callback',
+        origin: null,
+        query: { code: 'abc123', state: login.state },
+        cookies: login.cookies,
+      }),
     );
     expect(callback.statusCode).toBe(302);
     const token = new URLSearchParams(fragmentOf(String(callback.headers?.location)).slice(1)).get(

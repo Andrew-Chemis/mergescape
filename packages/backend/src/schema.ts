@@ -92,6 +92,12 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'tz_offset',
     // The player's choice to keep the public README badge from showing them (Settings; GSI1 projects it).
     'badge_public',
+    // Commit markers, written in the same version-guarded write as the change they vouch for: the client
+    // request ids of the last few mutations, the (delivery, player) credits of the last few scored events,
+    // and the Act clears of the week whose payout was paid (a string set, cleared at the rollover).
+    'applied_requests',
+    'credited',
+    'acts_paid',
   ],
   // USER#<id> / EVT#<ts>#<delivery>: one Combat Log row. Numbers and scorer-generated labels only.
   EVENT: [
@@ -137,6 +143,9 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     'sync_count',
     'draft',
     'base_ref_is_default',
+    // Delivery ids that have added to the two counters above (a string set), so a delivery that is processed
+    // again does not add twice. Bookkeeping, not a fact about the PR.
+    'counted',
   ],
   // PR#<repo>#<n> / REVIEW#... and INLINE#...: exactly Requirement 3.2.
   REVIEW: [
@@ -149,9 +158,11 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
   ],
   // INSTALL#<id> / META. `ttl` tombstones a deleted installation (the ingest role cannot DeleteItem).
   INSTALL: ['account_id', 'repo_ids', 'suspended', 'ttl'],
-  // DELIVERY#<guid> / META. `released` re-opens a delivery whose processing failed before any credit.
-  DELIVERY: ['ttl', 'released'],
-  // STATE#<nonce> / META.
+  // DELIVERY#<guid> / META (and DELIVERY#body-<sha256> for a signed body): `status` is processing or done, a
+  // processing claim is held until `lease_until` (epoch ms), and `credits` is the ledger of what the
+  // delivery decided to credit, so an attempt that died can be finished by the next one.
+  DELIVERY: ['ttl', 'status', 'lease_until', 'credits'],
+  // STATE#<nonce> / META: an OAuth state that has been used (the state itself is stateless).
   STATE: ['ttl'],
   // USER#<id> / WEEK#<yyyy-ww>: the RunState fields plus the bookkeeping the endpoints need.
   WEEK: [
@@ -175,6 +186,10 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<ItemKind, readonly string[]>> =
     // A free Pledge pack granted by the Raid clear, and a Legendary Charm offered on every 4th Renown.
     'free_pack',
     'legendary',
+    // Requests that hold the week lock and are not yet promoted to `request_ids`: id to when, and the fields
+    // they changed before and after. Credit ids the week has counted (a string set).
+    'pending',
+    'credited',
   ],
   // USER#<id> / EXPEDITION#<iso sent_at>: one expedition. The seed is stored at send time and the loot is
   // rolled from it once, on collection, then stored here (Requirement 15.4).

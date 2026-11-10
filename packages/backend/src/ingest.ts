@@ -6,12 +6,36 @@
  *
  *   1. PLAN     reads only. Resolve each actor to a linked, installation-accessible player and decide
  *               whether the event matters to anyone. Count drops.
- *   2. CLAIM    one conditional put on `DELIVERY#<id>`; a duplicate stops here (Requirement 1.5).
+ *   2. CLAIM    one conditional write on `DELIVERY#<id>` that holds the delivery for a lease; a duplicate
+ *               (finished, or held by an attempt that is still alive) stops here (Requirement 1.5). The
+ *               signed body is claimed the same way (`DELIVERY#body-<sha256>`), because the delivery id is
+ *               not covered by the signature: a captured body replayed under a fresh GUID stops here too.
  *   3. EXECUTE  write the shared `PR#` records, then score and credit each player.
+ *   4. FINISH   mark the delivery `done`.
  *
- * Failure handling: PR records and Combat Log rows are keyed by delivery id and so are idempotent, but a
- * profile credit is not. If anything throws before the first credit, the claim is released so GitHub's
- * "Redeliver" works; after a credit the claim is kept, so a redelivery cannot credit XP twice.
+ * Failure handling. Every step of a delivery can be run again, so a failed delivery is simply released (its
+ * lease is ended at once, or runs out on its own after `DELIVERY_LEASE_MS` when the Lambda was killed
+ * before it could) and GitHub's "Redeliver" completes it:
+ *
+ *   - the PR records and Combat Log rows are keyed by delivery id and so are idempotent; the push and review
+ *     round counters are added once per delivery (the delivery id is recorded on the PR item with the add);
+ *   - a profile credit is not idempotent by itself, so each one is committed together with a marker on the
+ *     profile (`credited`, the last few credit ids), in the same version-guarded write. A credit whose
+ *     marker is on the profile is never scored again;
+ *   - what the steps after the commit need (the week's XP, the Combat Log row) is written to the delivery's
+ *     ledger BEFORE the commit. A later attempt that finds the marker finishes those steps from the ledger:
+ *     the Combat Log row is put again (same key), the week is credited once (the credit id is recorded on
+ *     the week with the XP), and an Act clear pays its payout once (recorded on the profile) before the act
+ *     is claimed, so a crash anywhere in between leaves nothing lost and nothing paid twice.
+ *
+ * Limits: the profile keeps the last `MAX_CREDITED` credit ids, so the redelivery of a delivery that died
+ * after its commit is scored again if more than that many other credits reached the same player in
+ * between (a day's work for a very busy player, against a redelivery that is a person pressing a button).
+ * An Act clear whose claim fails after its payout is claimed by the next event that reaches the target.
+ *
+ * Not resumed: the `FEAT#` and `EXPEDITION#` records of the credit (the profile already holds the Feats
+ * and the trip, the items are an audit trail), and the Feats a Boss clear unlocks, which a later event
+ * re-checks.
  */
 import {
   addSupplies,
@@ -43,6 +67,8 @@ import type {
 import { VersionConflictError } from './db';
 import type {
   Db,
+  DeliveryClaim,
+  DeliveryCredit,
   EventRow,
   InstallationItem,
   PRBundle,
@@ -59,6 +85,9 @@ import { depthPatch, scorerStateOf, toPlayerState } from './player';
 import { loadCurrent } from './runs';
 import type { RunContext } from './runs';
 import { randomSeed } from './seed';
+
+/** Credit ids kept on a profile as proof that a credit was committed (the last few). */
+const MAX_CREDITED = 12;
 
 /** The one expedition the game sends on its own: the free 4 h Forage to Koko Woods after the first scored event. */
 const ONBOARDING = { region: 'koko-woods', choice: 'forage' } as const;
@@ -169,7 +198,7 @@ interface PullRequestPlan {
    */
   credits: { profile: ProfileItem; event: VerifiedKillEvent | RiposteCreditEvent }[];
   /** Lifetime merges of the PR's author when a player, for the Mentor Pledge. */
-  authorMerges: number;
+  authorMerges: number | null;
   /** Write the shared `PR#` META item (and counters) for this event. */
   upsertFacts: boolean;
 }
@@ -243,7 +272,7 @@ async function planPullRequest(
     event.kind === 'review_submitted' && actor !== null
       ? await resolver.lookup(pr.author.id)
       : null;
-  const authorMerges = authorProfile ? lifetimeMerges(toPlayerState(authorProfile)) : 0;
+  const authorMerges = authorProfile ? lifetimeMerges(toPlayerState(authorProfile)) : null;
   const prState = buildPRState(bundle, pr, authorMerges);
   const credits: PullRequestPlan['credits'] = [];
   if (event.kind === 'pr_merged' && pr.merged) {
@@ -294,9 +323,10 @@ function isRelevant(plan: Plan): boolean {
 // Phase 3: execution
 // ---------------------------------------------------------------------------------------------
 
-interface Progress {
-  /** A profile credit has been committed in this delivery. */
-  committed: boolean;
+/** What the attempts at a delivery have decided to credit, by credit id, and a way to write it down. */
+interface Ledger {
+  credits: Record<string, DeliveryCredit>;
+  save(): Promise<void>;
 }
 
 function creditSuffix(event: PullRequestEvent, deliveryId: string): string {
@@ -417,26 +447,30 @@ function scoreWrite(
 }
 
 /**
- * Add a scored event's XP to the week and clear the act if the target is now met (Requirement 6.5). The
- * atomic add returns the week's new total, so concurrent events agree on whose XP crossed the line; the
- * clear is claimed with a write conditional on the act still being current, so exactly one event pays it.
+ * Add a scored event's XP to the week, and clear the act if the target is now met (Requirement 6.5). The
+ * add is made once per credit (its id is recorded with it) and returns the week's new total, so concurrent
+ * events agree on whose XP crossed the line.
+ *
+ * An Act clear pays first and claims after. The payout is credited once per Act (the clear's name,
+ * `<week>:<act>`, is recorded on the profile in the same write), so of the events that cross the line
+ * exactly one pays; the claim, a write conditional on the act still being current, moves the week on and
+ * is made by whoever gets there. If the claim does not happen (the Lambda dies after the payout) the next
+ * event that reaches the target finds the payout paid, and claims.
  */
 async function creditWeek(
   ctx: IngestContext,
   userId: number,
-  weekKey: string,
-  event: PullRequestEvent,
-  result: ScoreResult,
+  creditId: string,
+  credit: DeliveryCredit,
   after: PlayerState,
   now: number,
 ): Promise<void> {
-  if (result.xp <= 0) {
-    return;
-  }
+  const weekKey = credit.week;
   const week = await ctx.db.addWeekCredit(userId, weekKey, {
-    xp: result.xp,
-    merge: event.kind === 'pr_merged',
-    review: event.kind === 'review_submitted',
+    xp: credit.xp,
+    merge: credit.merge,
+    review: credit.review,
+    id: creditId,
   });
   const act = week?.run.act ?? null;
   if (!week || act === null) {
@@ -444,6 +478,17 @@ async function creditWeek(
   }
   const cleared = clearAct(week.run, after);
   if (!cleared) {
+    return;
+  }
+  const paid = await ctx.db.addPayout(
+    userId,
+    {
+      gold: cleared.player.gold - after.gold,
+      renown: cleared.clear.renown - after.renown,
+    },
+    `${weekKey}:${act}`,
+  );
+  if (paid === 'gone') {
     return;
   }
   const claimed = await ctx.db.saveWeek(
@@ -458,26 +503,45 @@ async function creditWeek(
       ...(cleared.clear.legendary !== null ? { legendary: cleared.clear.legendary } : {}),
     },
   );
-  if (claimed) {
-    await ctx.db.addPayout(userId, {
-      gold: cleared.player.gold - after.gold,
-      renown: cleared.clear.renown - after.renown,
-    });
-    if (cleared.clear.act === 'boss') {
-      // The Boss is down: the Mogul and the unbroken run of Boss weeks feed the World and Endurance Feats,
-      // and the Renown it just paid can reach one (read after the payout, which is why it is a second write).
-      try {
-        await settleWorld(
-          ctx.db,
-          userId,
-          { kind: 'boss_cleared', mogul: week.run.mogul },
-          now,
-          `boss-${weekKey}`,
-        );
-      } catch (error) {
-        ctx.log.error('ingest.feat_failed', { userId }, error);
-      }
+  if (claimed && cleared.clear.act === 'boss') {
+    // The Boss is down: the Mogul and the unbroken run of Boss weeks feed the World and Endurance Feats,
+    // and the Renown it just paid can reach one (read after the payout, which is why it is a second write).
+    try {
+      await settleWorld(
+        ctx.db,
+        userId,
+        { kind: 'boss_cleared', mogul: week.run.mogul },
+        now,
+        `boss-${weekKey}`,
+      );
+    } catch (error) {
+      ctx.log.error('ingest.feat_failed', { userId }, error);
     }
+  }
+}
+
+/**
+ * The steps after a credit's profile write, from what the credit decided (so they can be run again by a
+ * later attempt): its Combat Log row, then its XP for the week with the act clear it may bring. Both are
+ * idempotent. A failure is not caught: the delivery fails and is released, and its redelivery finishes them.
+ */
+async function finishCredit(
+  ctx: IngestContext,
+  userId: number,
+  creditId: string,
+  credit: DeliveryCredit,
+  after: PlayerState,
+  now: number,
+): Promise<void> {
+  if (credit.row) {
+    await ctx.db.putEvent(credit.row);
+  }
+  if (credit.xp > 0) {
+    await creditWeek(ctx, userId, creditId, credit, after, now);
+  }
+  // Counted once the credit is whole, so an attempt that is finished by another is counted by that one.
+  if (credit.row) {
+    ctx.metrics.count('events_scored');
   }
 }
 
@@ -486,10 +550,14 @@ async function creditWeek(
  * the spot if the rollover has not reached them), scored, and written with a version condition on the
  * profile; a concurrent write (two webhooks for one player at once) re-reads and re-scores, so caps and
  * Zone always see the latest state. The week gets the XP afterwards, and an act clear pays out.
+ *
+ * What the credit decided is written to the delivery's ledger first and the profile write carries the
+ * credit's marker, so an attempt that finds the marker (or a credit that never touched the profile) only
+ * finishes the steps after it, from the ledger, and never scores twice.
  */
 async function credit(
   ctx: IngestContext,
-  progress: Progress,
+  ledger: Ledger,
   userId: number,
   event: PullRequestEvent,
   prState: PRState,
@@ -498,6 +566,7 @@ async function credit(
   now: number,
 ): Promise<void> {
   const runContext: RunContext = { db: ctx.db, now, newSeed: ctx.newSeed ?? randomSeed };
+  const creditId = creditSuffix(event, deliveryId);
   // Optimistic-lock retries per credited event; when they run out the delivery fails.
   const credited = await withVersionRetry<void>(async () => {
     const current = await loadCurrent(runContext, userId);
@@ -505,6 +574,16 @@ async function credit(
       return;
     }
     const { profile, player, run } = current;
+    const committed = profile.creditedDeliveries.includes(creditId);
+    const earlier = ledger.credits[creditId];
+    if (earlier && (committed || !earlier.commits)) {
+      // An earlier attempt got this far: finish what it decided on, from the ledger.
+      await finishCredit(ctx, userId, creditId, earlier, player, now);
+      return;
+    }
+    if (committed) {
+      return; // committed, and there was nothing after the commit to finish
+    }
     const result = score(event, player, prState, now);
     // What the event does to the character beyond its XP (tasks.md 22): bank its supplies, count it toward
     // the Feats and unlock the ones it reaches, and send the onboarding expedition after the first one.
@@ -528,31 +607,34 @@ async function credit(
       }
     }
     const depth = depthPatch(player, after);
-    if (result.xp > 0 || changesProfile(result) || Object.keys(depth).length > 0) {
-      const written = await versionedWrite(() =>
-        ctx.db.applyScore(
-          userId,
-          profile.version,
-          scoreWrite(profile, run.weekKey, player, after, result, now, depth),
-        ),
-      );
-      if (!written) {
+    const commits = result.xp > 0 || changesProfile(result) || Object.keys(depth).length > 0;
+    const row = eventRow(userId, event, prState, bundle, result, deliveryId, now);
+    const decided: DeliveryCredit = {
+      week: run.weekKey,
+      xp: result.xp,
+      merge: event.kind === 'pr_merged',
+      review: event.kind === 'review_submitted',
+      row,
+      commits,
+    };
+    const finishes = decided.xp > 0 || row !== null;
+    if (finishes) {
+      ledger.credits[creditId] = decided;
+      await ledger.save();
+    }
+    if (commits) {
+      const write = scoreWrite(profile, run.weekKey, player, after, result, now, depth);
+      write.patch = {
+        ...write.patch,
+        creditedDeliveries: [...profile.creditedDeliveries, creditId].slice(-MAX_CREDITED),
+      };
+      if (!(await versionedWrite(() => ctx.db.applyScore(userId, profile.version, write)))) {
         return RETRY;
       }
-      progress.committed = true;
-      const source = creditSuffix(event, deliveryId);
-      await recordDepth(ctx, userId, featured.unlocked, onboarding, source, now);
-      try {
-        await creditWeek(ctx, userId, run.weekKey, event, result, after, now);
-      } catch (error) {
-        // The profile is already credited: keep the Combat Log row and report the week's failure.
-        ctx.log.error('ingest.week_failed', { userId }, error);
-      }
+      await recordDepth(ctx, userId, featured.unlocked, onboarding, creditId, now);
     }
-    const row = eventRow(userId, event, prState, bundle, result, deliveryId, now);
-    if (row) {
-      await ctx.db.putEvent(row);
-      ctx.metrics.count('events_scored');
+    if (finishes) {
+      await finishCredit(ctx, userId, creditId, decided, after, now);
     }
   });
   if (credited === RETRY) {
@@ -594,7 +676,7 @@ function reviewTime(submittedAt: string | null): string {
 
 async function executePullRequest(
   ctx: IngestContext,
-  progress: Progress,
+  ledger: Ledger,
   plan: PullRequestPlan,
   deliveryId: string,
   now: number,
@@ -609,11 +691,15 @@ async function executePullRequest(
   const forPr = score(event, subject, prState, now).counterUpdates.pr;
 
   if (plan.upsertFacts) {
-    await ctx.db.upsertPR(pr, {
-      syncCount: (forPr.syncCount ?? prState.syncCount) - prState.syncCount,
-      reviewRoundCount:
-        (forPr.reviewRoundCount ?? prState.reviewRoundCount) - prState.reviewRoundCount,
-    });
+    await ctx.db.upsertPR(
+      pr,
+      {
+        syncCount: (forPr.syncCount ?? prState.syncCount) - prState.syncCount,
+        reviewRoundCount:
+          (forPr.reviewRoundCount ?? prState.reviewRoundCount) - prState.reviewRoundCount,
+      },
+      deliveryId,
+    );
   }
   if (event.kind === 'review_submitted' && forPr.review && !event.actor.isBot) {
     await ctx.db.putReview(pr.repoId, pr.number, {
@@ -633,10 +719,10 @@ async function executePullRequest(
   }
 
   if (plan.actor && SCORING_KINDS.has(event.kind)) {
-    await credit(ctx, progress, plan.actor.id, event, prState, bundle, deliveryId, now);
+    await credit(ctx, ledger, plan.actor.id, event, prState, bundle, deliveryId, now);
   }
   for (const other of plan.credits) {
-    await credit(ctx, progress, other.profile.id, other.event, prState, bundle, deliveryId, now);
+    await credit(ctx, ledger, other.profile.id, other.event, prState, bundle, deliveryId, now);
   }
 }
 
@@ -685,15 +771,55 @@ async function executeInstallation(
 // Entry point
 // ---------------------------------------------------------------------------------------------
 
+/** The ledger key of a signed body: the dedupe record that does not depend on the delivery id. */
+const bodyKey = (digest: string): string => `body-${digest}`;
+
+/**
+ * Claim the delivery and, when its body digest is known, the signed body. The body goes first: a replay of a
+ * captured body under a fresh GUID is refused before it writes anything under that GUID. Returns what earlier
+ * attempts left, or null when either is finished or held by an attempt that is still alive.
+ */
+async function claimDelivery(
+  ctx: IngestContext,
+  deliveryId: string,
+  digest: string | undefined,
+  now: number,
+): Promise<DeliveryClaim | null> {
+  if (digest !== undefined && (await ctx.db.claimDelivery(bodyKey(digest), now)) === null) {
+    return null;
+  }
+  let claim: DeliveryClaim | null = null;
+  try {
+    claim = await ctx.db.claimDelivery(deliveryId, now);
+  } finally {
+    if (claim === null && digest !== undefined) {
+      await releaseDelivery(ctx, bodyKey(digest));
+    }
+  }
+  return claim;
+}
+
+/** End a claim at once so the next attempt does not wait for the lease; a failure is only logged. */
+async function releaseDelivery(ctx: IngestContext, key: string): Promise<void> {
+  try {
+    await ctx.db.releaseDelivery(key);
+  } catch (releaseError) {
+    ctx.log.error('ingest.release_failed', {}, releaseError);
+  }
+}
+
 /**
  * Process the events of one verified, parsed delivery.
+ * @param digest SHA-256 (hex) of the signed body, to refuse the same body under another delivery id
  * @returns `dropped` when nothing in it matters to a linked player (no write was made, not even the
- *          dedupe claim), `duplicate` when the delivery id was already processed, else `processed`.
+ *          dedupe claim), `duplicate` when the delivery was already processed (or is being processed),
+ *          else `processed`.
  */
 export async function processDelivery(
   ctx: IngestContext,
   deliveryId: string,
   events: readonly GameEvent[],
+  digest?: string,
 ): Promise<ProcessOutcome> {
   const now = ctx.now();
   const resolver = new Resolver(ctx.db, now);
@@ -718,28 +844,35 @@ export async function processDelivery(
     return 'dropped';
   }
 
-  if (!(await ctx.db.claimDelivery(deliveryId, now))) {
+  const claim = await claimDelivery(ctx, deliveryId, digest, now);
+  if (claim === null) {
     ctx.metrics.count('duplicates');
     return 'duplicate';
   }
   report();
 
-  const progress: Progress = { committed: false };
+  const ledger: Ledger = {
+    credits: claim.credits,
+    save: () => ctx.db.saveDeliveryCredits(deliveryId, ledger.credits),
+  };
   try {
     for (const plan of work) {
       if (plan.type === 'installation') {
         await executeInstallation(ctx, plan.event, now);
       } else {
-        await executePullRequest(ctx, progress, plan, deliveryId, now);
+        await executePullRequest(ctx, ledger, plan, deliveryId, now);
       }
     }
+    // The delivery first, then its body: a body that is done while its delivery is not would refuse the
+    // redelivery that has to finish it.
+    await ctx.db.completeDelivery(deliveryId);
+    if (digest !== undefined) {
+      await ctx.db.completeDelivery(bodyKey(digest));
+    }
   } catch (error) {
-    if (!progress.committed) {
-      try {
-        await ctx.db.releaseDelivery(deliveryId);
-      } catch (releaseError) {
-        ctx.log.error('ingest.release_failed', {}, releaseError);
-      }
+    await releaseDelivery(ctx, deliveryId);
+    if (digest !== undefined) {
+      await releaseDelivery(ctx, bodyKey(digest));
     }
     throw error;
   }

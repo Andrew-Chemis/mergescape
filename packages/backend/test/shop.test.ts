@@ -451,7 +451,7 @@ describe('two requests at once', () => {
     expect(result(retry).me.gold).toBe(60);
   });
 
-  it('answers 404 and logs when the player is deleted between the week lock and the profile write', async () => {
+  it('answers 404 when the player is deleted between the week lock and the profile write', async () => {
     const g = await openShop(100);
     let raced = false;
     g.intercept.api = async (input) => {
@@ -465,8 +465,38 @@ describe('two requests at once', () => {
     g.intercept.api = undefined;
     expect(raced).toBe(true);
     expect(reply).toEqual({ status: 404, body: { error: 'no_profile' } });
-    // The week went with the player, so there was nothing left to put back.
-    expect(g.logs.join('\n')).toContain('mutation.undo_failed');
+    // The week went with the player, so there was nothing left to put back and nothing to complain about.
+    expect(g.logs).toEqual([]);
+    expect(await g.db.getWeekItem(AUTHOR_ID, '2026-46')).toBeNull();
+  });
+});
+
+describe('a bought pack and an Act clear', () => {
+  it('keeps a pack that was bought but not picked through the clear, with the options the player saw', async () => {
+    const g = await openShop(500);
+    const bought = await g.post('/shop/buy', { requestId: rid(), kind: 'pack', index: 0 });
+    expect(bought.status).toBe(200);
+    const seen = result(bought).week.shop?.packs[0]?.options;
+    expect(seen).toHaveLength(3);
+    const visit = result(bought).week.shop?.visit;
+
+    // The Raid act clears through the ingest Lambda: a new visit's stock is opened.
+    await playLife(g, 32);
+    const after = await week(g);
+    expect(after.clearedActs).toContain('raid');
+    expect(after.shop?.visit).toBeGreaterThan(visit ?? 0);
+    // The pack kept its slot, is still unpicked, and shows the same 3 options.
+    expect(after.shop?.packs[0]).toMatchObject({ bought: true, picked: false });
+    expect(after.shop?.packs[0]?.options).toEqual(seen);
+    // What the table stores for the slot says which visit it was stocked in (and nothing else leaks).
+    const stored = (await g.db.getWeekItem(AUTHOR_ID, '2026-46'))?.run.shop?.packs[0];
+    expect(stored).toMatchObject({ sold: true, visit });
+    auditSchema(g.fake);
+
+    // It can still be picked from, once.
+    const picked = await g.post('/shop/pick', { requestId: rid(), index: 0, option: 1 });
+    expect(picked.status).toBe(200);
+    expect(result(picked).week.shop?.packs[0]).toMatchObject({ picked: true, options: null });
   });
 });
 

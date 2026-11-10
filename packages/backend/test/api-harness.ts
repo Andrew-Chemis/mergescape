@@ -4,7 +4,7 @@ import { Db } from '../src/db';
 import type { DocClient } from '../src/db';
 import { createApiHandler } from '../src/handlers/api';
 import type { FetchLike } from '../src/github';
-import type { FunctionUrlEvent } from '../src/http';
+import type { FunctionUrlEvent, FunctionUrlResult } from '../src/http';
 import { JWT_AUDIENCE, JWT_ISSUER, signSessionToken } from '../src/jwt';
 import type { Logger } from '../src/log';
 import type { SecretName, Secrets } from '../src/secrets';
@@ -160,6 +160,8 @@ export interface RequestOptions {
   origin?: string | null;
   token?: string | null;
   headers?: Record<string, string>;
+  /** Cookies the browser sends, as Function URLs list them (`name=value`). */
+  cookies?: readonly string[];
 }
 
 export function apiRequest(options: RequestOptions): FunctionUrlEvent {
@@ -179,6 +181,7 @@ export function apiRequest(options: RequestOptions): FunctionUrlEvent {
     rawQueryString: new URLSearchParams(query).toString(),
     headers,
     queryStringParameters: Object.keys(query).length > 0 ? query : undefined,
+    ...(options.cookies ? { cookies: [...options.cookies] } : {}),
     requestContext: {
       accountId: 'anonymous',
       apiId: 'test',
@@ -220,6 +223,19 @@ export async function forgeToken(
 /** Pull the `state` out of the login redirect. */
 export function stateOf(location: string | undefined): string {
   return new URL(location ?? '').searchParams.get('state') ?? '';
+}
+
+/** What the login redirect issued: the state in the GitHub URL, and the cookies the browser sends back with it. */
+export interface Login {
+  state: string;
+  cookies: string[];
+}
+
+export function loginOf(result: FunctionUrlResult): Login {
+  return {
+    state: stateOf(String(result.headers?.location)),
+    cookies: (result.cookies ?? []).map((cookie) => cookie.split(';')[0] ?? ''),
+  };
 }
 
 /** The fragment of a redirect back to the client. */

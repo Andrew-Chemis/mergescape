@@ -6,15 +6,14 @@
  * answers the same way again, exactly as the shop does (`mutations.ts`), through the one write protocol of
  * `idempotent.ts`. What is specific to these requests:
  *
- *   - an expedition or Forge order that is being collected is claimed after the week lock, with one
- *     conditional write that flips `collected` from false to true on its `EXPEDITION#` / `JOB#` item and
- *     stores what the roll made. Of two collects of one trip exactly one passes the flip, so the loot is
- *     rolled and stored once;
- *   - the durable records follow the profile write: the `EXPEDITION#` / `JOB#` item of a trip or order that
- *     was started, and a `FEAT#` item per Feat the request unlocked.
- *
- * A claimed expedition whose profile write never happened is applied by the next collect (the claim fails,
- * the loot rolled again from the same seed is identical, and the guarded profile write applies it once).
+ *   - the profile write is the guard. Of two collects of one trip exactly one passes it (the other finds the
+ *     trip collected on the fresh profile and applies nothing), so the loot, which is a pure function of the
+ *     seed stored at the send, is granted once;
+ *   - the durable records follow the profile write, so a refused request leaves none behind: the
+ *     `EXPEDITION#` / `JOB#` item of a trip or order that was started, the same items flipped to `collected`
+ *     (with what the roll made) for one that was collected, and a `FEAT#` item per Feat the request unlocked.
+ *     The profile already holds all of it, so a record that fails to write is logged and the profile stays
+ *     right (the next collect of the same trip finds it collected and writes nothing).
  *
  * Every rule is a shared pure function (`plan` below only chooses which one).
  */
@@ -94,11 +93,11 @@ export type DepthOutcome = { status: 200; current: Current; result: DepthResult 
 interface Effects {
   /** A trip just sent: recorded after the profile write. */
   sent: ExpeditionState | null;
-  /** A trip being collected: claimed before the profile write. */
+  /** A trip being collected: its record is flipped to collected after the profile write. */
   collectedTrip: ExpeditionState | null;
   /** An order just started: recorded after the profile write. */
   started: ForgeJob | null;
-  /** An order being collected: claimed before the profile write. */
+  /** An order being collected: its record is flipped to collected after the profile write. */
   collectedJob: ForgeJob | null;
   /** Feats the change unlocked: recorded after the profile write. */
   unlocked: FeatUnlock[];
@@ -283,20 +282,15 @@ export async function mutateDepth(
     name: 'depth',
     plan: (player) => plan(request, player, ctx.now, seed),
     profilePatch: patchOf,
-    // Step 2: claim the loot or the piece, once.
-    async beforeProfile({ effects }) {
-      if (effects.collectedTrip) {
-        await ctx.db.claimExpedition(userId, effects.collectedTrip, ctx.now);
-      }
-      if (effects.collectedJob) {
-        await ctx.db.claimJob(userId, effects.collectedJob, ctx.now);
-      }
-    },
-    // Step 4: the records, independent of one another.
+    // The records, independent of one another, once the profile holds the request.
     async afterProfile({ effects }) {
       await Promise.all([
         effects.sent ? ctx.db.putExpedition(userId, effects.sent) : null,
         effects.started ? ctx.db.putJob(userId, effects.started) : null,
+        effects.collectedTrip
+          ? ctx.db.claimExpedition(userId, effects.collectedTrip, ctx.now)
+          : null,
+        effects.collectedJob ? ctx.db.claimJob(userId, effects.collectedJob, ctx.now) : null,
         writeFeats(ctx.db, userId, effects.unlocked, ctx.now, sourceOf(effects)),
       ]);
     },

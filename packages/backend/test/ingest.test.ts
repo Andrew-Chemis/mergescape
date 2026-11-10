@@ -763,7 +763,7 @@ describe('ingest: failures and concurrency', () => {
     expect(h.metrics.totals.get('duplicates')).toBe(1);
   });
 
-  it('keeps the claim once XP was credited, so a redelivery cannot credit twice', async () => {
+  it('finishes a delivery whose Combat Log write failed after the credit, without crediting twice', async () => {
     const h = makeIngestHarness();
     await h.signIn(AUTHOR_ID);
     const event = fixtureDelivery('pull_request.opened');

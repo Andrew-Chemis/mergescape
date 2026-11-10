@@ -75,9 +75,15 @@
 <Frame title="Cookies">
   <LegalSection id="plain" title="In plain words">
     <ul>
-      <li><b>Mergescape sets no cookies.</b></li>
+      <li><b>Mergescape sets no tracking cookies.</b></li>
       <li>
         It keeps three small items in your browser's local storage on this device, and nothing else.
+      </li>
+      <li>
+        While you sign in, the game's server sets one strictly necessary cookie on its own address
+        for at most ten minutes, to tie the sign-in that comes back from GitHub to the browser that
+        started it. It holds a random token and nothing about you, and it is cleared when the
+        sign-in finishes.
       </li>
       <li>There are no analytics today. Nothing about your visit is measured.</li>
     </ul>
@@ -100,7 +106,8 @@
     </ul>
     <p class="dim">
       All three are needed for the game to work or record a choice you made, so there is no cookie
-      banner. Nothing else is written to local storage, session storage, IndexedDB or cookies.
+      banner. Nothing else is written to local storage, session storage, IndexedDB or cookies by
+      this page; the only cookie is the ten-minute sign-in one above, set by the server.
     </p>
   </LegalSection>
 

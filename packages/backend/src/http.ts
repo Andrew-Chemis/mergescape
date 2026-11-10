@@ -30,10 +30,12 @@ export function json(
 export function redirect(
   location: string,
   headers: Record<string, string> = {},
+  cookies: readonly string[] = [],
 ): FunctionUrlResult {
   return {
     statusCode: 302,
     headers: { location, 'cache-control': 'no-store', ...headers },
+    ...(cookies.length > 0 ? { cookies: [...cookies] } : {}),
     body: '',
   };
 }

@@ -64,6 +64,29 @@ describe("the Founder's Board", () => {
     auditSchema(g.fake);
   });
 
+  it('stores the gold of the copy the Board has to sell when it returns a Charm the player now holds twice', async () => {
+    const g = makeGame();
+    g.seeds.push(FOUNDER_SEED);
+    await g.signIn(AUTHOR_ID);
+    await week(g);
+    await setProfile(g, { charms: [charm('rubber-duck')] });
+    g.clock.now = START + 2 * DAY; // Wednesday: the Board takes the Charm
+    expect((await me(g)).charms).toEqual([]);
+    // While it is away the player buys two of the same.
+    await setProfile(g, { charms: [{ ...charm('rubber-duck'), copies: 2 }] });
+    const before = await g.db.getProfile(AUTHOR_ID, true);
+
+    g.clock.now = START + 4 * DAY; // Friday: three copies do not fit one slot, so the surplus is sold
+    const after = await me(g);
+    expect(after.charms.map((held) => [held.id, held.copies])).toEqual([['rubber-duck', 2]]);
+    expect(after.gold).toBeGreaterThan(before?.gold ?? 0);
+    // The sale is on the stored profile, not just on this answer.
+    const stored = await g.db.getProfile(AUTHOR_ID, true);
+    expect(stored?.gold).toBe(after.gold);
+    expect(stored?.mogulBenched).toBeNull();
+    auditSchema(g.fake);
+  });
+
   it('pays four times the gold for points in a Founder week', async () => {
     const g = makeGame();
     g.seeds.push(FOUNDER_SEED);

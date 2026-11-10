@@ -101,17 +101,19 @@ export function delivery(options: DeliveryOptions): FunctionUrlEvent {
   };
 }
 
-/** A signed delivery of a recorded fixture, optionally with its JSON edited first. */
+/**
+ * A signed delivery of a recorded fixture, optionally with its JSON edited first. Every call makes a body of its
+ * own, as GitHub's deliveries are (they carry ids and timestamps of their own): the ingest Lambda refuses a
+ * signed body it has seen under another delivery id, and a test that sends the same fixture three times means
+ * three events.
+ */
 export function fixtureDelivery(
   fixture: string,
   edit?: (payload: Record<string, unknown>) => void,
   options: Partial<DeliveryOptions> = {},
 ): FunctionUrlEvent {
-  let body = fixtureText(fixture);
-  if (edit) {
-    const payload = JSON.parse(body) as Record<string, unknown>;
-    edit(payload);
-    body = JSON.stringify(payload);
-  }
-  return delivery({ eventName: eventNameOf(fixture), body, ...options });
+  const payload = JSON.parse(fixtureText(fixture)) as Record<string, unknown>;
+  edit?.(payload);
+  payload.test_body_id = nextDeliveryId();
+  return delivery({ eventName: eventNameOf(fixture), body: JSON.stringify(payload), ...options });
 }

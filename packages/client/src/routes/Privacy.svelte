@@ -146,9 +146,10 @@
   <LegalSection id="third" title="Cookies and other parties">
     <ul>
       <li>
-        No cookies, no ads, no analytics and no trackers today. Your sign-in token, the week the
-        Mogul reveal last played and your analytics choice live in your browser's local storage on
-        this device. See the <a href="#/cookies">Cookies</a> page.
+        No tracking cookies, no ads, no analytics and no trackers today. The only cookie is a
+        strictly necessary one the server sets for ten minutes while you sign in. Your sign-in
+        token, the week the Mogul reveal last played and your analytics choice live in your
+        browser's local storage on this device. See the <a href="#/cookies">Cookies</a> page.
       </li>
       <li>
         The page loads its three fonts from Google Fonts, so Google sees your IP address when your

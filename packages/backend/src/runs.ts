@@ -6,8 +6,9 @@
  * rollover), so both are `ensureRun`. The same profile write also banks the equipped pet's weekly supply
  * and checks the Feats the new week can reach (the weekly streak, Renown), once per run start. It is idempotent and safe to repeat after a crash at any point:
  *
- *   1. read the profile and this week's `WEEK#` item;
- *   2. if the profile's `run_week` is this week, there is nothing to do;
+ *   1. read the profile, then the `WEEK#` item of the week it names (in that order, see `ensureRun`);
+ *   2. if the profile's `run_week` is this week or a later one (a request whose clock was read just before
+ *      Monday can arrive after one that was read just after), there is nothing to do: a run never moves backwards;
  *   3. otherwise plan the transition from the profile as it is now (streak, Vocation, history, Mogul bag,
  *      new run) with the seed stored on the `WEEK#` item if one exists, else a fresh one;
  *   4. create the `WEEK#` item (conditional on it not existing: whoever creates it fixes the seed);
@@ -45,8 +46,9 @@ import type { Db, EventRow, ProfileItem, ProfilePatch, WeekItem } from './db';
 import { applyFeats, writeFeats } from './feat-flow';
 import { RETRY, versionedWrite, withVersionRetry } from './optimistic';
 import { depthPatch, runWithScorerState, toPlayerState } from './player';
+import { PENDING_TTL_MS, settleLocks } from './requests';
 import { vocationFor } from './vocation';
-import { weeksBetween } from './weeks';
+import { weekStartMs, weeksBetween } from './weeks';
 
 /** The weekly streak needs "at least one merged PR or three reviews that week" (types.ts, WeeklyStreakEvent). */
 export const STREAK_MIN_MERGES = 1;
@@ -208,6 +210,8 @@ export function planRollover(
       vocation: vocationFor(next.skillXp),
       runWeek: weekKey,
       history,
+      // The Act clears paid belong to the week that is over.
+      actsPaid: null,
     },
   };
 }
@@ -221,16 +225,22 @@ export function planRollover(
  * the player has no profile. Safe to call concurrently and to repeat; see the module comment.
  */
 export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled | null> {
-  const weekKey = isoWeekKey(ctx.now);
+  const clockWeek = isoWeekKey(ctx.now);
   const rolled = await withVersionRetry<Rolled | null>(async () => {
-    // The week key depends only on the clock, so the two reads need not wait for each other.
-    const [profile, existing] = await Promise.all([
-      ctx.db.getProfile(userId, true),
-      ctx.db.getWeekItem(userId, weekKey),
-    ]);
+    // The profile first, then the week it is in, one after the other. Read together, the week could come from
+    // before another request rolled the profile (the old week, or none) while the profile is already in the new
+    // one; that pairing defeats the "already rolled" check below and sends this request round for a spurious
+    // conflict. Read in this order, the week is at least as new as the profile that named it.
+    const profile = await ctx.db.getProfile(userId, true);
     if (!profile) {
       return null;
     }
+    // A request whose clock was read just before Monday 00:00 UTC can arrive after one that was read just after
+    // it. A profile already in that later week is rolled: the run never moves backwards (a backwards roll
+    // would score last week's streak and pay its XP a second time), and the newer week is the one served.
+    const ahead = profile.runWeek !== null && weeksBetween(clockWeek, profile.runWeek) >= 0;
+    const weekKey = ahead && profile.runWeek !== null ? profile.runWeek : clockWeek;
+    const existing = await ctx.db.getWeekItem(userId, weekKey);
     const profileRolled = profile.runWeek === weekKey;
     if (existing && profileRolled) {
       return { profile, week: existing };
@@ -241,7 +251,9 @@ export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled
         ? await ctx.db.getWeekItem(userId, profile.runWeek)
         : null;
     const seed = existing?.run.shopSeed ?? ctx.newSeed();
-    const plan = planRollover(profile, previous, seed, ctx.now, profileRolled);
+    // When the profile is ahead of this request's clock, a run that has to be made is made for the profile's week.
+    const at = ahead ? Math.max(ctx.now, weekStartMs(weekKey)) : ctx.now;
+    const plan = planRollover(profile, previous, seed, at, profileRolled);
     if (!existing && !(await ctx.db.createWeek(userId, plan.run))) {
       return RETRY; // someone else created it first: start over with their seed
     }
@@ -270,11 +282,17 @@ export async function ensureRun(ctx: RunContext, userId: number): Promise<Rolled
   return rolled;
 }
 
+/** A player as the scorer and the endpoints see the stored `profile` and `week`. */
+export function currentOf(profile: ProfileItem, week: WeekItem): Current {
+  const run = runWithScorerState(week.run, profile);
+  return { profile, week, run, player: playerWithRun(toPlayerState(profile), run) };
+}
+
 /**
- * Load a player for scoring or serving: ensure the run, then settle the two things that depend only on
- * the clock and are stored (the Founder's Board's Charm moves on Wednesday and Friday, unplayed Pledges
- * auto-play after Tuesday). Both are idempotent, so this is safe on every load. Returns null for a player
- * with no profile.
+ * Load a player for scoring or serving: ensure the run, then settle what is left half done or depends only
+ * on the clock and is stored: the week locks of mutations that finished or were abandoned (`requests.ts`),
+ * the Founder's Board's Charm that moves on Wednesday and Friday, and unplayed Pledges that auto-play after
+ * Tuesday. All of it is idempotent, so this is safe on every load. Returns null for a player with no profile.
  */
 export async function loadCurrent(ctx: RunContext, userId: number): Promise<Current | null> {
   const current = await withVersionRetry<Current | null>(async () => {
@@ -283,10 +301,28 @@ export async function loadCurrent(ctx: RunContext, userId: number): Promise<Curr
       return null;
     }
     const { profile, week } = rolled;
+    // A lock whose request is committed (the profile carries its marker) is promoted; one older than any
+    // request can live is abandoned and its change is taken back. One that may still be running stays.
+    const settled = settleLocks(week, (id, lock) =>
+      profile.appliedRequests.includes(id)
+        ? 'promote'
+        : ctx.now - lock.at > PENDING_TTL_MS
+          ? 'undo'
+          : 'keep',
+    );
+    if (settled) {
+      await ctx.db.saveWeek(userId, week.run.weekKey, { version: week.version }, settled);
+      // Whether or not it applied, read the week again.
+      return RETRY;
+    }
     const run = runWithScorerState(week.run, profile);
     const base = playerWithRun(toPlayerState(profile), run);
-    const board = applyFounderBoard(base, run.weekKey, ctx.now, run.shopSeed);
-    const auto = autoPlayPledges(run, board.player, ctx.now);
+    // The week served can be newer than the request's clock (see `ensureRun`); what the clock decides about
+    // it (the Board, the Pledge window) is decided at the earliest from the week's own start, so a request
+    // from just before Monday cannot auto-play the hand that was drawn just after it.
+    const at = Math.max(ctx.now, weekStartMs(run.weekKey));
+    const board = applyFounderBoard(base, run.weekKey, at, run.shopSeed);
+    const auto = autoPlayPledges(run, board.player, at);
     const boardChanged = board.player !== base;
     const playedChanged = auto.run !== run;
     if (!boardChanged && !playedChanged) {
@@ -298,6 +334,8 @@ export async function loadCurrent(ctx: RunContext, userId: number): Promise<Curr
       !(await versionedWrite(() =>
         ctx.db.saveProfile(userId, profile.version, {
           charms: board.player.charms,
+          // The Board can sell a surplus Charm on its way back, and the sale pays gold.
+          gold: board.player.gold,
           mogulBenched: board.player.moguls.benched,
           mogulBoardWeek: board.player.moguls.boardWeek,
         }),

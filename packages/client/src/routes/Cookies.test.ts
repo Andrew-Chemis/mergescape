@@ -29,8 +29,10 @@ describe('the Cookies page', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Cookies');
     expect(document.title).toBe('Cookies · Mergescape');
     const plain = textOf(screen.getByRole('region', { name: 'In plain words' }));
-    expect(plain).toContain('Mergescape sets no cookies.');
+    expect(plain).toContain('Mergescape sets no tracking cookies.');
     expect(plain).toContain('three small items in your browser');
+    expect(plain).toContain('one strictly necessary cookie');
+    expect(plain).toContain('ten minutes');
     expect(plain).toContain('There are no analytics today');
   });
 
