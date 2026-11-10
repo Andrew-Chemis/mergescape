@@ -4,6 +4,7 @@
  * (`ShopError`, `PlayError`, `GoldError`) plus `confirm_mismatch` from `POST /delete`.
  */
 import { ApiError } from './api';
+import type { SignInProblem } from './api';
 
 const MESSAGES: Readonly<Record<string, string>> = {
   insufficient_gold: 'Not enough gold.',
@@ -28,6 +29,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
   already_played: 'That Pledge is already in play.',
   play_limit: 'You can play up to 3 Pledges a week.',
   confirm_mismatch: 'That is not your GitHub login. Nothing was deleted.',
+  export_too_large:
+    'Your export is too large to download here (over 4 MiB). Open an issue on the repository to get your data another way.',
   // Expeditions and loot packs
   in_progress: 'Your character is still away. Collect when the timer runs out.',
   uncollected: 'The last expedition is waiting for you. Collect it first.',
@@ -83,3 +86,22 @@ export function describeError(error: unknown): string {
 /** The outcome of an action the player took, for the control that took it. */
 export type ActionResult =
   { ok: true } | { ok: false; status: number; code: string | null; message: string };
+
+/** What Landing says when the sign-in redirect came back with a problem (see `consumeSignInHash`). */
+const SIGN_IN_MESSAGES: Readonly<Record<SignInProblem, string>> = {
+  access_denied:
+    'GitHub sign-in was cancelled, so nobody was signed in. Try again when you are ready.',
+  invalid_state:
+    'That sign-in link expired or was already used. Start again with the button below.',
+  invalid_request: 'GitHub sent back something we could not read. Try signing in again.',
+  github_unavailable: 'GitHub did not answer. Wait a moment and try again.',
+  auth_failed: 'GitHub could not confirm who you are. Try signing in again.',
+  server_error: 'Something went wrong on our side. Try signing in again in a moment.',
+  storage_blocked:
+    'You signed in, but this browser blocks site storage, so Mergescape cannot remember you. Allow site data for this page (or leave private browsing) and sign in again.',
+  unknown: 'Sign-in did not finish. Try signing in again.',
+};
+
+export function describeSignInProblem(problem: SignInProblem): string {
+  return SIGN_IN_MESSAGES[problem];
+}

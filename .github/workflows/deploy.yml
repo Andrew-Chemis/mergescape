@@ -1,6 +1,9 @@
 name: Deploy
 
 # Deploys the CDK stack to AWS through the owner's landing zone, then publishes the client to GitHub Pages.
+# It runs only after the CI workflow has finished successfully for a push to main (`workflow_run`), on the
+# exact commit that CI tested, so a merge that fails lint, typecheck, tests or the template checks is never
+# deployed. `workflow_dispatch` stays for a manual redeploy of the branch it is started on.
 # GitHub OIDC, no long-lived AWS keys: the stack job assumes `lz-mergescape-deploy` in the Infrastructure
 # account. That role can do one thing, assume the CDK bootstrap roles (`cdk-hnb659fds-*`) of this app's
 # account, and `cdk deploy` works through them. Its trust is pinned to this repository on `refs/heads/main`
@@ -10,7 +13,8 @@ name: Deploy
 # Repository variables (Settings > Secrets and variables > Actions > Variables):
 #   AWS_ACCOUNT_ID       required; the AWS account the landing zone vended for Mergescape. The stack job is
 #                        skipped while it is empty (forks, new clones)
-#   PAGES_ORIGIN         required; https://<owner>.github.io (CORS origin, client CSP)
+#   PAGES_ORIGIN         required; https://<owner>.github.io (CORS origin, client CSP). Must be lowercase (the
+#                        Lambdas compare it with new URL(x).origin); this workflow lowercases it before use
 #   ALERT_EMAIL          required; receives the AWS Budgets alerts
 #   CLIENT_BASE_PATH     optional; path of the client on Pages. Default: / for a repository named
 #                        <owner>.github.io, otherwise /<repository>/ (where a project site is served)
@@ -22,8 +26,11 @@ name: Deploy
 #                        arn:aws:iam::324404179305:role/lz-mergescape-deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI] # the `name:` of .github/workflows/ci.yml
+    types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,7 +45,14 @@ env:
 jobs:
   stack:
     name: Deploy CDK stack
-    if: ${{ vars.AWS_ACCOUNT_ID != '' }}
+    # AWS_ACCOUNT_ID gate first (forks, new clones). Then: a manual run, or a CI run that succeeded for a push
+    # to main. The `event` check matters: `branches: [main]` also matches a pull request from a fork's own
+    # `main`, and the weekly scheduled CI run (audit only) would otherwise redeploy main every Monday.
+    if: >-
+      ${{ vars.AWS_ACCOUNT_ID != '' && (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -50,6 +64,9 @@ jobs:
       badge_domain: ${{ steps.outputs.outputs.badge_domain }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A workflow_run run starts on the tip of main, which may be newer than the commit CI approved.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -87,6 +104,9 @@ jobs:
           SSM_PREFIX: ${{ vars.SSM_PREFIX || '/mergescape' }}
           STAGE: ${{ vars.STAGE || 'prod' }}
         run: |
+          # The Lambdas compare PAGES_ORIGIN with new URL(PAGES_ORIGIN).origin, which is always lowercase, and
+          # refuse to start on a mismatch: https://Owner.github.io would make every request a 500.
+          PAGES_ORIGIN="${PAGES_ORIGIN,,}"
           base="$CLIENT_BASE_PATH"
           if [ -z "$base" ]; then
             repo="${GITHUB_REPOSITORY#*/}"
@@ -139,6 +159,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A workflow_run run starts on the tip of main, which may be newer than the commit CI approved.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

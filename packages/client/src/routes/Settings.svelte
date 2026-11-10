@@ -97,7 +97,6 @@
   let typed = $state('');
   let deleting = $state(false);
   let deleteError = $state<string | null>(null);
-  let deleted = $state(false);
   let field = $state<HTMLInputElement | undefined>();
 
   const matches = $derived(
@@ -128,10 +127,9 @@
     deleting = true;
     const result = await session.deleteEverything(typed.trim());
     deleting = false;
-    if (result.ok) {
-      deleted = true;
-      confirming = false;
-    } else {
+    // On success the session is signed out and Landing says so (the token is gone and so is the
+    // character); only a refusal keeps the player here, with the form.
+    if (!result.ok) {
       deleteError = result.message;
     }
   }
@@ -308,20 +306,7 @@
 
       <div class="block danger">
         <h3>Delete everything</h3>
-        {#if deleted}
-          <p class="ok" role="status">
-            Everything was deleted. Your next visit starts a fresh level 1 character.
-          </p>
-          <p class="row">
-            {#if onSignOut}
-              <button type="button" class="btn small" onclick={onSignOut}>Sign out</button>
-            {:else}
-              <button type="button" class="btn small" onclick={() => void session.load()}>
-                Start again
-              </button>
-            {/if}
-          </p>
-        {:else if !confirming}
+        {#if !confirming}
           <p class="dim small">
             This removes your character, your Combat Log, your runs, gold, Charms and Pledges, and
             every pull request record that only you appear in. It cannot be undone.

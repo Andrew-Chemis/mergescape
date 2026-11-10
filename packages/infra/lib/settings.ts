@@ -28,9 +28,11 @@ export interface Settings {
 }
 
 const PATTERNS = {
+  // Lowercase only: both Lambdas compare it with `new URL(x).origin` (always lowercase) at cold start and
+  // refuse to start on a mismatch, so a mixed-case host that passed here would make every request a 500.
   pagesOrigin: [
-    /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?$/,
-    'an https origin with no path and no trailing slash',
+    /^https:\/\/[a-z0-9.-]+(:[0-9]+)?$/,
+    'an https origin with no path and no trailing slash, with the host in lowercase (write https://owner.github.io, not https://Owner.github.io)',
   ],
   clientBasePath: [
     /^\/([A-Za-z0-9._~-]+\/)*$/,

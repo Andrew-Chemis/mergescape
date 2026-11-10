@@ -26,11 +26,13 @@
     session: Session;
     /** The api's sign-in URL, or null for a build without a backend. */
     signInHref?: string | null;
+    /** Why the sign-in that just redirected back did not work; Landing shows it. */
+    signInNotice?: string;
     /** Ends the stored session; only offered when there is a real one. */
     onSignOut?: () => void;
   }
 
-  let { session, signInHref = null, onSignOut }: Props = $props();
+  let { session, signInHref = null, signInNotice, onSignOut }: Props = $props();
 
   let route = $state<Route>(parseHash(window.location.hash));
   let main: HTMLElement | undefined = $state();
@@ -41,6 +43,14 @@
   const signedOut = $derived(session.status === 'signed-out');
   const showLanding = $derived(route.name === 'welcome' || (signedOut && !isPublic));
   const standalone = $derived(signedOut && isPublic);
+  // The newest reason first: a session that just ended says so, else why the sign-in redirect failed.
+  const landingNotice = $derived(
+    session.expired
+      ? 'Your session ended. Sign in again to carry on.'
+      : session.deleted
+        ? 'Everything was deleted. Sign in with GitHub to start a fresh level 1 character.'
+        : signInNotice,
+  );
   const title = $derived(
     showLanding ? 'Welcome' : route.name === 'not-found' ? 'Not found' : ROUTE_TITLES[route.name],
   );
@@ -86,10 +96,7 @@
 
 {#if showLanding}
   <main id="main" tabindex="-1" bind:this={main}>
-    <Landing
-      {signInHref}
-      notice={session.expired ? 'Your session ended. Sign in again to carry on.' : undefined}
-    />
+    <Landing {signInHref} notice={landingNotice} />
   </main>
 {:else if standalone}
   <main id="main" tabindex="-1" bind:this={main}>

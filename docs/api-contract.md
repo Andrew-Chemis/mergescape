@@ -4,7 +4,13 @@ Authoritative shapes for the `api` Lambda and the client. Backend mirrors these 
 
 All authenticated routes: `Authorization: Bearer <jwt>`, `Origin` must equal `PAGES_ORIGIN`. Errors: `{ "error": "<code>", "message"?: string }` with 400 (bad input), 401 (no/invalid token), 403 (origin), 404, 409 (typed shop/pledge error codes from shared, e.g. `insufficient_gold`, `sold_out`, `shop_closed`, `window_closed`), 413, 500.
 
-Every mutating POST takes `{ "requestId": "<client uuid>", ...fields }`. The same `requestId` replayed returns the same response (idempotent; the backend stores the last 20 request ids on the WEEK# item).
+Every mutating POST takes `{ "requestId": "<client uuid>", ...fields }`. The same `requestId` replayed returns the same response and applies nothing twice. A `requestId` counts as applied only once its effect has been committed: the profile write that carries the change also records the id on the profile (the last 10, `applied_requests`), and the `WEEK#` item keeps the last 20 as the long memory. So:
+
+- a request that answered 409 (a rule, or `conflict`) or 5xx, or that never answered, was **not** applied and can be sent again with the same id; it is never answered with a false 200 for something that did not happen;
+- a request that died half way (after it changed the week, before it changed the profile) is completed, once, by the same `requestId` sent again; if nobody sends it again, whatever it changed on the week is taken back after about 30 s;
+- a request that died after its profile write is answered as applied when sent again.
+
+Sign-in (`GET /auth/login`, `GET /auth/callback`) is browser navigation, not API: `/auth/login` writes nothing and answers a 302 to GitHub whose `state` is a signed, 10-minute token (`<nonce>.<expiry>.<mac>`), and sets an `HttpOnly; Secure; SameSite=Lax` cookie `__Host-mergescape-oauth` holding the nonce. `/auth/callback` accepts only a state that verifies, has not expired and has not been used, **and** that arrives with that cookie (so a sign-in started in another browser cannot be completed in this one); anything else redirects with `#error=invalid_state`. The cookie is removed on every callback answer. The login must therefore be a top-level navigation to the Function URL (a link or `location.assign`), not a `fetch`.
 
 ## Existing (tasks 7–8), unchanged
 
@@ -85,6 +91,11 @@ Served from `MeResponse.kills` and `firstSeen`; no extra route.
 - After any mutation, replace local `me` and `week` with the response; do not refetch.
 - Shop and pledge errors (409) are shown inline next to the control, never as a modal.
 - Fixture mode (`?fixture=1`) must include a `week` with an open shop so the Shop screen renders offline.
+- Sign-in hand-off: `GET /auth/callback` (and `/auth/login` when it cannot start) redirects to the client with the outcome in the URL fragment, never the query. `#token=<jwt>` on success; otherwise `#error=<code>` with one of `access_denied`, `invalid_state`, `invalid_request`, `github_unavailable`, `auth_failed`, `server_error`. The client stores the token or reads the code, removes the whole fragment before the router sees it, and shows a short notice on the landing page for a code (and for a token the browser would not store). An unknown code gets a generic notice.
+- A token whose character is gone (after `POST /delete`, or a delete from another device) answers every read with 404 `no_profile`. The client treats that as signed out: it forgets the token and shows the landing page. A successful `POST /delete` does the same without waiting for the next read.
+- Request ids: the client keeps the `requestId` of a mutation that ran out of retries (network failure, timeout, or 502/503/504) and reuses it only for the same control sending the same input, for at most two minutes, and only until a fresh `GET /me` differs from the profile the failed attempt was sent from. Any other mutation gets a new id. Every request is abandoned after 15 s and handled like a network failure.
+- The 30 s poll reads the newest `GET /log` page; when every row on it is new it follows `nextCursor` (up to 5 pages) until a row already on screen shows up.
+- `413 export_too_large` from `GET /export` is shown as its own message, not as a generic "too large to send".
 
 ## Depth layer (tasks 22–23)
 

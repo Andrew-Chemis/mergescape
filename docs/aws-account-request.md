@@ -31,7 +31,7 @@ Draft of the pull request to open against the `aws-landing-zone` repository. The
 - [ ] The account bootstrapped for CDK in `us-east-1` (default qualifier `hnb659fds`), which creates the `cdk-hnb659fds-*` roles and the asset bucket
 - [ ] Deploy role `lz-mergescape-deploy` created in the Infrastructure account with the trust policy from `packages/infra/README.md` and one permission: `sts:AssumeRole` on `arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-*`. `cdk deploy` needs nothing else, because CloudFormation, Lambda, DynamoDB, CloudFront, IAM, SSM, Budgets, Logs and Events are all reached through the bootstrap roles
 - [ ] Lambda concurrency quota confirmed ≥ 100
-- [ ] Repository variables set in `mergescape`: `AWS_ACCOUNT_ID`, `PAGES_ORIGIN` and `ALERT_EMAIL`; optionally `AWS_DEPLOY_ROLE_ARN` (only outside the landing zone), `CLIENT_BASE_PATH`, `APP_SLUG`, `AWS_REGION`, `SSM_PREFIX`, `STAGE`
+- [ ] Repository variables set in `mergescape`: `AWS_ACCOUNT_ID`, `PAGES_ORIGIN` (lowercase, `https://<owner>.github.io`) and `ALERT_EMAIL`; optionally `AWS_DEPLOY_ROLE_ARN` (only outside the landing zone), `CLIENT_BASE_PATH`, `APP_SLUG`, `AWS_REGION`, `SSM_PREFIX`, `STAGE`
 
 ## Blocked on
 

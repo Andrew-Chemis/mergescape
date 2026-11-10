@@ -24,6 +24,8 @@ export interface RenderAppOptions {
   /** Overrides the fixture api; `null` renders signed out. */
   api?: Api | null;
   signInHref?: string | null;
+  /** Why the sign-in redirect failed; Landing shows it. */
+  signInNotice?: string;
   onSignOut?: () => void;
   session?: SessionOptions;
   /** Resolve before the session finishes loading (for loading-state tests). */
@@ -52,6 +54,7 @@ export async function renderApp(options: RenderAppOptions = {}) {
     props: {
       session,
       signInHref: options.signInHref ?? null,
+      ...(options.signInNotice ? { signInNotice: options.signInNotice } : {}),
       ...(options.onSignOut ? { onSignOut: options.onSignOut } : {}),
     },
   });

@@ -379,16 +379,21 @@ describe('Delete everything', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
-  it('offers to sign out after a delete when there is a real session', async () => {
-    const onSignOut = vi.fn();
-    await settings({ onSignOut });
+  // The old token would only get 404 no_profile from now on, with no way out of the error panel: so a
+  // successful delete ends the session. The player is back on Landing, with the token forgotten.
+  it('ends the session after a delete: Landing, the token forgotten, nothing left to sign out of', async () => {
+    const onUnauthorized = vi.fn();
+    const { session } = await settings({ session: { onUnauthorized }, onSignOut: vi.fn() });
     const field = await open();
     await fireEvent.input(field, { target: { value: 'octo-dev' } });
     await fireEvent.click(confirm());
     await screen.findByRole('status');
-    const buttons = screen.getAllByRole('button', { name: 'Sign out' });
-    await fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
-    expect(onSignOut).toHaveBeenCalledTimes(1);
+    expect(session.status).toBe('signed-out');
+    expect(session.busy).toBeNull();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Mergescape');
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
   });
 
   it('says so inline when the server has no /delete yet (404), and keeps the form', async () => {

@@ -3,7 +3,9 @@ import { isoWeekKey } from '@mergescape/shared';
 import {
   ApiError,
   clearToken,
-  consumeTokenFromHash,
+  DEFAULT_TIMEOUT_MS,
+  SIGN_IN_ERROR_CODES,
+  consumeSignInHash,
   createHttpApi,
   installUrl,
   newRequestId,
@@ -74,10 +76,10 @@ describe('token storage', () => {
   });
 });
 
-describe('consumeTokenFromHash', () => {
+describe('consumeSignInHash', () => {
   it('stores a #token= fragment and clears the whole fragment', () => {
     window.history.replaceState(null, '', `/play/?fixture=0#token=${TOKEN}`);
-    expect(consumeTokenFromHash()).toBe(true);
+    expect(consumeSignInHash()).toEqual({ stored: true, problem: null });
     expect(readToken()).toBe(TOKEN);
     expect(window.location.hash).toBe('');
     expect(window.location.pathname + window.location.search).toBe('/play/?fixture=0');
@@ -85,22 +87,55 @@ describe('consumeTokenFromHash', () => {
 
   it('leaves ordinary route fragments alone', () => {
     window.history.replaceState(null, '', '/#/log');
-    expect(consumeTokenFromHash()).toBe(false);
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: null });
     expect(window.location.hash).toBe('#/log');
     expect(readToken()).toBeNull();
   });
 
-  it('clears a malformed token from the address bar without storing it', () => {
+  it('clears a malformed token from the address bar without storing it, and says sign-in did not finish', () => {
     window.history.replaceState(null, '', '/#token=<script>alert(1)</script>');
-    expect(consumeTokenFromHash()).toBe(false);
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: 'unknown' });
     expect(window.location.hash).toBe('');
     expect(readToken()).toBeNull();
   });
 
   it('clears an empty token', () => {
     window.history.replaceState(null, '', '/#token=');
-    expect(consumeTokenFromHash()).toBe(false);
+    expect(consumeSignInHash().stored).toBe(false);
     expect(window.location.hash).toBe('');
+  });
+
+  // The api redirects back with #error=<code> (packages/backend/src/handlers/api.ts); the router must
+  // never see it, or a signed-in player lands on "not found".
+  it.each(SIGN_IN_ERROR_CODES)('reads and clears #error=%s', (code) => {
+    window.history.replaceState(null, '', `/play/?x=1#error=${code}`);
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: code });
+    expect(window.location.hash).toBe('');
+    expect(window.location.pathname + window.location.search).toBe('/play/?x=1');
+    expect(readToken()).toBeNull();
+  });
+
+  it('files an #error= code it does not know as unknown, and still clears it', () => {
+    window.history.replaceState(null, '', '/#error=<b>hacked</b>');
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: 'unknown' });
+    expect(window.location.hash).toBe('');
+    window.history.replaceState(null, '', '/#error=');
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: 'unknown' });
+  });
+
+  it('reports blocked storage instead of pretending the token was kept', () => {
+    vi.stubGlobal('localStorage', undefined);
+    window.history.replaceState(null, '', `/#token=${TOKEN}`);
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: 'storage_blocked' });
+    expect(window.location.hash).toBe('');
+
+    // Storage that exists but refuses writes (quota, private windows) is the same problem.
+    vi.unstubAllGlobals();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    window.history.replaceState(null, '', `/#token=${TOKEN}`);
+    expect(consumeSignInHash()).toEqual({ stored: false, problem: 'storage_blocked' });
   });
 });
 
@@ -221,6 +256,81 @@ describe('createHttpApi', () => {
     await expect(wrongLog.log()).rejects.toMatchObject({ status: 0 });
     const wrongInstalls = make(async () => jsonResponse({ hello: 'world' }));
     await expect(wrongInstalls.installations()).rejects.toMatchObject({ status: 0 });
+  });
+
+  describe('timeout', () => {
+    // A fetch that never answers on its own, as a stalled connection does; it ends only when told to abort.
+    const stalled = (seen: { signal?: AbortSignal | undefined } = {}) =>
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            seen.signal = init.signal ?? undefined;
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      );
+    const make = (fetchFn: unknown) =>
+      createHttpApi({
+        origin: 'https://api.example',
+        getToken: () => TOKEN,
+        fetchFn: fetchFn as typeof fetch,
+        sleep: async () => {},
+        newId: () => 'req-1',
+        timeoutMs: 20,
+      });
+
+    it('waits 15 seconds by default', async () => {
+      expect(DEFAULT_TIMEOUT_MS).toBe(15_000);
+      const spy = vi.spyOn(AbortSignal, 'timeout');
+      const fetchFn = vi.fn(async () => jsonResponse({ login: 'octo-dev', xp: 5 }));
+      await createHttpApi({
+        origin: 'https://api.example',
+        getToken: () => TOKEN,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }).me();
+      expect(spy).toHaveBeenCalledWith(15_000);
+      const init = (fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1];
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('abandons a stalled read as a network failure', async () => {
+      const seen: { signal?: AbortSignal | undefined } = {};
+      const error = (await make(stalled(seen))
+        .me()
+        .catch((e: unknown) => e)) as ApiError;
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.status).toBe(0);
+      expect(error.message).toBe('The server took too long to answer.');
+      expect(seen.signal?.aborted).toBe(true);
+    });
+
+    it('abandons a stalled write, retries it with the same id, and hands the id back', async () => {
+      const fetchFn = stalled();
+      const error = (await make(fetchFn)
+        .shopBuy({ kind: 'charm', index: 0 })
+        .catch((e: unknown) => e)) as ApiError;
+      expect(error.status).toBe(0);
+      expect(error.requestId).toBe('req-1');
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      const ids = fetchFn.mock.calls.map(
+        ([, init]) => (JSON.parse(init.body as string) as { requestId: string }).requestId,
+      );
+      expect(ids).toEqual(['req-1', 'req-1', 'req-1']);
+    });
+
+    it('sends no signal where AbortSignal.timeout does not exist', async () => {
+      vi.stubGlobal('AbortSignal', {});
+      const fetchFn = vi.fn(async () => jsonResponse({ login: 'octo-dev', xp: 5 }));
+      await make(fetchFn).me();
+      const init = (fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1];
+      expect('signal' in init).toBe(false);
+      // And an ordinary network failure keeps its own words.
+      const offline = make(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      await expect(offline.me()).rejects.toMatchObject({ message: 'Could not reach the server.' });
+    });
   });
 
   it('exposes the reads and exactly the contract writes', () => {
@@ -469,6 +579,19 @@ describe('createHttpApi mutations (docs/api-contract.md)', () => {
       'req-1',
     ]);
   });
+
+  it.each([502, 503, 504])(
+    'hands the request id back after the retries ran out on a %i, so a later click can replay it',
+    async (status) => {
+      const fetchFn = vi.fn(async () => jsonResponse({ error: 'bad_gateway' }, status));
+      const error = (await make(fetchFn)
+        .shopReroll()
+        .catch((e: unknown) => e)) as ApiError;
+      expect(error.status).toBe(status);
+      expect(error.requestId).toBe('req-1');
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it('surfaces a 409 with its typed code and does not retry', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ error: 'insufficient_gold' }, 409));

@@ -88,6 +88,7 @@ describe('readSettings', () => {
     ['pagesOrigin', 'http://octocat.github.io'],
     ['pagesOrigin', 'https://octocat.github.io/'],
     ['pagesOrigin', 'https://octocat.github.io/mergescape'],
+    ['pagesOrigin', 'https://Andrew-Chemis.github.io'],
     ['clientBasePath', 'mergescape/'],
     ['clientBasePath', '/mergescape'],
     ['ssmPrefix', 'mergescape'],
@@ -102,6 +103,16 @@ describe('readSettings', () => {
     expect(() => readSettings(lookup({ ...valid, [name]: value }))).toThrow(
       new RegExp(`context ${name}=`),
     );
+  });
+
+  it('asks for a lowercase origin: the Lambdas compare it with new URL(x).origin and throw on a mismatch', () => {
+    const mixed = 'https://Andrew-Chemis.github.io';
+    // This is exactly the comparison loadConfig makes at cold start; the settings must never let it fail.
+    expect(new URL(mixed).origin).not.toBe(mixed);
+    expect(() => readSettings(lookup({ ...valid, pagesOrigin: mixed }))).toThrow(/lowercase/);
+    const lower = mixed.toLowerCase();
+    expect(new URL(lower).origin).toBe(lower);
+    expect(readSettings(lookup({ ...valid, pagesOrigin: lower })).pagesOrigin).toBe(lower);
   });
 
   it('refuses the shipped placeholders once an account is set, because that is a deploy', () => {

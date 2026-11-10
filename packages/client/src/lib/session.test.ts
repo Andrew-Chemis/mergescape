@@ -83,13 +83,16 @@ describe('Session.load', () => {
     expect(session.error).toBeNull();
   });
 
-  it('explains a token with no character (404 no_profile) in words', async () => {
+  it('treats a token with no character (404 no_profile) as signed out, not as an error to retry', async () => {
     const { api, state } = scriptedApi({ me: fixtureMe(NOW), entries: [] });
     state.fail = new ApiError(404, 'The server answered 404.', 'no_profile');
-    const session = new Session(api);
+    const onUnauthorized = vi.fn();
+    const session = new Session(api, { onUnauthorized });
     await session.load();
-    expect(session.status).toBe('error');
-    expect(session.error).toBe('This account has no character yet. Sign in again.');
+    expect(session.status).toBe('signed-out');
+    expect(session.deleted).toBe(true);
+    expect(session.error).toBeNull();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 
   it('treats a 401 as the end of the session and tells the caller once', async () => {

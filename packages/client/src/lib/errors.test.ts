@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from './api';
-import { describeError } from './errors';
+import { ApiError, SIGN_IN_ERROR_CODES } from './api';
+import type { SignInProblem } from './api';
+import { describeError, describeSignInProblem } from './errors';
 
 /** Every 409 code the backend emits (docs/api-contract.md and the backend's list). */
 const CONFLICT_CODES = [
@@ -98,8 +99,32 @@ describe('describeError', () => {
     );
   });
 
+  it('gives an export that is too large its own words, not the generic 413 sentence', () => {
+    const message = describeError(new ApiError(413, 'x', 'export_too_large'));
+    expect(message).toContain('export');
+    expect(message).toContain('4 MiB');
+    expect(message).not.toBe(describeError(new ApiError(413, 'x')));
+  });
+
   it('copes with something that is not an ApiError', () => {
     expect(describeError(new Error('boom'))).toBe('Something went wrong. Try again.');
     expect(describeError('boom')).toBe('Something went wrong. Try again.');
+  });
+});
+
+describe('describeSignInProblem', () => {
+  const problems: SignInProblem[] = [...SIGN_IN_ERROR_CODES, 'storage_blocked', 'unknown'];
+
+  it('has a sentence for every code the api redirects with, and for the two the client adds', () => {
+    const messages = problems.map((problem) => describeSignInProblem(problem));
+    expect(new Set(messages).size).toBe(problems.length);
+    for (const message of messages) {
+      expect(message.length).toBeGreaterThan(20);
+      expect(message).toMatch(/[.]$/);
+    }
+  });
+
+  it('says what blocked storage means for the player', () => {
+    expect(describeSignInProblem('storage_blocked')).toContain('blocks site storage');
   });
 });

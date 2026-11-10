@@ -3,8 +3,8 @@
  * mutations (shop, shrine, Pledge plays, delete) are POSTs that each carry a `requestId`: a UUID made once
  * per attempt and sent again unchanged if the network fails, so a replay can never buy something twice
  * (the api answers a repeated id with the first response). The bearer token lives in localStorage, and
- * the sign-in hand-off is the api redirecting back with `#token=<jwt>`, which is stored and removed from
- * the address bar on load.
+ * the sign-in hand-off is the api redirecting back with `#token=<jwt>` (stored) or `#error=<code>` (shown on
+ * Landing); either is removed from the address bar on load.
  */
 import { isRecord } from '@mergescape/shared';
 import type { ExpeditionChoice, ExpeditionState, GearPiece, RegionId } from '@mergescape/shared';
@@ -221,23 +221,61 @@ function safeStorage(): Storage | undefined {
   }
 }
 
+/** The `#error=` codes the api redirects back with when sign-in fails (packages/backend/src/handlers/api.ts). */
+export const SIGN_IN_ERROR_CODES = [
+  'access_denied',
+  'invalid_state',
+  'invalid_request',
+  'github_unavailable',
+  'auth_failed',
+  'server_error',
+] as const;
+
 /**
- * If the address bar holds `#token=<jwt>`, store the token and remove the whole fragment so the token
- * does not stay in history or in a copied link. Returns whether a token was consumed.
+ * Why a sign-in did not complete: one of the api's codes, `storage_blocked` when the token arrived but this
+ * browser would not keep it (so the next load would be signed out again, in a loop), or `unknown` for an
+ * `#error=` code this client does not know or a `#token=` that is not a token.
  */
-export function consumeTokenFromHash(win: Window = window): boolean {
+export type SignInProblem = (typeof SIGN_IN_ERROR_CODES)[number] | 'storage_blocked' | 'unknown';
+
+/** What the address bar held when the page loaded: a token that was stored, or the reason there is none. */
+export interface SignInHandOff {
+  /** True when a token was found and kept. */
+  stored: boolean;
+  problem: SignInProblem | null;
+}
+
+const NO_HAND_OFF: SignInHandOff = Object.freeze({ stored: false, problem: null });
+
+function knownErrorCode(code: string): SignInProblem {
+  return SIGN_IN_ERROR_CODES.find((known) => known === code) ?? 'unknown';
+}
+
+/**
+ * If the address bar holds `#token=<jwt>`, store the token; if it holds `#error=<code>`, report the code.
+ * Either way the whole fragment is removed so a token does not stay in history or in a copied link, and
+ * the router never reads `#error=...` as a path. Anything else in the fragment (a route) is left alone.
+ */
+export function consumeSignInHash(win: Window = window): SignInHandOff {
   const hash = win.location.hash;
-  if (!hash.startsWith('#token=')) {
-    return false;
+  const isToken = hash.startsWith('#token=');
+  if (!isToken && !hash.startsWith('#error=')) {
+    return NO_HAND_OFF;
   }
-  const token = new URLSearchParams(hash.slice(1)).get('token') ?? '';
+  const params = new URLSearchParams(hash.slice(1));
   // Clear first: even a malformed token must not linger in the URL.
   win.history.replaceState(null, '', win.location.pathname + win.location.search);
-  if (!JWT_SHAPE.test(token)) {
-    return false;
+  if (!isToken) {
+    return { stored: false, problem: knownErrorCode(params.get('error') ?? '') };
   }
-  storeToken(token);
-  return true;
+  const token = params.get('token') ?? '';
+  if (!JWT_SHAPE.test(token)) {
+    return { stored: false, problem: 'unknown' };
+  }
+  // Blocked storage refuses the token: say so, or the player signs in again and again with no word why.
+  return storeToken(token)
+    ? { stored: true, problem: null }
+    : { stored: false, problem: 'storage_blocked' };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -274,6 +312,21 @@ export interface HttpApiOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Replaced in tests to make request ids predictable. */
   newId?: () => string;
+  /** A request that takes longer than this is abandoned as a network failure. Default 15 s. */
+  timeoutMs?: number;
+}
+
+/**
+ * How long one HTTP exchange may take before it counts as a network failure. Without a limit a stalled
+ * write would hold `Session.busy` for good and block every other control.
+ */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+/** A signal that aborts after `ms`, or none where `AbortSignal.timeout` does not exist (older browsers). */
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(ms)
+    : undefined;
 }
 
 /** Retry a failed mutation twice, after 400 ms and then 1.2 s, always with the same request id. */
@@ -334,6 +387,7 @@ export function createHttpApi(options: HttpApiOptions): Api {
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   const newId = options.newId ?? newRequestId;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   /** One HTTP exchange. Resolves with the parsed JSON object, or `{}` for a 204. */
   async function send(
@@ -350,6 +404,7 @@ export function createHttpApi(options: HttpApiOptions): Api {
       headers['Content-Type'] = 'application/json';
     }
     let response: Response;
+    const signal = timeoutSignal(timeoutMs);
     try {
       const doFetch = options.fetchFn ?? fetch;
       // No cookies: the bearer token is the only credential.
@@ -357,10 +412,15 @@ export function createHttpApi(options: HttpApiOptions): Api {
         method,
         headers,
         credentials: 'omit',
+        ...(signal ? { signal } : {}),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      throw new ApiError(0, 'Could not reach the server.');
+      // A timeout aborts the fetch and lands here too: a status 0 failure, so a mutation retries with the same id.
+      throw new ApiError(
+        0,
+        signal?.aborted ? 'The server took too long to answer.' : 'Could not reach the server.',
+      );
     }
     if (!response.ok) {
       const { code, message } = await errorDetails(response);

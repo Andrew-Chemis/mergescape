@@ -106,6 +106,80 @@ describe('Landing', () => {
   });
 });
 
+describe('Landing, a session that ended some other way', () => {
+  const landing = 'https://api.example/auth/login';
+  const GONE = 'Everything was deleted. Sign in with GitHub to start a fresh level 1 character.';
+
+  /** A token whose character is gone: what a deleted account's old token gets from every read. */
+  const noProfile = (): ApiError => new ApiError(404, 'The server answered 404.', 'no_profile');
+
+  function characterGone(): Api {
+    return {
+      ...createFixtureApi({ now: NOW }),
+      async me() {
+        throw noProfile();
+      },
+    };
+  }
+
+  it('treats a token whose character is gone as signed out, forgets the token and offers a fresh start', async () => {
+    const onUnauthorized = vi.fn();
+    const { session } = await renderApp({
+      api: characterGone(),
+      signInHref: landing,
+      session: { onUnauthorized },
+    });
+    expect(session.status).toBe('signed-out');
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(GONE)).toBeTruthy();
+    expect(h1().textContent).toBe('Mergescape');
+    expect(screen.getByRole('link', { name: 'Sign in with GitHub' }).getAttribute('href')).toBe(
+      landing,
+    );
+    // Not the dead end it was: an error panel whose only button is "Try again".
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the player the way out of Delete everything: signed out, with the token forgotten', async () => {
+    const onUnauthorized = vi.fn();
+    const { session } = await renderApp({
+      hash: '#/settings',
+      signInHref: landing,
+      session: { onUnauthorized },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /^Delete everything/ }));
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'octo-dev' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
+    expect(await screen.findByText(GONE)).toBeTruthy();
+    expect(session.status).toBe('signed-out');
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(h1().textContent).toBe('Mergescape');
+    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
+  });
+
+  it('shows why the sign-in redirect failed, above the button', async () => {
+    await renderApp({
+      api: null,
+      signInHref: landing,
+      signInNotice: 'GitHub did not answer. Wait a moment and try again.',
+    });
+    const notice = screen.getByRole('status');
+    expect(notice.textContent).toBe('GitHub did not answer. Wait a moment and try again.');
+    expect(screen.getByRole('link', { name: 'Sign in with GitHub' })).toBeTruthy();
+  });
+
+  it('puts a session that just ended ahead of an old sign-in notice', async () => {
+    await renderApp({
+      api: characterGone(),
+      signInHref: landing,
+      signInNotice: 'GitHub did not answer. Wait a moment and try again.',
+    });
+    expect(await screen.findByText(GONE)).toBeTruthy();
+    expect(screen.queryByText(/GitHub did not answer/)).toBeNull();
+  });
+});
+
 describe('Town', () => {
   it('renders the scene, the run, the level, the last kill, Pledges and the shop banner', async () => {
     await renderApp();

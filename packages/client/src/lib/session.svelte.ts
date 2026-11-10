@@ -15,9 +15,13 @@
  *
  * Polling: while the tab is visible the first log page and the profile are re-read every `pollMs`, and
  * once more whenever the tab becomes visible again. That is how a real merge shows up within seconds
- * without a websocket; the interval is the one knob to turn if request volume ever matters.
+ * without a websocket; the interval is the one knob to turn if request volume ever matters. A burst of
+ * more rows than one page holds is followed page by page, so the list never has a hole in it.
+ *
+ * A write that died on the network is replayed with the same request id when the player tries the very
+ * same thing again soon after (see `REPLAY_WINDOW_MS`); a different request never inherits that id.
  */
-import { levelFor } from '@mergescape/shared';
+import { isRecord, levelFor } from '@mergescape/shared';
 import { SvelteSet } from 'svelte/reactivity';
 import type { Charm, ExpeditionState, GearPiece, LootItem, Skill } from '@mergescape/shared';
 import { ApiError } from './api';
@@ -44,6 +48,7 @@ import type {
   ForgeView,
   InstallationSummary,
   LogEntry,
+  LogResponse,
   MeResponse,
   Station,
   UpgradeInput,
@@ -81,11 +86,59 @@ export interface LevelUp {
 export interface SessionOptions {
   /** Poll interval in ms while the tab is visible. 0 turns polling off. Default 30,000. */
   pollMs?: number;
-  /** Called once when the api rejects the token (HTTP 401). */
+  /**
+   * Called when the stored token can no longer be used and should be forgotten: the api rejected it (HTTP
+   * 401), or its character is gone (404 `no_profile`, which is what a deleted account answers).
+   */
   onUnauthorized?: () => void;
 }
 
 export const DEFAULT_POLL_MS = 30_000;
+
+/**
+ * How long after a write died on the network the player's repeat of it still reuses its request id. The
+ * api answers a repeated id with the first response, which is exactly right for a retry of a lost reply and
+ * exactly wrong for a new decision made minutes later, so the id is not kept for long.
+ */
+export const REPLAY_WINDOW_MS = 120_000;
+
+/** Pages the poll follows when every row of the newest page is new (a burst longer than one page). */
+export const POLL_MAX_PAGES = 5;
+
+/** `value` as JSON with the keys of every object in order, so equal inputs give equal text. */
+function stableJson(value: unknown): string {
+  const sorted = (_key: string, inner: unknown): unknown =>
+    isRecord(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : inner;
+  return JSON.stringify(value, sorted) ?? 'null';
+}
+
+/** What a request that died on the network left behind, to replay it. */
+interface Remembered {
+  requestId: string;
+  at: number;
+  /** The profile the player was looking at; once a fresh read differs, the state moved on. */
+  me: string;
+}
+
+/** New Combat Log rows found by a poll; see `Session.#newRows`. */
+interface NewRows {
+  rows: LogEntry[];
+  /** Set when the rows do not meet the list on screen: the cursor to read older entries from. */
+  resumeFrom: string | null;
+}
+
+/** Why a read or write ended the session: the token was rejected, or its character is gone. */
+function sessionEnd(error: unknown): 'expired' | 'deleted' | null {
+  if (!(error instanceof ApiError)) {
+    return null;
+  }
+  if (error.status === 401) {
+    return 'expired';
+  }
+  return error.code === 'no_profile' ? 'deleted' : null;
+}
 
 /** A request the api turned down, or never saw: the `ActionResult` a control shows beside itself. */
 type Refused = ActionResult & { ok: false };
@@ -104,6 +157,8 @@ export class Session {
   error = $state<string | null>(null);
   /** True when the api rejected a stored token: Landing says the session ended. */
   expired = $state(false);
+  /** True when the character is gone (deleted here or elsewhere): Landing says so and offers a fresh start. */
+  deleted = $state(false);
   me = $state.raw<MeResponse | null>(null);
   /** The current run. Always the same object as `me.week` unless a newer `GET /week` has landed. */
   week = $state.raw<WeekSummary | null>(null);
@@ -138,8 +193,11 @@ export class Session {
   /** Bumped whenever a write starts or ends: a read that began under another epoch is stale. */
   #epoch = 0;
   #writes = 0;
-  /** Request ids of writes that ended in a network failure, by scope, to replay on the next try. */
-  #pending: Record<string, string> = {};
+  /**
+   * Request ids of writes that ended in a network failure, to replay on the next try. The key is the control
+   * (`scope`) and the exact input it sent, so only the same request reuses an id, never the next different one.
+   */
+  #pending: Record<string, Remembered> = {};
   /**
    * Feat ids the player has seen unlock; the banner shows what is unlocked and not in here. Kept in memory
    * only: the Cookies page promises three storage keys, and the contract has no "seen" flag to read back.
@@ -199,7 +257,15 @@ export class Session {
         api.log(null),
         needInstallations ? api.installations() : Promise.resolve(null),
       ]);
-      const arrived = unseenEntries(this.entries, log.entries);
+      // Older pages are read too when the whole newest page is new; if that read fails, the log keeps
+      // what it has and the next poll tries again.
+      let burst: NewRows | null = null;
+      try {
+        burst = await this.#newRows(api, log);
+      } catch (error) {
+        this.#quiet(error);
+      }
+      const arrived = burst ? unseenEntries(this.entries, burst.rows) : [];
       // A write that started or finished while this read was in the air has newer state than it.
       const stale = epoch !== this.#epoch || this.#writes > 0;
       const before = this.me ? levelFor(this.me.xp) : levelFor(me.xp);
@@ -226,7 +292,14 @@ export class Session {
         this.installations = installations.installations;
       }
       if (arrived.length > 0) {
-        this.entries = [...arrived, ...this.entries];
+        if (burst?.resumeFrom != null) {
+          // The burst outran the pages read: keeping the old list would leave a hole between it and the
+          // new rows, so start the list over and let "older entries" pick up from where the burst ends.
+          this.entries = arrived;
+          this.nextCursor = burst.resumeFrom;
+        } else {
+          this.entries = [...arrived, ...this.entries];
+        }
         this.fresh = arrived[0] ?? null;
         // A scored event is when a Feat can unlock: read the list again if anyone is looking at it.
         if (this.feats !== null) {
@@ -255,6 +328,29 @@ export class Session {
     }
   }
 
+  /**
+   * The Combat Log rows that arrived since the list on screen was read. The poll asks for the newest page
+   * only; when every row of it is new there may be more behind it, so follow the cursor until a row that is
+   * already on screen shows up (at most `POLL_MAX_PAGES` pages). `resumeFrom` is set when that limit was
+   * reached with no known row in sight: the cursor to continue from, because the rows do not meet the list.
+   */
+  async #newRows(api: Api, first: LogResponse): Promise<NewRows> {
+    const rows: LogEntry[] = [];
+    let page = first;
+    for (let pages = 1; ; pages += 1) {
+      const fresh = unseenEntries([...this.entries, ...rows], page.entries);
+      rows.push(...fresh);
+      const allNew = page.entries.length > 0 && fresh.length === page.entries.length;
+      if (!allNew || page.nextCursor === null) {
+        return { rows, resumeFrom: null };
+      }
+      if (pages >= POLL_MAX_PAGES) {
+        return { rows, resumeFrom: page.nextCursor };
+      }
+      page = await api.log(page.nextCursor);
+    }
+  }
+
   /** Load the next older page of the Combat Log. */
   async loadMore(): Promise<void> {
     const api = this.#api;
@@ -268,7 +364,7 @@ export class Session {
       this.entries = [...this.entries, ...unseenEntries(this.entries, page.entries)];
       this.nextCursor = page.nextCursor;
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
+      if (sessionEnd(error)) {
         this.#fail(error);
       } else {
         this.loadMoreError = 'Could not load older entries.';
@@ -313,7 +409,7 @@ export class Session {
 
   /** `POST /shop/buy`. `scope` names the control, e.g. `charm:0`, for its inline error. */
   shopBuy(scope: string, input: ShopBuyInput): Promise<ActionResult> {
-    return this.#write(scope, async (api, options) => {
+    return this.#write(scope, input, async (api, options) => {
       const answer = await api.shopBuy(input, options);
       // The server took the purchase: the coin sounds (opt-in) before the screen catches up.
       playCue('purchase');
@@ -323,23 +419,23 @@ export class Session {
 
   /** `POST /shop/pick`; index -1 is the free Raid pack. */
   shopPick(scope: string, input: ShopPickInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.shopPick(input, options));
+    return this.#write(scope, input, (api, options) => api.shopPick(input, options));
   }
 
   shopReroll(scope = 'reroll'): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.shopReroll(options));
+    return this.#write(scope, null, (api, options) => api.shopReroll(options));
   }
 
   shopSell(scope: string, charmId: string): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.shopSell(charmId, options));
+    return this.#write(scope, { charmId }, (api, options) => api.shopSell(charmId, options));
   }
 
   shrineRemove(scope: string, pledgeId: string): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.shrineRemove(pledgeId, options));
+    return this.#write(scope, { pledgeId }, (api, options) => api.shrineRemove(pledgeId, options));
   }
 
   pledgePlay(scope: string, pledgeId: string): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.pledgePlay(pledgeId, options));
+    return this.#write(scope, { pledgeId }, (api, options) => api.pledgePlay(pledgeId, options));
   }
 
   // -------------------------------------------------------------------------------------------
@@ -398,9 +494,9 @@ export class Session {
     }
   }
 
-  /** A failed background read keeps what is on screen; only a rejected token ends the session. */
+  /** A failed background read keeps what is on screen; only a rejected token or a lost character ends the session. */
   #quiet(error: unknown): void {
-    if (error instanceof ApiError && error.status === 401) {
+    if (sessionEnd(error)) {
       this.#fail(error);
     }
   }
@@ -441,12 +537,12 @@ export class Session {
 
   /** `POST /expedition/send`. `scope` names the control, e.g. `send`, for its inline error. */
   expeditionSend(scope: string, input: ExpeditionSendInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.expeditionSend(input, options));
+    return this.#write(scope, input, (api, options) => api.expeditionSend(input, options));
   }
 
   /** `POST /expedition/collect`. On success `collect` is the loot, for the reveal. */
   async expeditionCollect(scope = 'collect'): Promise<ActionResult & { collect?: CollectOutcome }> {
-    const { result, answer } = await this.#mutate(scope, (api, options) =>
+    const { result, answer } = await this.#mutate(scope, null, (api, options) =>
       api.expeditionCollect(options),
     );
     if (!result.ok || !answer) {
@@ -479,12 +575,12 @@ export class Session {
 
   /** `POST /packs/open`: keep one of the pack's three Charms. */
   packOpen(scope: string, input: PackOpenInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.packOpen(input, options));
+    return this.#write(scope, input, (api, options) => api.packOpen(input, options));
   }
 
   /** `POST /forge/start` */
   forgeStart(scope: string, input: ForgeStartInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.forgeStart(input, options));
+    return this.#write(scope, input, (api, options) => api.forgeStart(input, options));
   }
 
   /** `POST /forge/collect`. On success `piece` is what the order made, and `applied` is false on a replay. */
@@ -492,7 +588,7 @@ export class Session {
     scope: string,
     station: Station,
   ): Promise<ActionResult & { piece?: GearPiece | null; applied?: boolean }> {
-    const { result, answer } = await this.#mutate(scope, (api, options) =>
+    const { result, answer } = await this.#mutate(scope, { station }, (api, options) =>
       api.forgeCollect(station, options),
     );
     return result.ok && answer
@@ -502,22 +598,26 @@ export class Session {
 
   /** `POST /forge/upgrade`: buy Bellows, Dyes or Index, or choose a cape colour. */
   forgeUpgrade(scope: string, input: UpgradeInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.forgeUpgrade(input, options));
+    return this.#write(scope, input, (api, options) => api.forgeUpgrade(input, options));
   }
 
   /** `POST /gear/equip`: wear a piece, take a slot off, or choose the pet that follows you. */
   gearEquip(scope: string, input: EquipInput): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.gearEquip(input, options));
+    return this.#write(scope, input, (api, options) => api.gearEquip(input, options));
   }
 
   /** `POST /feats/pin`: pin an unlocked Feat to the Character screen and the badge (up to three), or unpin it. */
   featPin(scope: string, featId: string, pinned: boolean): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.featPin(featId, pinned, options));
+    return this.#write(scope, { featId, pinned }, (api, options) =>
+      api.featPin(featId, pinned, options),
+    );
   }
 
   /** `POST /settings`: show or hide the public README badge. */
   setBadgePublic(scope: string, badgePublic: boolean): Promise<ActionResult> {
-    return this.#write(scope, (api, options) => api.settings(badgePublic, options));
+    return this.#write(scope, { badgePublic }, (api, options) =>
+      api.settings(badgePublic, options),
+    );
   }
 
   /** `GET /export`: the player's data as parsed JSON. */
@@ -525,20 +625,26 @@ export class Session {
     return this.#read(async (api) => ({ ok: true as const, data: await api.exportData() }));
   }
 
-  /** `POST /delete`. Resolves ok on 204; a wrong login comes back as `confirm_mismatch` (400). */
+  /**
+   * `POST /delete`. Resolves ok on 204; a wrong login comes back as `confirm_mismatch` (400). The token
+   * still opens the door but nothing is behind it, so on success the session ends: the token is forgotten
+   * and Landing says everything was deleted (a returning `/me` would only answer 404 `no_profile`).
+   */
   async deleteEverything(confirmLogin: string): Promise<ActionResult> {
     const scope = 'delete';
+    const key = this.#key(scope, { confirmLogin });
     const api = this.#api;
     if (!api) {
       return SIGNED_OUT;
     }
     this.busy = scope;
     try {
-      await api.deleteAccount(confirmLogin, this.#replay(scope));
+      await api.deleteAccount(confirmLogin, this.#replay(key));
       this.#pending = {};
+      this.#end('deleted');
       return { ok: true };
     } catch (error) {
-      this.#remember(scope, error);
+      this.#remember(key, error);
       return this.#failure(error);
     } finally {
       this.busy = null;
@@ -561,19 +667,24 @@ export class Session {
   /** Run one write: one at a time, replay a failed attempt's request id, adopt the answer. */
   async #write(
     scope: string,
+    input: unknown,
     call: (api: Api, options: MutationOptions) => Promise<Answer>,
   ): Promise<ActionResult> {
-    return (await this.#mutate(scope, call)).result;
+    return (await this.#mutate(scope, input, call)).result;
   }
 
   /**
    * The write itself, and what the api answered (null when it refused). The answer's profile replaces
    * `me`; its run replaces `week` when it has one (the shop's does, the depth layer's rides in `me.week`).
+   * `input` is what the control sends: with `scope` it names the request, so a lost reply is replayed for
+   * the same request only.
    */
   async #mutate<T extends Answer>(
     scope: string,
+    input: unknown,
     call: (api: Api, options: MutationOptions) => Promise<T>,
   ): Promise<{ result: ActionResult; answer: T | null }> {
+    const key = this.#key(scope, input);
     const api = this.#api;
     if (!api) {
       return { result: SIGNED_OUT, answer: null };
@@ -590,12 +701,12 @@ export class Session {
     let result: ActionResult;
     let answer: T | null = null;
     try {
-      answer = await call(api, this.#replay(scope));
+      answer = await call(api, this.#replay(key));
       this.#pending = {};
       this.#adoptMe({ ...answer.me, week: answer.week ?? answer.me.week ?? this.week ?? null });
       result = { ok: true };
     } catch (error) {
-      this.#remember(scope, error);
+      this.#remember(key, error);
       result = this.#failure(error);
     } finally {
       this.#writes -= 1;
@@ -615,6 +726,7 @@ export class Session {
     this.week = me.week ?? null;
     this.#sync();
     this.now = Date.now();
+    this.#dropMoved();
   }
 
   /** Rebuild the expedition and Forge views from the profile, so a screen shows what the profile says. */
@@ -638,22 +750,56 @@ export class Session {
     }
   }
 
-  /** The request id of an earlier attempt at this same action that died on the network, if any. */
-  #replay(scope: string): MutationOptions {
-    const requestId = this.#pending[scope];
-    return requestId === undefined ? {} : { requestId };
+  /** What names a request: the control that sent it and exactly what it sent. */
+  #key(scope: string, input: unknown): string {
+    return `${scope}\n${stableJson(input)}`;
   }
 
-  #remember(scope: string, error: unknown): void {
-    if (error instanceof ApiError && error.status === 0 && error.requestId) {
-      this.#pending[scope] = error.requestId;
+  /**
+   * The request id of an earlier attempt at this very request that died on the network, if there is one and
+   * it is recent. Anything else gets a fresh id: the api would answer an old id with the old response and
+   * the screen would announce a success that never happened.
+   */
+  #replay(key: string): MutationOptions {
+    const kept = this.#pending[key];
+    if (kept === undefined) {
+      return {};
+    }
+    if (Date.now() - kept.at > REPLAY_WINDOW_MS) {
+      delete this.#pending[key];
+      return {};
+    }
+    return { requestId: kept.requestId };
+  }
+
+  /**
+   * Keep the id of an attempt that ran out of retries on the network or on a gateway error (the api hands
+   * it back on the error); any other outcome is a real answer and the id is forgotten.
+   */
+  #remember(key: string, error: unknown): void {
+    if (error instanceof ApiError && error.requestId) {
+      this.#pending[key] = { requestId: error.requestId, at: Date.now(), me: stableJson(this.me) };
     } else {
-      delete this.#pending[scope];
+      delete this.#pending[key];
+    }
+  }
+
+  /** A fresh read of the profile that differs from the one a lost write was sent from: the state moved on. */
+  #dropMoved(): void {
+    const remembered = Object.entries(this.#pending);
+    if (remembered.length === 0) {
+      return;
+    }
+    const current = stableJson(this.me);
+    for (const [key, kept] of remembered) {
+      if (kept.me !== current) {
+        delete this.#pending[key];
+      }
     }
   }
 
   #failure(error: unknown): Refused {
-    if (error instanceof ApiError && error.status === 401) {
+    if (sessionEnd(error)) {
       this.#fail(error);
     }
     return {
@@ -713,18 +859,27 @@ export class Session {
   }
 
   #fail(error: unknown): void {
-    if (error instanceof ApiError && error.status === 401) {
-      this.expired = true;
-      this.status = 'signed-out';
-      this.#options.onUnauthorized?.();
+    const ended = sessionEnd(error);
+    if (ended) {
+      this.#end(ended);
       return;
     }
-    if (error instanceof ApiError && error.code === 'no_profile') {
-      // A valid token whose character is gone (deleted): say so, in words.
-      this.error = describeError(error);
-    } else {
-      this.error = error instanceof Error ? error.message : 'Something went wrong.';
-    }
+    this.error = error instanceof Error ? error.message : 'Something went wrong.';
     this.status = 'error';
+  }
+
+  /**
+   * The token is of no use any more, because the api rejected it or its character is gone (a deleted
+   * account answers `/me` with 404 `no_profile` for as long as the old token is kept). Show Landing, and
+   * let the caller forget the token: left on the error screen there is no way out but "Try again".
+   */
+  #end(reason: 'expired' | 'deleted'): void {
+    if (reason === 'expired') {
+      this.expired = true;
+    } else {
+      this.deleted = true;
+    }
+    this.status = 'signed-out';
+    this.#options.onUnauthorized?.();
   }
 }
