@@ -4,8 +4,8 @@
  * snapshot of the whole template under `__snapshots__/`.
  *
  * The stack is synthesized for a made-up account (so ARNs resolve to literals) and with esbuild switched off
- * (the asset hash is then a placeholder that does not change with the backend's source; `bundling.test.ts`
- * runs esbuild for real).
+ * (`bundling.test.ts` runs esbuild for real). The Lambda asset keys are then a hash of the source tree, which
+ * changes with every edit and differs between platforms, so the snapshot masks them.
  */
 import { fileURLToPath } from 'node:url';
 import { format, resolveConfig } from 'prettier';
@@ -566,11 +566,16 @@ describe('outputs', () => {
 
 // --- Snapshot ----------------------------------------------------------------------------------
 
+/** A Lambda asset key (`<sha256>.zip`) with the hash masked, so the snapshot is stable across edits and platforms. */
+const ASSET_KEY = /"S3Key":"[0-9a-f]{64}\.zip"/g;
+
 describe('snapshot', () => {
   it('matches the committed synthesized template', async () => {
     // Regenerate with `pnpm --filter @mergescape/infra exec vitest run -u` after an intended change. The file
     // is written the way `prettier --write` would, so that `pnpm lint` accepts it.
-    const text = await format(JSON.stringify(json), {
+    const masked = JSON.stringify(json).replace(ASSET_KEY, '"S3Key":"<asset-hash>.zip"');
+    expect(masked.match(/<asset-hash>/g), 'two Lambda assets masked').toHaveLength(2);
+    const text = await format(masked, {
       ...(await resolveConfig(SNAPSHOT)),
       filepath: SNAPSHOT,
     });

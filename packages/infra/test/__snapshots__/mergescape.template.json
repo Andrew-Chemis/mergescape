@@ -124,7 +124,7 @@
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
-          "S3Key": "273a4e337cdfafd08a2b7f322fa81e8e85e2981a88f252897a9b94cd1be8beb7.zip"
+          "S3Key": "<asset-hash>.zip"
         },
         "Description": "Verifies GitHub webhook signatures, scores events and writes the results.",
         "Environment": {
@@ -265,7 +265,7 @@
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
-          "S3Key": "7d3f8357f88572798eb15c1e2dc6cc37e4e5cf4722b9399c1424820ce3e348b9.zip"
+          "S3Key": "<asset-hash>.zip"
         },
         "Description": "OAuth callback, JWT-protected game API, badge SVG and the weekly rollover.",
         "Environment": {
