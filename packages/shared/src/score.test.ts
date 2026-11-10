@@ -314,7 +314,9 @@ describe('PR merged (90 + size + party, Smithing)', () => {
     expect(result.points).toBe(0);
   });
 
-  it('credits a human merger of a bot-authored PR in full (no solo halving), ignoring their own review', () => {
+  it('credits a human merger of a bot-authored PR as a solo merge, ignoring their own review', () => {
+    // The merger is the credited actor, so with no other human review this is a solo kill (halved):
+    // the same 80 points as a human merging their own PR, not an unhalved 161.
     const merger = human(5);
     const pr = mergedFacts({ author: bot(9), mergedBy: merger });
     const result = run(
@@ -323,7 +325,31 @@ describe('PR merged (90 + size + party, Smithing)', () => {
       prStateFor(pr, { reviews: [{ reviewerId: 5, state: 'APPROVED' }] }),
     );
     expect(result.skip).toBeNull();
-    expect(result.points).toBe(90 + 71);
+    expect(result.points).toBe(45 + 35);
+    expect(pointsLines(result)[0]?.label).toBe('PR merged (solo kill x0.5)');
+  });
+
+  it('credits a human merger of a bot-authored PR in full once another human reviewed it', () => {
+    const merger = human(5);
+    const pr = mergedFacts({ author: bot(9), mergedBy: merger });
+    const result = run(
+      mergedEvent(pr, merger),
+      settledPlayer(5),
+      prStateFor(pr, { reviews: [approved] }),
+    );
+    expect(result.points).toBe(90 + 71 + 30);
+  });
+
+  it('treats a merge by a bot (a merge queue, auto-merge) as the author merging: solo without another human review', () => {
+    const pr = mergedFacts({ mergedBy: bot(77) });
+    expect(run(mergedEvent(pr), settledPlayer(), prStateFor(pr)).points).toBe(45 + 35);
+    // A human review makes it a reviewed merge again.
+    expect(
+      run(mergedEvent(pr), settledPlayer(), prStateFor(pr, { reviews: [approved] })).points,
+    ).toBe(90 + 71 + 30);
+    // A different human merging a human's PR is not a solo kill, as before.
+    const byOther = mergedFacts({ mergedBy: human(REVIEWER_ID) });
+    expect(run(mergedEvent(byOther), settledPlayer(), prStateFor(byOther)).points).toBe(90 + 71);
   });
 
   it('awards nothing to a bot actor', () => {
@@ -723,9 +749,10 @@ describe('Zone, Power and XP', () => {
       run(openedEvent(), settledPlayer(AUTHOR_ID, { charms })).power;
     expect(power([])).toBe(1);
     expect(power([charm(1.5), charm(1)])).toBe(3.5);
-    expect(power([charm(5), charm(5)])).toBe(9);
-    const capped = run(openedEvent(), settledPlayer(AUTHOR_ID, { charms: [charm(5), charm(5)] }));
-    expect(capped.xp).toBe(Math.floor(10 * 9 * ZONE_L1));
+    // The Charms are held to +4 (design.md 4.3); the cap of 9 over every source is tested in power.test.ts.
+    expect(power([charm(5), charm(5)])).toBe(5);
+    const held = run(openedEvent(), settledPlayer(AUTHOR_ID, { charms: [charm(5), charm(5)] }));
+    expect(held.xp).toBe(Math.floor(10 * 5 * ZONE_L1));
   });
 
   it('floors XP', () => {

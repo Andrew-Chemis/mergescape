@@ -67,6 +67,19 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+/** An ISO-8601 instant as GitHub sends it: `2026-11-09T09:00:00Z`, optionally with a fraction or an offset. */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * A timestamp field: a string of the ISO-8601 shape that also parses to a real instant, else null. Payloads
+ * are untrusted, and these strings are stored and compared, so an arbitrary string never passes through.
+ */
+function asTimestamp(value: unknown): string | null {
+  return typeof value === 'string' && TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
+}
+
 /** Requirement 2.7: an account is a bot when its type is `Bot` or its login ends with `[bot]`. */
 export function isBotAccount(account: { type?: unknown; login?: unknown }): boolean {
   return (
@@ -91,7 +104,11 @@ function toStats(pr: Json): PullRequestStats | null {
     : null;
 }
 
-/** Whether the base ref is the repository default branch; true when the payload does not say. */
+/**
+ * Whether the base ref is the repository default branch. False when the payload does not say (a missing
+ * `base.ref` or `default_branch`): an unverifiable claim must not earn the full-value default-branch
+ * score, so it fails closed.
+ */
 function isDefaultBase(pr: Json, repository: Json | null): boolean {
   const base = asObject(pr.base);
   const ref = base ? asString(base.ref) : null;
@@ -99,7 +116,7 @@ function isDefaultBase(pr: Json, repository: Json | null): boolean {
   const defaultBranch =
     (baseRepo ? asString(baseRepo.default_branch) : null) ??
     (repository ? asString(repository.default_branch) : null);
-  return ref === null || defaultBranch === null || ref === defaultBranch;
+  return ref !== null && defaultBranch !== null && ref === defaultBranch;
 }
 
 function toPullRequest(payload: Json): PullRequestFacts | null {
@@ -126,9 +143,9 @@ function toPullRequest(payload: Json): PullRequestFacts | null {
     draft: pr.draft === true,
     baseRefIsDefault: isDefaultBase(pr, repository),
     stats: toStats(pr),
-    openedAt: asString(pr.created_at),
-    mergedAt: asString(pr.merged_at),
-    closedAt: asString(pr.closed_at),
+    openedAt: asTimestamp(pr.created_at),
+    mergedAt: asTimestamp(pr.merged_at),
+    closedAt: asTimestamp(pr.closed_at),
     merged,
     mergedBy: merged ? toActor(pr.merged_by) : null,
   };
@@ -180,7 +197,7 @@ function normalizeReview(payload: Json): GameEvent[] {
     return [];
   }
   return [
-    { kind: 'review_submitted', actor, state, submittedAt: asString(review.submitted_at), pr },
+    { kind: 'review_submitted', actor, state, submittedAt: asTimestamp(review.submitted_at), pr },
   ];
 }
 
@@ -194,12 +211,18 @@ function normalizeReviewComment(payload: Json): GameEvent[] {
   return pr && actor ? [{ kind: 'review_comment_created', actor, pr }] : [];
 }
 
+/** The most repository ids one installation event may carry; later ones are dropped (the payload is untrusted). */
+export const MAX_REPOSITORY_IDS = 1000;
+
 function repositoryIds(value: unknown): number[] {
   if (!Array.isArray(value)) {
     return [];
   }
   const ids: number[] = [];
   for (const entry of value as unknown[]) {
+    if (ids.length >= MAX_REPOSITORY_IDS) {
+      break;
+    }
     const id = asCount(asObject(entry)?.id);
     if (id !== null) {
       ids.push(id);

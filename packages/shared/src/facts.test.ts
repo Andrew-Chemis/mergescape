@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { eventLines, firstReviewTime, hoursBetween, mergeFacts } from './facts';
+import {
+  authorHasFewerMerges,
+  eventLines,
+  firstReviewTime,
+  hoursBetween,
+  linesAtLeast,
+  linesUnder,
+  mergeFacts,
+  mergeUnder,
+} from './facts';
+import { createPRState } from './state';
 import {
   AUTHOR_ID,
+  bot,
   facts,
   human,
   mergedEvent,
@@ -21,6 +32,56 @@ describe('eventLines', () => {
       ),
     ).toBe(50);
     expect(eventLines(facts({ stats: null }), stored)).toBe(10);
+  });
+
+  it('is null when neither the event nor the stored PR knows the size', () => {
+    const unseen = createPRState(facts({ stats: null }));
+    expect(unseen).toMatchObject({ additions: 0, deletions: 0, sizeKnown: false });
+    expect(eventLines(facts({ stats: null }), unseen)).toBeNull();
+    // The payload still wins over an unknown stored size, and a known stored size answers for a review.
+    expect(eventLines(facts(), unseen)).toBe(120);
+    expect(eventLines(facts({ stats: null }), { ...unseen, additions: 30, sizeKnown: true })).toBe(
+      30,
+    );
+    expect(
+      eventLines(facts({ stats: null }), prStateFor(facts(), { additions: 5, deletions: 0 })),
+    ).toBe(5);
+  });
+});
+
+describe('size and author comparisons', () => {
+  it('"under N" is false for an unknown size, "at least N" too, both strict where they say so', () => {
+    expect(linesUnder(149, 150)).toBe(true);
+    expect(linesUnder(150, 150)).toBe(false);
+    expect(linesUnder(null, 150)).toBe(false);
+    expect(linesAtLeast(150, 150)).toBe(true);
+    expect(linesAtLeast(149, 150)).toBe(false);
+    expect(linesAtLeast(null, 0)).toBe(false);
+  });
+
+  it('mergeUnder needs a known size', () => {
+    const known = mergeFacts(
+      mergedEvent(mergedFacts({ stats: null })),
+      prStateFor(facts(), { additions: 10, deletions: 0 }),
+    );
+    expect(known.sizeKnown).toBe(true);
+    expect(mergeUnder(known, 150)).toBe(true);
+    const unseen = createPRState(facts({ stats: null }));
+    const unknown = mergeFacts(mergedEvent(mergedFacts({ stats: null })), unseen);
+    expect(unknown).toMatchObject({ lines: 0, sizeKnown: false });
+    expect(mergeUnder(unknown, 150)).toBe(false);
+  });
+
+  it('authorHasFewerMerges needs a known count: unknown (null or absent) never qualifies', () => {
+    const pr = (authorMerges?: number | null) =>
+      prStateFor(facts(), authorMerges === undefined ? {} : { authorMerges });
+    expect(authorHasFewerMerges(pr(3), 10)).toBe(true);
+    expect(authorHasFewerMerges(pr(0), 10)).toBe(true);
+    expect(authorHasFewerMerges(pr(10), 10)).toBe(false);
+    expect(authorHasFewerMerges(pr(30), 10)).toBe(false);
+    expect(authorHasFewerMerges(pr(null), 10)).toBe(false);
+    expect(authorHasFewerMerges(pr(), 10)).toBe(false);
+    expect(authorHasFewerMerges(pr(0), 0)).toBe(false);
   });
 });
 
@@ -56,6 +117,35 @@ describe('mergeFacts', () => {
     expect(mergeFacts(byOther, prStateFor(byOther.pr)).soloKill).toBe(false);
     const nobody = mergedEvent(mergedFacts({ mergedBy: null }));
     expect(mergeFacts(nobody, prStateFor(nobody.pr)).soloKill).toBe(false);
+  });
+
+  it('is judged against the credited actor: the human merger of a bot PR merged it alone', () => {
+    const merger = human(5);
+    const pr = mergedFacts({ author: bot(9), mergedBy: merger });
+    const own = { reviewerId: 5, state: 'APPROVED' } as const;
+    const other = { reviewerId: REVIEWER_ID, state: 'APPROVED' } as const;
+    expect(mergeFacts(mergedEvent(pr, merger), prStateFor(pr, { reviews: [own] }))).toMatchObject({
+      soloKill: true,
+      party: false,
+    });
+    expect(
+      mergeFacts(mergedEvent(pr, merger), prStateFor(pr, { reviews: [own, other] })),
+    ).toMatchObject({ soloKill: false, party: true });
+  });
+
+  it('counts a bot merger as the author merging, but not another human', () => {
+    const byBot = mergedEvent(mergedFacts({ mergedBy: bot(77) }));
+    expect(mergeFacts(byBot, prStateFor(byBot.pr)).soloKill).toBe(true);
+    const reviewed = prStateFor(byBot.pr, {
+      reviews: [{ reviewerId: REVIEWER_ID, state: 'APPROVED' }],
+    });
+    expect(mergeFacts(byBot, reviewed).soloKill).toBe(false);
+  });
+
+  it('reports the default branch', () => {
+    expect(mergeFacts(mergedEvent(mergedFacts()), prStateFor(facts())).defaultBranch).toBe(true);
+    const off = mergedEvent(mergedFacts({ baseRefIsDefault: false }));
+    expect(mergeFacts(off, prStateFor(off.pr)).defaultBranch).toBe(false);
   });
 
   it('reads the size from the stored PR when the payload has none', () => {

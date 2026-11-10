@@ -182,6 +182,51 @@ describe('pack contents (Requirement 8.7: 3 options)', () => {
     ).toBe(true);
   });
 
+  it('never offers an upgraded Pledge: Pair Up comes from a Boss reward, not a pack', () => {
+    const upgraded = PLEDGES.filter((entry) => entry.upgraded).map((entry) => entry.id);
+    expect(upgraded).toEqual(['pair-up']);
+    const offered = new Set<string>();
+    for (let seed = 1; seed <= 400; seed += 1) {
+      const stocked = open(player, seed);
+      for (let nonce = 0; nonce < 3; nonce += 1) {
+        const slots = stocked.shop!.packs.map((slot) => ({
+          ...slot,
+          item: 'pledge' as const,
+          nonce,
+        }));
+        const roll = { ...stocked, shop: { ...stocked.shop!, packs: slots } };
+        for (let index = 0; index < slots.length; index += 1) {
+          for (const option of packOptions(roll, index)!) {
+            if (option.kind === 'pledge') {
+              offered.add(option.pledge.id);
+            }
+          }
+        }
+      }
+    }
+    expect([...offered].sort()).toEqual(
+      PLEDGES.filter((entry) => !entry.upgraded)
+        .map((entry) => entry.id)
+        .sort(),
+    );
+  });
+
+  it('keeps the 3 options of a pack carried into a later visit', () => {
+    const slot = { item: 'charm' as const, price: 100, sold: true, picked: false, nonce: 0 };
+    const stock = { ...run.shop!, packs: [slot, slot] };
+    const stocked = { ...run, shop: stock };
+    const original = packOptions(stocked, 0);
+    // Stamped with the visit it was stocked in, it reads the same after the visit counter moves on.
+    const later = {
+      ...stocked,
+      clearedActs: ['scout', 'raid'] as RunState['clearedActs'],
+      shop: { ...stock, packs: [{ ...slot, visit: 1 }, slot] },
+    };
+    expect(visitOf(later)).toBe(2);
+    expect(packOptions(later, 0)).toEqual(original);
+    expect(packOptions(later, 1)).not.toEqual(original);
+  });
+
   it('reads a stored shop written before packs carried a nonce as nonce 0', () => {
     const stock = run.shop!;
     const legacy = {

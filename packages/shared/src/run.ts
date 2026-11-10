@@ -18,7 +18,7 @@ import { applyFounderBoard, mogulGoldMultiplier, selectMogul } from './moguls';
 import type { BoardEvent } from './moguls';
 import { drawHand } from './pledges';
 import { deriveSeed } from './rng';
-import { generateStock, legendaryOffer } from './shop';
+import { carryPendingPacks, generateStock, legendaryOffer, visitOf } from './shop';
 import type { Charm, PackKind, PlayerState, RunState } from './types';
 
 /**
@@ -240,7 +240,12 @@ export function clearAct(
       ...run,
       act: next,
       clearedActs,
-      shop: generateStock(cleared, run.shopSeed, clearedActs.length),
+      // A pack bought but not yet picked from outlives the visit it was bought in.
+      shop: carryPendingPacks(
+        generateStock(cleared, run.shopSeed, clearedActs.length),
+        run.shop,
+        visitOf(run),
+      ),
     },
     clear: {
       act,

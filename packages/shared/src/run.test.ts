@@ -12,7 +12,7 @@ import {
   startRun,
 } from './run';
 import { score } from './score';
-import { buyCharm } from './shop';
+import { buyCharm, buyPack, generateStock, packOptions, pickPackOption } from './shop';
 import { applyScoreResult, createPlayerState, createPRState } from './state';
 import { charmDefinition, makeCharm } from './charms';
 import { D2_XP } from './d2table';
@@ -382,6 +382,57 @@ describe('clearing acts (Requirement 6.5 to 6.7)', () => {
     expect(again.run.shop).toEqual(cleared.run.shop);
     const bought = buyCharm({ ...cleared.player, gold: 1000 }, cleared.run, 0);
     expect(bought.ok).toBe(true);
+  });
+
+  describe('a pack bought but not yet picked from', () => {
+    /** The Scout act cleared and pack 0 bought and opened; the player has not kept an option yet. */
+    const withBoughtPack = () => {
+      const scout = clearAct(at(100), player(1000))!;
+      const bought = buyPack(scout.player, scout.run, 0);
+      if (!bought.ok) throw new Error('expected the pack to be bought');
+      return { scout, bought };
+    };
+
+    it('survives the next act clear: same slot, same 3 options, still pickable', () => {
+      const { bought } = withBoughtPack();
+      const raid = clearAct({ ...bought.run, weeklyXp: 200 }, bought.player)!;
+      const carried = raid.run.shop!.packs[0]!;
+      expect(carried).toMatchObject({ sold: true, picked: false, visit: 1 });
+      expect(packOptions(raid.run, 0)).toEqual(bought.options);
+      // The other shelf slot is the new visit's own stock, and so is everything else.
+      const fresh = generateStock(raid.player, raid.run.shopSeed, 2);
+      expect(raid.run.shop!.packs[1]).toEqual(fresh.packs[1]);
+      expect(raid.run.shop!.charms).toEqual(fresh.charms);
+      expect(raid.run.shop!.voucher).toEqual(fresh.voucher);
+      const kept = pickPackOption(raid.player, raid.run, 0, 0);
+      expect(kept.ok).toBe(true);
+    });
+
+    it('keeps surviving until it is picked, then the next clear stocks a fresh pack', () => {
+      const { bought } = withBoughtPack();
+      const raid = clearAct({ ...bought.run, weeklyXp: 200 }, bought.player)!;
+      const boss = clearAct({ ...raid.run, weeklyXp: 300 }, raid.player)!;
+      expect(boss.run.shop!.packs[0]).toMatchObject({ sold: true, picked: false, visit: 1 });
+      expect(packOptions(boss.run, 0)).toEqual(bought.options);
+      const kept = pickPackOption(boss.player, boss.run, 0, 1);
+      if (!kept.ok) throw new Error('expected the pick to succeed');
+      expect(kept.run.shop!.packs[0]!.picked).toBe(true);
+    });
+
+    it('is not carried once picked: the next visit stocks that slot again', () => {
+      const { bought } = withBoughtPack();
+      const picked = pickPackOption(bought.player, bought.run, 0, 0);
+      if (!picked.ok) throw new Error('expected the pick to succeed');
+      const raid = clearAct({ ...picked.run, weeklyXp: 200 }, picked.player)!;
+      const fresh = generateStock(raid.player, raid.run.shopSeed, 2);
+      expect(raid.run.shop!.packs).toEqual(fresh.packs);
+    });
+
+    it('an unbought pack is simply replaced', () => {
+      const scout = clearAct(at(100), player(1000))!;
+      const raid = clearAct({ ...scout.run, weeklyXp: 200 }, scout.player)!;
+      expect(raid.run.shop!.packs).toEqual(generateStock(raid.player, raid.run.shopSeed, 2).packs);
+    });
   });
 
   it('buying a third copy needs the gold up front: the refund does not pay for it', () => {

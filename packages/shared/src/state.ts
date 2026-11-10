@@ -30,7 +30,10 @@ export function createPlayerState(id: number): PlayerState {
   };
 }
 
-/** The scorer's view of a PR seen for the first time (no reviews, no pushes). */
+/**
+ * The scorer's view of a PR seen for the first time (no reviews, no pushes). A payload without stats (a
+ * review) leaves the size unknown: `sizeKnown` is false and the 0s are placeholders.
+ */
 export function createPRState(facts: PullRequestFacts): PRState {
   return {
     repoId: facts.repoId,
@@ -38,6 +41,7 @@ export function createPRState(facts: PullRequestFacts): PRState {
     authorId: facts.author.id,
     additions: facts.stats?.additions ?? 0,
     deletions: facts.stats?.deletions ?? 0,
+    ...(facts.stats === null ? { sizeKnown: false } : {}),
     reviewRoundCount: 0,
     syncCount: 0,
     reviews: [],

@@ -44,6 +44,7 @@ import {
   PLEDGE_PLAY_WINDOW_DAYS,
   PLEDGE_RULES,
   POINTS,
+  POWER_BUDGET,
   POWER_CAP,
   RARITIES,
   RARITY_WEIGHTS,
@@ -84,6 +85,17 @@ describe('constants match the spec tables', () => {
     expect(ZONE_EXPONENT).toBe(1.6);
     expect(OVERCLOCK_ZONE_EXPONENT).toBe(1.65);
     expect(POWER_CAP).toBe(9);
+  });
+
+  it('the per-source Power budgets (design.md 4.3) leave the global cap above their sum', () => {
+    expect(POWER_BUDGET).toEqual({ charms: 4, gear: 2.25, pledges: 1, feats: 0.5 });
+    // Five Dragon pieces and the set bonus are exactly the gear budget; Feats match their own cap.
+    expect(5 * GEAR_TIER_RULES.dragon.power + GEAR_SET_BONUS).toBe(POWER_BUDGET.gear);
+    expect(FEAT_RULES.bonusCap).toBe(POWER_BUDGET.feats);
+    expect(
+      1 + POWER_BUDGET.charms + POWER_BUDGET.gear + POWER_BUDGET.pledges + POWER_BUDGET.feats,
+    ).toBe(8.75);
+    expect(8.75).toBeLessThan(POWER_CAP);
   });
 
   it('shop (design.md 6.5, Requirement 8)', () => {
@@ -189,6 +201,7 @@ describe('constants match the spec tables', () => {
       removalDay: 2,
       returnDay: 4,
       returnPower: 0.25,
+      maxReturnBonus: 1,
     });
     expect(MOGUL_RULES.twoPizza).toEqual({
       minReviewers: 2,

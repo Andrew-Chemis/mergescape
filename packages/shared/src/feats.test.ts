@@ -22,11 +22,12 @@ import { PETS } from './pets';
 import { computePower, powerBreakdown } from './power';
 import { isoWeekKey } from './run';
 import { score } from './score';
-import { createPlayerState } from './state';
+import { createPlayerState, createPRState } from './state';
 import {
   AUTHOR_ID,
   BOSS_NOW,
   facts,
+  held,
   human,
   inlineEvent,
   mergedEvent,
@@ -464,6 +465,20 @@ describe('Craft Feats', () => {
     ).toBe(49);
   });
 
+  it('Surgeon and Tidy Hands never count a merge whose size the app never saw', () => {
+    const pr = mergedFacts({ stats: null });
+    const unseen = createPRState(pr);
+    expect(unseen.sizeKnown).toBe(false);
+    const counters = author({ smallMerges: 49 });
+    const merged = run(counters, mergedEvent(pr), { ...unseen, reviews: APPROVED }).evaluation;
+    expect(merged.counters.approvedMerges).toBe(1);
+    expect(merged.counters.smallMerges).toBe(49);
+    expect(merged.counters.tidyMerges).toEqual({});
+    // The same stored size, once marked known, is a small merge.
+    const known = { ...unseen, sizeKnown: true, reviews: APPROVED };
+    expect(ids(run(counters, mergedEvent(pr), known).evaluation)).toEqual(['surgeon']);
+  });
+
   it('Riposte Master: 100 merges that addressed requested changes', () => {
     const reviews: ReviewRecord[] = [
       { reviewerId: REVIEWER_ID, state: 'CHANGES_REQUESTED' },
@@ -519,6 +534,22 @@ describe('Craft Feats', () => {
       return run(reviewer({ fastApprovals: 49 }), event, prStateFor(pr)).evaluation;
     };
 
+    it('never counts a PR whose size the app never saw: an unknown size is not "under 200 lines"', () => {
+      const pr = facts({ stats: null });
+      const event = {
+        ...reviewEvent('APPROVED', human(REVIEWER_ID), pr),
+        submittedAt: '2026-11-09T09:20:00Z',
+      };
+      const unseen = createPRState(pr);
+      expect(
+        run(reviewer({ fastApprovals: 49 }), event, unseen).evaluation.counters.fastApprovals,
+      ).toBe(49);
+      const known = { ...unseen, additions: 50, sizeKnown: true };
+      expect(ids(run(reviewer({ fastApprovals: 49 }), event, known).evaluation)).toEqual([
+        'fast-hands',
+      ]);
+    });
+
     it('counts a small PR approved inside the hour', () => {
       expect(ids(approve({}, '2026-11-09T10:00:00Z'))).toEqual(['fast-hands']);
       expect(ids(approve({}, '2026-11-09T09:20:00Z'))).toEqual(['fast-hands']);
@@ -557,10 +588,15 @@ describe('Craft Feats', () => {
     const experienced = reviewer({ mentorApprovals: 99 }, { repoMerges: { '1001': 5 } });
     const newcomer = prStateFor(facts(), { authorMerges: 2 });
     expect(ids(run(experienced, reviewEvent('APPROVED'), newcomer).evaluation)).toEqual(['mentor']);
-    // Unknown author merges read as 0, the same as the Mentor Pledge.
-    expect(ids(run(experienced, reviewEvent('APPROVED'), prStateFor(facts())).evaluation)).toEqual([
-      'mentor',
-    ]);
+    // A brand-new player with 0 merges is a known newcomer; an author who is not a player is unknown and
+    // does not count (the same rule as Whetstone and the Mentor Pledge).
+    const zero = prStateFor(facts(), { authorMerges: 0 });
+    expect(ids(run(experienced, reviewEvent('APPROVED'), zero).evaluation)).toEqual(['mentor']);
+    for (const unknown of [prStateFor(facts()), prStateFor(facts(), { authorMerges: null })]) {
+      expect(
+        run(experienced, reviewEvent('APPROVED'), unknown).evaluation.counters.mentorApprovals,
+      ).toBe(99);
+    }
     const veteran = prStateFor(facts(), { authorMerges: 5 });
     expect(
       run(experienced, reviewEvent('APPROVED'), veteran).evaluation.counters.mentorApprovals,
@@ -916,6 +952,29 @@ describe('humour Feats (cosmetic)', () => {
       expect(ids(hoursAfter(almost(4), -421))).not.toContain('dawn-patrol'); // 04:59
       expect(ids(hoursAfter(almost(7), -300))).not.toContain('dawn-patrol'); // 07:00
     });
+  });
+
+  it('a verified kill or Riposte credit is built when someone else merges: it feeds neither the hour nor the active-week counters', () => {
+    const merged = approvedMerge();
+    const kill = verifiedKill(human(REVIEWER_ID), merged.pr);
+    const player = reviewer({ activeWeeks: 5, lastActiveWeek: '2026-40' });
+    const killed = run(player, kill, merged.state).evaluation.counters;
+    expect(killed.verifiedKills).toBe(1);
+    expect(killed.hours.reduce((sum, count) => sum + count, 0)).toBe(0);
+    expect(killed.activeWeeks).toBe(5);
+    expect(killed.lastActiveWeek).toBe('2026-40');
+    const credited = run(
+      { ...player, charms: [held('jesters-rebase')] },
+      { kind: 'riposte_credit', actor: human(REVIEWER_ID), pr: merged.pr },
+      prStateFor(merged.pr, { reviews: [{ reviewerId: REVIEWER_ID, state: 'CHANGES_REQUESTED' }] }),
+    );
+    expect(credited.skip).toBeNull();
+    expect(credited.evaluation.counters.hours.reduce((sum, count) => sum + count, 0)).toBe(0);
+    expect(credited.evaluation.counters.activeWeeks).toBe(5);
+    // The player's own review does count for both.
+    const own = run(player, reviewEvent('APPROVED'), prStateFor(facts())).evaluation.counters;
+    expect(own.hours[12]).toBe(1);
+    expect(own.activeWeeks).toBe(6);
   });
 
   it('Friday Deploy: ten merges after 16:00 local on a Friday', () => {

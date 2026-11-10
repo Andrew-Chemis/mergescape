@@ -31,7 +31,8 @@ const WEEK_KEY = /^(\d{4})-W?(\d{2})$/;
 
 /**
  * Monday 00:00 UTC of the ISO week a week key names, as epoch milliseconds: the inverse of `isoWeekKey`.
- * Takes the stored `2026-46` and the contract's `2026-W46`; null for anything else or a week outside 1..53.
+ * Takes the stored `2026-46` and the contract's `2026-W46`; null for anything else, a week outside 1..53, or
+ * a week 53 that the year does not have (`2025-53` is not a week: the day it would name belongs to 2026-W01).
  */
 export function weekKeyStartMs(key: string): number | null {
   const match = WEEK_KEY.exec(key);
@@ -43,5 +44,9 @@ export function weekKeyStartMs(key: string): number | null {
     return null;
   }
   // 4 January is always in week 1: step back to its Monday, then forward whole weeks.
-  return weekStartUtc(Date.UTC(Number(match[1]), 0, 4)) + (week - 1) * WEEK_MS;
+  const year = Number(match[1]);
+  const start = weekStartUtc(Date.UTC(year, 0, 4)) + (week - 1) * WEEK_MS;
+  // A week belongs to the year that contains its Thursday; a key whose Thursday is in the next year named
+  // a week that year does not have.
+  return new Date(start + 3 * DAY_MS).getUTCFullYear() === year ? start : null;
 }

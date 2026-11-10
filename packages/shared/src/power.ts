@@ -1,4 +1,4 @@
-import { BASE_POWER, CHARM_RULES, POWER_CAP } from './constants';
+import { BASE_POWER, CHARM_RULES, POWER_BUDGET, POWER_CAP } from './constants';
 import { charmPowerLines, loadedDiceFires } from './charms';
 import { featPowerBonus } from './feats';
 import { gearPowerLines } from './gear';
@@ -22,11 +22,25 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
 }
 
 /**
+ * A source's Power lines, followed by a negative "<name> cap" line that brings their sum down to `budget`
+ * when it is over (design.md 4.3: Charms +4, gear +2.25, Pledges +1, Feats +0.5), so the Combat Log shows
+ * the clamp and the lines still sum to the Power.
+ */
+function withinBudget(name: string, lines: BreakdownLine[], budget: number): BreakdownLine[] {
+  const total = powerOf(lines);
+  return total > budget
+    ? [...lines, { label: `${name} cap`, value: tidy(budget - total), kind: 'power' }]
+    : lines;
+}
+
+/**
  * The terms of `Power = 1 + Σ(Charm powers) + Σ(gear power incl. set bonus) + Pledge bonus + Feat bonus`,
  * capped at 9 (Requirement 4.5), as Combat Log lines, one per contributing source: each Charm, then the
- * "Gear" total (and, in an event context, the Keen and Stout lines), the Pledge bonus and the Feat bonus,
- * which never exceeds +0.5. Terms that are zero are omitted. When the cap bites a
- * final negative "Power cap" line makes the lines sum to the capped Power.
+ * "Gear" total (and, in an event context, the Keen and Stout lines), the Pledge bonus and the Feat bonus.
+ * Each source is held to its budget (`POWER_BUDGET`: Charms +4, gear +2.25, Pledges +1, Feats +0.5) by a
+ * "Charm cap", "Gear cap", "Pledge cap" or "Feat cap" line when it is over. Terms that are zero are
+ * omitted. When the global cap bites a final negative "Power cap" line makes the lines sum to the capped
+ * Power.
  *
  * Without a context this is the unconditional baseline (what the Character sheet shows): Charms'
  * conditional Power, Defend's review-only bonus and the Mogul modifiers need an event. With a context:
@@ -37,15 +51,15 @@ export function powerOf(lines: readonly BreakdownLine[]): number {
  */
 export function powerBreakdown(player: PlayerState, ctx?: PowerContext): BreakdownLine[] {
   const lines: BreakdownLine[] = [{ label: 'Base Power', value: BASE_POWER, kind: 'power' }];
-  lines.push(...charmPowerLines(player, ctx));
-  lines.push(...gearPowerLines(player, ctx));
-  const flat: [string, number][] = [
-    ['Pledge bonus', pledgePower(player, ctx)],
-    ['Feat bonus', featPowerBonus(player)],
+  lines.push(...withinBudget('Charm', charmPowerLines(player, ctx), POWER_BUDGET.charms));
+  lines.push(...withinBudget('Gear', gearPowerLines(player, ctx), POWER_BUDGET.gear));
+  const flat: [string, string, number, number][] = [
+    ['Pledge bonus', 'Pledge', pledgePower(player, ctx), POWER_BUDGET.pledges],
+    ['Feat bonus', 'Feat', featPowerBonus(player), POWER_BUDGET.feats],
   ];
-  for (const [label, value] of flat) {
+  for (const [label, name, value, budget] of flat) {
     if (value !== 0) {
-      lines.push({ label, value, kind: 'power' });
+      lines.push(...withinBudget(name, [{ label, value, kind: 'power' }], budget));
     }
   }
   if (ctx !== undefined) {

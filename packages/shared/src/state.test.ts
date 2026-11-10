@@ -61,10 +61,12 @@ describe('createPRState', () => {
     });
   });
 
-  it('scores size as 0 when the payload carried none (review events)', () => {
+  it('leaves the size unknown when the payload carried none (review events)', () => {
     const state = createPRState(facts({ stats: null }));
     expect(state.additions).toBe(0);
     expect(state.deletions).toBe(0);
+    expect(state.sizeKnown).toBe(false);
+    expect(createPRState(facts()).sizeKnown).toBeUndefined();
   });
 });
 

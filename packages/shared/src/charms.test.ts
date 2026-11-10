@@ -14,6 +14,7 @@ import {
   loadedDiceReady,
   makeCharm,
   partyBonusPoints,
+  restoreCharm,
   riposteMultiplier,
   sellCharm,
   sumCharmEffect,
@@ -225,6 +226,15 @@ describe('Small Hands: +0.75 on merges under 150 lines', () => {
       1,
     );
   });
+
+  it('needs a known size: a merge the app never saw the size of is not "under 150 lines"', () => {
+    const pr = mergedFacts({ stats: null });
+    const unseen = createPRState(pr);
+    expect(run(mergedEvent(pr), player, unseen).power).toBe(1);
+    expect(run(mergedEvent(pr), player, { ...unseen, additions: 20, sizeKnown: true }).power).toBe(
+      1.75,
+    );
+  });
 });
 
 describe('Second Pair of Eyes: the party bonus is 60 points', () => {
@@ -300,11 +310,22 @@ describe('Hot Potato: +1.5 approving a PR under 200 lines within 2 hours of its 
 
   it('reads the PR size from the stored state when the review payload carries none', () => {
     const pr = facts({ stats: null });
-    const big = prStateFor(pr, { additions: 900, deletions: 0 });
-    const small = prStateFor(pr, { additions: 20, deletions: 0 });
+    const big = prStateFor(pr, { additions: 900, deletions: 0, sizeKnown: true });
+    const small = prStateFor(pr, { additions: 20, deletions: 0, sizeKnown: true });
     const event = reviewEvent('APPROVED', human(REVIEWER_ID), pr);
     expect(run(event, player, big).power).toBe(1);
     expect(run(event, player, small).power).toBe(2.5);
+  });
+
+  it('never fires for a PR whose size the app never saw: unknown is not "under 200 lines"', () => {
+    // A review payload carries no stats and the opened event was never stored: the size is unknown.
+    const pr = facts({ stats: null });
+    const event = reviewEvent('APPROVED', human(REVIEWER_ID), pr);
+    const unseen = createPRState(pr);
+    expect(unseen.sizeKnown).toBe(false);
+    expect(run(event, player, unseen).power).toBe(1);
+    // The same placeholder 0s with the size marked known would read as a tiny PR.
+    expect(run(event, player, { ...unseen, sizeKnown: true }).power).toBe(2.5);
   });
 });
 
@@ -378,12 +399,26 @@ describe('Whetstone: +0.5 on an approval, backed by an inline comment, of a newe
     expect(approve(veteran(), 0, 3).power).toBe(1);
   });
 
-  it('needs an author with fewer merges than you, and treats an unknown count as a newcomer', () => {
+  it('needs an author whose merge count is known and lower than yours', () => {
     expect(approve(veteran(), 3, 12).power).toBe(1);
     expect(approve(veteran(), 3, 80).power).toBe(1);
-    expect(approve(veteran(), 3, undefined).power).toBe(1.5);
+    expect(approve(veteran(), 3, 0).power).toBe(1.5);
+    expect(approve(veteran(), 3, 11).power).toBe(1.5);
     // A reviewer with no merges of their own mentors nobody.
-    expect(approve(playerWith(REVIEWER_ID, held('whetstone')), 3, undefined).power).toBe(1);
+    expect(approve(playerWith(REVIEWER_ID, held('whetstone')), 3, 0).power).toBe(1);
+  });
+
+  it('does not fire when the author count is unknown (not a player), which is not a newcomer', () => {
+    expect(approve(veteran(), 3, undefined).power).toBe(1);
+    const unknown = run(
+      reviewEvent('APPROVED'),
+      veteran(),
+      prStateFor(facts(), {
+        authorMerges: null,
+        reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 3 } },
+      }),
+    );
+    expect(unknown.power).toBe(1);
   });
 
   it('applies to approvals only, not requested changes, comments, merges or opens', () => {
@@ -466,9 +501,15 @@ describe('Long Lens: +1.0 on a thorough review of a PR of 500+ lines', () => {
     const pr = facts({ stats: null });
     const big = prStateFor(pr, {
       additions: 900,
+      sizeKnown: true,
       reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 3 } },
     });
     expect(run(reviewEvent('APPROVED', human(REVIEWER_ID), pr), player, big).power).toBe(2);
+    // An unknown stored size is a placeholder 0, which is not 500 lines either.
+    expect(
+      run(reviewEvent('APPROVED', human(REVIEWER_ID), pr), player, { ...big, sizeKnown: false })
+        .power,
+    ).toBe(1);
   });
 
   it('does not apply to merges', () => {
@@ -623,10 +664,19 @@ describe('Loaded Dice: once a week one event has Power 10', () => {
   });
 
   it('overrides even a maxed Power', () => {
-    const maxed = { ...dice, charms: [...dice.charms, charm(12)] };
+    const maxed = {
+      ...dice,
+      charms: [...dice.charms, charm(12)],
+      gear: { pieces: [{ id: 'dragon', slot: 'weapon' as const, power: 2.25 }], setBonus: 0 },
+      feats: { unlocked: [], powerBonus: 0.5 },
+      moguls: { ...dice.moguls, current: 'leather-jacket' as const, chain: 15 },
+    };
     const result = run(openedEvent(), maxed);
     expect(result.power).toBe(10);
-    expect(powerLines(result).map(([label]) => label)).toContain('Power cap');
+    // Charms are held to +4 and the Leather Jacket takes the sum past 9: both caps show.
+    expect(powerLines(result).map(([label]) => label)).toEqual(
+      expect.arrayContaining(['Charm cap', 'Power cap', 'Loaded Dice']),
+    );
   });
 
   it('is not spent by an event that scores nothing, or by the weekly streak', () => {
@@ -707,8 +757,8 @@ describe('Charm effects as data', () => {
   });
 });
 
-describe('Power cap', () => {
-  it('stays at 9 with every conditional Charm firing at once', () => {
+describe('Power caps', () => {
+  it('holds the Charms to +4 however many fire at once, then the global 9 on top of the other sources', () => {
     const stacked: Charm[] = [held('rubber-duck', 2), held('hot-potato', 2), charm(8, 'Pile')];
     const pr = facts({ stats: stats(10, 0) });
     const player = { ...playerWith(REVIEWER_ID, ...stacked) };
@@ -717,9 +767,11 @@ describe('Power cap', () => {
       player,
       reviewWithInline(3),
     );
-    expect(result.power).toBe(POWER_CAP);
-    expect(computePower(player)).toBe(POWER_CAP);
-    expect(powerBreakdown(player).at(-1)?.label).toBe('Power cap');
+    expect(result.power).toBe(1 + 4);
+    expect(powerLines(result).at(-1)).toEqual(['Charm cap', expect.any(Number)]);
+    expect(computePower(player)).toBe(1 + 4);
+    expect(powerBreakdown(player).at(-1)?.label).toBe('Charm cap');
+    expect(POWER_CAP).toBe(9);
   });
 });
 
@@ -767,6 +819,84 @@ describe('slots, stacking and auto-sell (Requirement 9.1)', () => {
       reason: 'duplicate',
     });
     expect(third.player).toBe(twice);
+  });
+
+  describe("with the Founder's Board holding a Charm", () => {
+    const benching = (benched: Charm, ...charms: Charm[]): PlayerState => {
+      const base = settledPlayer();
+      return {
+        ...base,
+        charms,
+        moguls: { ...base.moguls, benched: { charm: benched, weekKey: '2026-46' } },
+      };
+    };
+
+    it('counts the benched copies: a Charm held once and benched once is already a full stack', () => {
+      const player = benching(held('lantern'), held('lantern'));
+      const third = addCharm(player, held('lantern'));
+      expect(third).toMatchObject({ ok: true, outcome: 'auto_sold' });
+      expect(third.ok && third.sale?.proceeds).toBe(20);
+      expect(third.ok && third.player).toBe(player);
+    });
+
+    it('auto-sells a copy of a Charm that is benched as a full stack', () => {
+      const player = benching(held('hot-potato', 2));
+      const copy = addCharm(player, held('hot-potato'));
+      expect(copy).toMatchObject({ ok: true, outcome: 'auto_sold' });
+      expect(copy.ok && copy.sale?.proceeds).toBe(60);
+    });
+
+    it('lets a second copy in when only one is benched, into a slot of its own', () => {
+      const player = benching(held('lantern'), held('oracle'));
+      const second = addCharm(player, held('lantern'));
+      expect(second).toMatchObject({ ok: true, outcome: 'added', sale: null });
+      expect(second.ok && second.player.charms.map((entry) => entry.id)).toEqual([
+        'oracle',
+        'lantern',
+      ]);
+    });
+
+    it('ignores a benched Charm of another id', () => {
+      const player = benching(held('oracle'), held('lantern'));
+      expect(addCharm(player, held('lantern'))).toMatchObject({ ok: true, outcome: 'stacked' });
+    });
+  });
+
+  describe('restoreCharm (a Charm coming back from the Board)', () => {
+    it('appends a Charm the player no longer holds', () => {
+      const back = restoreCharm({ ...settledPlayer(), charms: [held('oracle')] }, held('lantern'));
+      expect(back.sale).toBeNull();
+      expect(back.player.charms.map((entry) => entry.id)).toEqual(['oracle', 'lantern']);
+    });
+
+    it('merges into the held copy up to the cap, keeping the higher Power', () => {
+      const bought = { ...held('lantern'), copies: 1 };
+      const returning = { ...held('lantern'), power: 0.25 };
+      const other = held('oracle');
+      const back = restoreCharm({ ...settledPlayer(), charms: [other, bought] }, returning);
+      expect(back.sale).toBeNull();
+      expect(back.player.charms).toEqual([other, { ...bought, power: 0.25, copies: 2 }]);
+    });
+
+    it('auto-sells the copies beyond two, all of them in one sale', () => {
+      const back = restoreCharm(
+        { ...settledPlayer(), charms: [held('hot-potato', 2)] },
+        held('hot-potato', 2),
+      );
+      expect(back.player.charms.map((entry) => copiesOf(entry))).toEqual([2]);
+      expect(back.sale).toEqual({
+        charmId: 'hot-potato',
+        name: 'Hot Potato',
+        rarity: 'rare',
+        proceeds: 120,
+        reason: 'duplicate',
+      });
+      const one = restoreCharm(
+        { ...settledPlayer(), charms: [held('hot-potato', 2)] },
+        held('hot-potato'),
+      );
+      expect(one.sale?.proceeds).toBe(60);
+    });
   });
 
   it('sells half price: 20, 35, 60, 125', () => {

@@ -57,6 +57,25 @@ describe('weekKeyStartMs', () => {
     expect(weekKeyStartMs('2027-01')).toBe(Date.UTC(2027, 0, 4));
   });
 
+  it('is null for a week 53 the year does not have, and every key it accepts is a real ISO week', () => {
+    // 2025 has 52 weeks: its "week 53" would start on 29 December 2025, which is 2026-W01.
+    expect(weekKeyStartMs('2025-53')).toBeNull();
+    expect(weekKeyStartMs('2025-W53')).toBeNull();
+    expect(weekKeyStartMs('2025-52')).toBe(Date.UTC(2025, 11, 22));
+    for (let year = 2000; year <= 2040; year += 1) {
+      for (let week = 1; week <= 53; week += 1) {
+        const key = `${year}-${String(week).padStart(2, '0')}`;
+        const start = weekKeyStartMs(key);
+        if (start !== null) {
+          expect(isoWeekKey(start), key).toBe(key);
+        }
+      }
+    }
+    // The years with 53 weeks keep theirs.
+    expect(weekKeyStartMs('2020-53')).toBe(Date.UTC(2020, 11, 28));
+    expect(weekKeyStartMs('2026-53')).not.toBeNull();
+  });
+
   it('is null for a key that is not a week', () => {
     for (const bad of ['', 'nope', '2026', '26-46', '2026-0', '2026-4', '2026-00', '2026-54']) {
       expect(weekKeyStartMs(bad), bad).toBeNull();

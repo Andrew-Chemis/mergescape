@@ -95,14 +95,20 @@ export interface ShopSlot<T> {
 }
 
 /**
- * A pack shelf slot: a bought pack waits here until the player keeps one of its 3 options. Both extra
- * fields are optional so a shop stored without them still reads (absent means false and 0).
+ * A pack shelf slot: a bought pack waits here until the player keeps one of its 3 options, however many
+ * acts clear meanwhile (the next visit's stock carries it over). The extra fields are optional so a shop
+ * stored without them still reads (absent means false, 0 and the current visit).
  */
 export interface PackSlot extends ShopSlot<PackKind> {
   /** True once the player has kept an option; a pack is opened exactly once. */
   picked?: boolean;
   /** The re-roll count when this pack was stocked; seeds its 3 options so they never change. */
   nonce?: number;
+  /**
+   * The shop visit this pack was stocked in, set when it is carried into a later visit so its 3 options
+   * (seeded from the visit) stay the ones the player saw. Absent means the current visit.
+   */
+  visit?: number;
 }
 
 /** A cosmetic from a Mogul pack. Purely visual; it never touches scoring. */
@@ -467,9 +473,17 @@ export interface PRState {
   repoId: number;
   number: number;
   authorId: number;
-  /** Lines added and deleted as last seen; 0 when unknown. */
+  /** Lines added and deleted as last seen. A placeholder 0 when `sizeKnown` is false. */
   additions: number;
   deletions: number;
+  /**
+   * False when the PR's size has never been seen (a review payload carries no stats, and the `opened` event
+   * is stored only when the author is a player), so `additions` and `deletions` are placeholders. Every
+   * "under N lines" rule treats an unknown size as not qualifying; "at least N" rules need no special case,
+   * since a placeholder 0 is under any threshold. Absent means known, so a state stored before this existed
+   * reads as before. Read the size through `eventLines`.
+   */
+  sizeKnown?: boolean;
   /** Review rounds so far: CHANGES_REQUESTED reviews received. */
   reviewRoundCount: number;
   /** `synchronize` pushes seen (counted, never scored). */
@@ -480,9 +494,12 @@ export interface PRState {
   reviewerCounters: Readonly<Record<string, ReviewerCounters>>;
   /**
    * Merges the PR's author has made, as best the caller knows (their profile counter, or the merged PRs
-   * seen for them). The Mentor Pledge compares it to the reviewer's own merges; absent counts as 0.
+   * seen for them). Whetstone, the Mentor Pledge and the Mentor Feat compare it to the reviewer's own
+   * merges. Null or absent means unknown (the author is not a player), and an unknown value never
+   * qualifies as "fewer merges than you"; pass a number only when the author's count is really known
+   * (0 included).
    */
-  authorMerges?: number;
+  authorMerges?: number | null;
 }
 
 // ---------------------------------------------------------------------------------------------

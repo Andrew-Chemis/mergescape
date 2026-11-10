@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { POWER_BUDGET } from './constants';
 import { computePower, powerBreakdown, powerContext, powerOf } from './power';
 import { createPlayerState, createPRState } from './state';
 import {
@@ -17,6 +18,28 @@ import type { GameEvent, PlayerState, PowerContext, PRState } from './types';
 
 function ctxFor(event: GameEvent, pr?: PRState, now: number = NOW): PowerContext {
   return { event, pr: pr ?? ('pr' in event ? createPRState(event.pr) : prStateFor(facts())), now };
+}
+
+/** A gear loadout worth `power` unconditionally (one piece, no set bonus). */
+const gearWorth = (power: number): PlayerState['gear'] => ({
+  pieces: [{ id: 'test-piece', slot: 'weapon', power }],
+  setBonus: 0,
+});
+
+/**
+ * Every source at its budget (Charms 4, gear 2.25, Pledges 1, Feats 0.5) under a Leather Jacket chain of
+ * `chain` reviewed merges: 8.75 before the Mogul line, so the global cap of 9 only bites with a Mogul.
+ */
+function atBudget(chain: number): PlayerState {
+  const base = createPlayerState(1);
+  return {
+    ...base,
+    charms: [charm(POWER_BUDGET.charms)],
+    gear: gearWorth(POWER_BUDGET.gear),
+    pledges: { played: [], progress: {}, completed: ['defend'] },
+    feats: { unlocked: [], powerBonus: POWER_BUDGET.feats },
+    moguls: { ...base.moguls, current: 'leather-jacket', chain },
+  };
 }
 
 describe('computePower', () => {
@@ -68,17 +91,24 @@ describe('computePower', () => {
   });
 
   it('is capped at 9 and the breakdown shows the cap so its lines still sum to Power', () => {
-    const player = { ...createPlayerState(1), charms: [charm(6), charm(6)] };
-    expect(computePower(player)).toBe(9);
-    const lines = powerBreakdown(player);
-    expect(lines.at(-1)).toEqual({ label: 'Power cap', value: -4, kind: 'power' });
-    expect(lines.reduce((sum, line) => sum + line.value, 0)).toBe(9);
+    // 1 + 4 + 2.25 + 1 + 0.5 + the Leather Jacket's 1.5 = 10.25.
+    const context = ctxFor(reviewEvent('APPROVED'));
+    const lines = powerBreakdown(atBudget(15), context);
+    expect(lines.at(-1)).toEqual({ label: 'Power cap', value: -1.25, kind: 'power' });
+    expect(powerOf(lines)).toBe(9);
+    expect(computePower(atBudget(15), context)).toBe(9);
   });
 
   it('reaches exactly 9 without a cap line', () => {
-    const player = { ...createPlayerState(1), charms: [charm(8)] };
-    expect(computePower(player)).toBe(9);
-    expect(powerBreakdown(player).map((line) => line.label)).not.toContain('Power cap');
+    // A chain of 3 adds 0.3 to the 8.75 of the budgets; trimming the Charms by 0.05 lands on exactly 9.
+    const player = { ...atBudget(3), charms: [charm(POWER_BUDGET.charms - 0.05)] };
+    const context = ctxFor(reviewEvent('APPROVED'));
+    expect(computePower(player, context)).toBe(9);
+    expect(powerBreakdown(player, context).map((line) => line.label)).not.toContain('Power cap');
+  });
+
+  it('the per-source budgets alone cannot reach the cap: 1 + 4 + 2.25 + 1 + 0.5 = 8.75', () => {
+    expect(computePower(atBudget(0), ctxFor(reviewEvent('APPROVED')))).toBe(8.75);
   });
 
   it('powerOf sums lines without float noise', () => {
@@ -122,12 +152,16 @@ describe('Loaded Dice', () => {
   });
 
   it('overrides a capped Power too (Power cap line, then the dice line)', () => {
-    const capped = { ...dice, charms: [held('loaded-dice'), charm(12)] };
-    const lines = powerBreakdown(capped, ctxFor(openedEvent()));
+    const capped = { ...atBudget(15), charms: [held('loaded-dice'), charm(4)] };
+    const lines = powerBreakdown(capped, ctxFor(reviewEvent('APPROVED')));
     expect(lines.map((line) => [line.label, line.value])).toEqual([
       ['Base Power', 1],
-      ['Charm 12', 12],
-      ['Power cap', -4],
+      ['Charm 4', 4],
+      ['Gear', 2.25],
+      ['Pledge bonus', 1],
+      ['Feat bonus', 0.5],
+      ['The Leather Jacket (15 reviewed merges in a row)', 1.5],
+      ['Power cap', -1.25],
       ['Loaded Dice', 1],
     ]);
     expect(powerOf(lines)).toBe(10);
@@ -173,5 +207,100 @@ describe('Charm lines in a context', () => {
       ['Base Power', 1],
       ['Rubber Duck x2 (3+ inline comments)', 1],
     ]);
+  });
+});
+
+describe('per-source Power budgets (design.md 4.3): Charms +4, gear +2.25, Pledges +1, Feats +0.5', () => {
+  const review = ctxFor(reviewEvent('APPROVED'));
+  const rows = (player: PlayerState, context?: PowerContext) =>
+    powerBreakdown(player, context).map((line) => [line.label, line.value]);
+
+  it('holds the Charms to +4 with a visible "Charm cap" line, conditional Power included', () => {
+    const player = { ...createPlayerState(1), charms: [charm(3, 'Big'), charm(3, 'Bigger')] };
+    expect(rows(player)).toEqual([
+      ['Base Power', 1],
+      ['Big', 3],
+      ['Bigger', 3],
+      ['Charm cap', -2],
+    ]);
+    expect(computePower(player)).toBe(5);
+    const stacked = { ...settledPlayer(REVIEWER_ID), charms: [held('hot-potato', 2), charm(2)] };
+    const quick = prStateFor(facts(), { additions: 10, deletions: 0 });
+    // Hot Potato x2 fires for 3 and the stat-only Charm adds 2: 5 before the cap.
+    const approval = { ...ctxFor(reviewEvent('APPROVED'), quick) };
+    expect(computePower(stacked, approval)).toBe(5);
+    expect(rows(stacked, approval).at(-1)).toEqual(['Charm cap', -1]);
+  });
+
+  it('holds worn gear to +2.25, Keen and Stout included', () => {
+    const player = { ...createPlayerState(1), gear: gearWorth(2.5) };
+    expect(rows(player)).toEqual([
+      ['Base Power', 1],
+      ['Gear', 2.5],
+      ['Gear cap', -0.25],
+    ]);
+    const keen: PlayerState = {
+      ...createPlayerState(1),
+      gear: {
+        pieces: [{ id: 'k', slot: 'weapon', power: 2.2, affix: 'keen' }],
+        setBonus: 0,
+      },
+    };
+    expect(computePower(keen, review)).toBe(1 + 2.25);
+    expect(rows(keen, review).at(-1)).toEqual(['Gear cap', -0.05]);
+  });
+
+  it('holds completed Pledges to +1 (Defend, Mentor and Fine Comb would be +2)', () => {
+    const player: PlayerState = {
+      ...createPlayerState(1),
+      pledges: { played: [], progress: {}, completed: ['defend', 'mentor', 'fine-comb'] },
+    };
+    expect(rows(player, review)).toEqual([
+      ['Base Power', 1],
+      ['Pledge bonus', 2],
+      ['Pledge cap', -1],
+    ]);
+    expect(computePower(player, review)).toBe(2);
+  });
+
+  it('holds the Feats to +0.5 even when more is stored', () => {
+    const player: PlayerState = {
+      ...createPlayerState(1),
+      feats: { unlocked: [], powerBonus: 2 },
+    };
+    expect(rows(player)).toEqual([
+      ['Base Power', 1],
+      ['Feat bonus', 0.5],
+    ]);
+  });
+
+  it('adds no cap line to a source within its budget, and the lines always sum to the Power', () => {
+    const player = atBudget(0);
+    expect(rows(player, review).map(([label]) => label)).toEqual([
+      'Base Power',
+      'Charm 4',
+      'Gear',
+      'Pledge bonus',
+      'Feat bonus',
+    ]);
+    const over: PlayerState = {
+      ...player,
+      charms: [charm(9)],
+      gear: gearWorth(5),
+      pledges: { played: [], progress: {}, completed: ['defend', 'mentor', 'fine-comb'] },
+    };
+    const lines = powerBreakdown(over, review);
+    expect(lines.map((line) => line.label)).toEqual([
+      'Base Power',
+      'Charm 9',
+      'Charm cap',
+      'Gear',
+      'Gear cap',
+      'Pledge bonus',
+      'Pledge cap',
+      'Feat bonus',
+    ]);
+    expect(powerOf(lines)).toBe(8.75);
+    expect(computePower(over, review)).toBe(8.75);
   });
 });

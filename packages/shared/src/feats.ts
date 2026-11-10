@@ -2,7 +2,16 @@ import { FEAT_RULES, PET_IDS } from './constants';
 import type { RegionId } from './constants';
 import { DAY_MS, MINUTE_MS, utcDay } from './calendar';
 import { levelFor } from './d2table';
-import { eventLines, hoursBetween, mergeFacts } from './facts';
+import {
+  authorHasFewerMerges,
+  eventLines,
+  hoursBetween,
+  linesAtLeast,
+  linesUnder,
+  mergeFacts,
+  mergeUnder,
+} from './facts';
+import type { MergeFacts } from './facts';
 import { uniqueDefinition, uniquePiece } from './gear';
 import { clamp, clamp01, tidy } from './math';
 import { grantPet, ownedPets } from './pets';
@@ -669,21 +678,20 @@ export interface EvaluateOptions {
 function recordApprovedMerge(
   counters: FeatCounters,
   event: PRMergedEvent,
-  lines: number,
-  additions: number,
-  deletions: number,
+  facts: MergeFacts,
   now: number,
   options: EvaluateOptions,
 ): void {
   const day = utcDay(now);
   const week = isoWeekKey(now);
   counters.approvedMerges += 1;
-  counters.netLinesRemoved += deletions - additions;
+  counters.netLinesRemoved += facts.deletions - facts.additions;
   counters.maxFilesMerged = Math.max(counters.maxFilesMerged, event.pr.stats?.changedFiles ?? 0);
-  if (lines < R.surgeonMaxLoc) {
+  // An unknown size is not a small one.
+  if (mergeUnder(facts, R.surgeonMaxLoc)) {
     counters.smallMerges += 1;
   }
-  if (lines < R.tidyHandsMaxLoc) {
+  if (mergeUnder(facts, R.tidyHandsMaxLoc)) {
     bump(counters.tidyMerges, day);
   }
   counters.weekMerges =
@@ -735,15 +743,7 @@ function recordMerge(
     counters.fridayDeploys += 1;
   }
   if (facts.party) {
-    recordApprovedMerge(
-      counters,
-      event,
-      facts.lines,
-      facts.additions,
-      facts.deletions,
-      now,
-      options,
-    );
+    recordApprovedMerge(counters, event, facts, now, options);
   }
 }
 
@@ -766,7 +766,7 @@ function recordReview(
   }
   const sinceOpen = hoursBetween(event.pr.openedAt, event.submittedAt);
   if (sinceOpen !== null && sinceOpen >= 0) {
-    if (eventLines(event.pr, pr) < R.fastHandsMaxLoc && sinceOpen <= R.fastHandsHours) {
+    if (linesUnder(eventLines(event.pr, pr), R.fastHandsMaxLoc) && sinceOpen <= R.fastHandsHours) {
       counters.fastApprovals += 1;
     }
     if (sinceOpen * 3600 <= R.rubberStampSeconds) {
@@ -776,7 +776,7 @@ function recordReview(
       counters.unblocked += 1;
     }
   }
-  if ((pr.authorMerges ?? 0) < lifetimeMerges(player)) {
+  if (authorHasFewerMerges(pr, lifetimeMerges(player))) {
     counters.mentorApprovals += 1;
   }
 }
@@ -790,7 +790,7 @@ function recordVerifiedKill(
   counters.verifiedKills += 1;
   bump(counters.reviewedPrs, utcDay(now));
   const inline = pr.reviewerCounters[String(event.actor.id)]?.inline ?? 0;
-  if (eventLines(event.pr, pr) >= R.archivistMinLoc && inline >= R.archivistMinInline) {
+  if (linesAtLeast(eventLines(event.pr, pr), R.archivistMinLoc) && inline >= R.archivistMinInline) {
     counters.archivistReviews += 1;
   }
 }
@@ -808,12 +808,16 @@ function countEvent(
   if (event.kind === 'weekly_streak') {
     return counters;
   }
-  const week = isoWeekKey(now);
-  const local = localTime(now, player.tzOffsetMinutes);
-  counters.hours = counters.hours.map((count, hour) => (hour === local.hour ? count + 1 : count));
-  if (counters.lastActiveWeek !== week) {
-    counters.activeWeeks += 1;
-    counters.lastActiveWeek = week;
+  // A verified kill or a Riposte credit is built when someone ELSE merges: the time it happens says
+  // nothing about when this player was working, so it feeds neither the hour nor the active-week counters.
+  if (event.kind !== 'verified_kill' && event.kind !== 'riposte_credit') {
+    const week = isoWeekKey(now);
+    const local = localTime(now, player.tzOffsetMinutes);
+    counters.hours = counters.hours.map((count, hour) => (hour === local.hour ? count + 1 : count));
+    if (counters.lastActiveWeek !== week) {
+      counters.activeWeeks += 1;
+      counters.lastActiveWeek = week;
+    }
   }
   // A Merge Goblin is an ordinary merged PR; the other monsters count wherever the Combat Log shows them.
   if (

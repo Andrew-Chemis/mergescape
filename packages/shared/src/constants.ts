@@ -73,6 +73,18 @@ export const BASE_POWER = 1;
 /** Power is capped here (Requirement 4.5 as amended; gear and Feats raise the budget to 9). */
 export const POWER_CAP = 9;
 
+/**
+ * The most Power each source may add (design.md 4.3): Charms +4, worn gear +2.25 (five Dragon pieces and the
+ * set bonus), completed Pledges +1, Feats +0.5. `powerBreakdown` enforces each one with a visible cap line,
+ * on top of the global `POWER_CAP`. The Mogul lines (Rocket Man, Leather Jacket) have their own caps.
+ */
+export const POWER_BUDGET = {
+  charms: 4,
+  gear: 2.25,
+  pledges: 1,
+  feats: 0.5,
+} as const;
+
 /** Zone = (level + 1) ^ exponent. */
 export const ZONE_EXPONENT = 1.6;
 
@@ -285,6 +297,8 @@ export const MOGUL_RULES = {
     /** ... and returns it this many days after (Friday), with this much extra Power. */
     returnDay: 4,
     returnPower: 0.25,
+    /** A Charm never gains more than this much Power over its base from the Board, however many weeks it is taken. */
+    maxReturnBonus: 1,
   },
   twoPizza: {
     minReviewers: 2,

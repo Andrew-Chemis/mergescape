@@ -1,6 +1,9 @@
 import { MOGUL_RULES } from './constants';
+import { charmDefinition, restoreCharm } from './charms';
+import type { CharmSale } from './charms';
+import { creditSale } from './economy';
 import { actWindow, DAY_MS, HOUR_MS, weekStartUtc } from './calendar';
-import { eventLines, firstReviewTime, mergeFacts } from './facts';
+import { eventLines, firstReviewTime, linesUnder, mergeFacts } from './facts';
 import { tidy } from './math';
 import { deriveSeed, mulberry32, shuffle } from './rng';
 import { canSeeNextMogul } from './vouchers';
@@ -197,11 +200,12 @@ function factor(text: string, value: number, target: PointsFactor['target'] = 'a
 function turtleneckFactors(event: GameEvent, pr: PRState): PointsFactor[] {
   const rules = MOGUL_RULES.turtleneck;
   if (event.kind === 'pr_merged') {
+    // An unknown size is neither small nor large: no multiplier.
     const lines = eventLines(event.pr, pr);
-    if (lines < rules.smallMaxLoc) {
+    if (linesUnder(lines, rules.smallMaxLoc)) {
       return [factor(`The Turtleneck: under ${rules.smallMaxLoc} lines`, rules.smallMultiplier)];
     }
-    return lines > rules.largeMinLoc
+    return lines !== null && lines > rules.largeMinLoc
       ? [factor(`The Turtleneck: over ${rules.largeMinLoc} lines`, rules.largeMultiplier)]
       : [];
   }
@@ -326,16 +330,38 @@ export function mogulGoldMultiplier(mogul: MogulId | null): number {
 export interface BoardEvent {
   kind: 'removed' | 'returned';
   charm: Charm;
+  /**
+   * On a return: copies that did not fit because the player held the same Charm by then, auto-sold (their
+   * proceeds are already credited to the player). Absent when nothing was sold.
+   */
+  sale?: CharmSale;
+}
+
+/**
+ * Power a Charm has after the Board returns it: `returnPower` more, but never more than `maxReturnBonus`
+ * above the Charm's base Power, so being taken week after week cannot grow without bound. A Charm already
+ * above that ceiling keeps what it has.
+ */
+function powerAfterReturn(charm: Charm): number {
+  const ceiling = (charmDefinition(charm.id)?.basePower ?? 0) + MOGUL_RULES.founder.maxReturnBonus;
+  return Math.max(
+    charm.power,
+    Math.min(tidy(charm.power + MOGUL_RULES.founder.returnPower), ceiling),
+  );
 }
 
 /**
  * Settle the Founder's Board for `now`. It is a pure function of the clock and the stored hook, safe to
  * call on every load of the player, and does nothing twice:
  * - A Charm the Board holds comes back with +0.25 Power once Friday 00:00 UTC has begun, or at once when
- *   the week it was taken in is over (so a missed Friday never strands a Charm).
+ *   the week it was taken in is over (so a missed Friday never strands a Charm). A Charm never gains more
+ *   than `maxReturnBonus` (+1.0) over its base Power this way. If the player holds the same Charm by then
+ *   (a copy bought while it was away), the two merge into one slot of at most two copies and the surplus is
+ *   auto-sold, its gold credited here through economy.ts (`BoardEvent.sale`); the caller must persist `gold`.
  * - In a Founder week, from Wednesday 00:00 UTC, the Board removes one random Charm, once. The Charm keeps
- *   its slot while away, so nothing can be bought into it. If the first call comes after Friday has begun
- *   the Charm is removed and returned in the same call, with the same end result.
+ *   its slot while away, so nothing can be bought into it (`addCharm` counts a benched copy toward the two a
+ *   player may hold). If the first call comes after Friday has begun the Charm is removed and returned in
+ *   the same call, with the same end result.
  * `seed` is the week's seed; the same seed picks the same Charm.
  */
 export function applyFounderBoard(
@@ -354,16 +380,20 @@ export function applyFounderBoard(
       benched !== null &&
       (benched.weekKey !== weekKey || now >= start + MOGUL_RULES.founder.returnDay * DAY_MS)
     ) {
-      const charm: Charm = {
-        ...benched.charm,
-        power: tidy(benched.charm.power + MOGUL_RULES.founder.returnPower),
-      };
-      current = {
-        ...current,
-        charms: [...current.charms, charm],
-        moguls: { ...current.moguls, benched: null },
-      };
-      events.push({ kind: 'returned', charm });
+      const charm: Charm = { ...benched.charm, power: powerAfterReturn(benched.charm) };
+      const restored = restoreCharm(
+        { ...current, moguls: { ...current.moguls, benched: null } },
+        charm,
+      );
+      current =
+        restored.sale === null
+          ? restored.player
+          : creditSale(restored.player, restored.sale).player;
+      events.push(
+        restored.sale === null
+          ? { kind: 'returned', charm }
+          : { kind: 'returned', charm, sale: restored.sale },
+      );
     }
   };
 

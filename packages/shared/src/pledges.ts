@@ -7,7 +7,7 @@ import {
   STARTER_DECK_IDS,
 } from './constants';
 import { DAY_MS, weekStartUtc } from './calendar';
-import { eventLines, mergeFacts } from './facts';
+import { authorHasFewerMerges, eventLines, linesAtLeast, mergeFacts, mergeUnder } from './facts';
 import type { MergeFacts } from './facts';
 import { tidy } from './math';
 import { mulberry32, shuffle } from './rng';
@@ -74,6 +74,13 @@ export interface PledgeDefinition {
   powerOnReviewsOnly: boolean;
 }
 
+/**
+ * A merge that scores at full value: into the default branch (not halved) and not a solo kill (not halved).
+ * Strike and Tidy count only these, so a self-merged 1-line PR into a scratch branch earns no progress.
+ */
+const isFullValueMerge = (merge: MergeFacts | null): merge is MergeFacts =>
+  merge !== null && merge.defaultBranch && !merge.soloKill;
+
 const isScoringReview = (ctx: PledgeContext): boolean =>
   ctx.event.kind === 'review_submitted' && ctx.event.state !== 'COMMENTED';
 
@@ -92,9 +99,9 @@ export const PLEDGES: readonly PledgeDefinition[] = [
     id: 'strike',
     name: 'Strike',
     upgraded: false,
-    description: `Merge ${PLEDGE_RULES.strike.merges} PRs this week: +${PLEDGE_RULES.strike.bonusPoints} points on the last.`,
+    description: `Merge ${PLEDGE_RULES.strike.merges} PRs this week that score in full (default branch, not a solo merge): +${PLEDGE_RULES.strike.bonusPoints} points on the last.`,
     goal: PLEDGE_RULES.strike.merges,
-    counts: (ctx) => ctx.merge !== null,
+    counts: (ctx) => isFullValueMerge(ctx.merge),
     bonusPoints: PLEDGE_RULES.strike.bonusPoints,
     completionMultiplier: 1,
     powerBonus: 0,
@@ -120,7 +127,7 @@ export const PLEDGES: readonly PledgeDefinition[] = [
     goal: 1,
     counts: (ctx) =>
       ctx.event.kind === 'review_submitted' &&
-      eventLines(ctx.event.pr, ctx.pr) >= PLEDGE_RULES.bigGameHunter.minLoc,
+      linesAtLeast(eventLines(ctx.event.pr, ctx.pr), PLEDGE_RULES.bigGameHunter.minLoc),
     bonusPoints: 0,
     completionMultiplier: PLEDGE_RULES.bigGameHunter.reviewMultiplier,
     powerBonus: 0,
@@ -135,7 +142,7 @@ export const PLEDGES: readonly PledgeDefinition[] = [
     counts: (ctx) =>
       ctx.event.kind === 'review_submitted' &&
       ctx.event.state === 'APPROVED' &&
-      (ctx.pr.authorMerges ?? 0) < ctx.playerMerges,
+      authorHasFewerMerges(ctx.pr, ctx.playerMerges),
     bonusPoints: 0,
     completionMultiplier: 1,
     powerBonus: PLEDGE_RULES.mentor.powerBonus,
@@ -145,9 +152,9 @@ export const PLEDGES: readonly PledgeDefinition[] = [
     id: 'tidy',
     name: 'Tidy',
     upgraded: false,
-    description: `Merge ${PLEDGE_RULES.tidy.merges} PRs each under ${PLEDGE_RULES.tidy.maxLoc} lines: +${PLEDGE_RULES.tidy.bonusPoints} points on the last.`,
+    description: `Merge ${PLEDGE_RULES.tidy.merges} PRs each under ${PLEDGE_RULES.tidy.maxLoc} lines that score in full (default branch, not a solo merge): +${PLEDGE_RULES.tidy.bonusPoints} points on the last.`,
     goal: PLEDGE_RULES.tidy.merges,
-    counts: (ctx) => ctx.merge !== null && ctx.merge.lines < PLEDGE_RULES.tidy.maxLoc,
+    counts: (ctx) => isFullValueMerge(ctx.merge) && mergeUnder(ctx.merge, PLEDGE_RULES.tidy.maxLoc),
     bonusPoints: PLEDGE_RULES.tidy.bonusPoints,
     completionMultiplier: 1,
     powerBonus: 0,

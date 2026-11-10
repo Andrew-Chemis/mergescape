@@ -118,23 +118,23 @@ Therefore an **agentic power user** is modelled as ≈10–15 merged PRs/week, 1
 | Event | Points | Skill credited | Notes / caps |
 |---|---|---|---|
 | PR opened (non-draft, to default branch) | 10 | Smithing | Max 5 opens/day earn points; drafts earn on `ready_for_review` |
-| PR merged (yours) | 90 | Smithing | Plus size points below; `merged_by == author` and zero other reviews → ×0.5 ("solo kill") |
+| PR merged (yours) | 90 | Smithing | Plus size points below; merged by the credited player (or by a bot on their behalf) with zero other human reviews → ×0.5 ("solo kill"). The credited player is the PR's author, or the human who merged a bot's PR |
 | Size points on merge | `round(40 · log2(1 + (adds+dels)/50))`, cap 120 | Smithing | 50 LoC → 40, 300 → 112, 1000+ → 120 (cap) |
 | Party bonus | +30 per merge | Smithing | ≥1 APPROVED review from a different human account |
 | Review: APPROVED or CHANGES_REQUESTED | 40 | Vigilance | Max 2 scoring reviews per PR per reviewer (re-review counts once) |
 | Review: COMMENTED | 15 | Vigilance | Max 1 per PR per reviewer |
 | Inline review comment | 5 | Oratory | Cap 10 per PR per reviewer (50 points) |
-| Verified kill | +25 | Vigilance | A PR you approved later merges |
+| Verified kill | +25 | Vigilance | A PR you approved later merges, when you are neither its author nor the human credited for the merge (the merger of a bot's PR earns the merge, not a kill on top of it) |
 | Riposte | +15 | Smithing | Your PR received CHANGES_REQUESTED and then merged (you addressed feedback) |
 | PR closed unmerged | 0 | — | Never penalised anywhere: closing a PR is healthy |
 | Daily first-event | +20 | Endurance | Once per UTC day |
 | Weekly streak | +50 × consecutive weeks (cap 10) | Endurance | Awarded at run end if ≥1 merged or ≥3 reviews that week |
 
-Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `Bot`; PRs to non-default branches are 50% (stacked-PR friendly, not zero); forks count normally.
+Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `Bot`; PRs to non-default branches are 50% (stacked-PR friendly, not zero; a payload that does not name its base branch is treated as non-default); forks count normally.
 
 ### 4.3 Power
 
-`Power = 1 + Σ(active Charm powers) + Σ(equipped gear power incl. set bonus) + Pledge bonus + Feat bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms and a Silver or Mithril set for Power ≈ 3–4.5. Budget: Charms up to +4, gear up to +2.25, Pledges +1, Feats +0.5. Power is capped at 9. See game-design.md §7.1.
+`Power = 1 + Σ(active Charm powers) + Σ(equipped gear power incl. set bonus) + Pledge bonus + Feat bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms and a Silver or Mithril set for Power ≈ 3–4.5. Budget: Charms up to +4, gear up to +2.25, Pledges +1, Feats +0.5. Each source is clamped to its budget, and the Combat Log shows the clamp as a "Charm cap", "Gear cap", "Pledge cap" or "Feat cap" line. The sources alone therefore reach at most 8.75 (1 + 4 + 2.25 + 1 + 0.5); a Mogul's Power line can take it past that, and Power is capped at 9. See game-design.md §7.1.
 
 ### 4.4 Zone multiplier (Diablo scaling)
 
@@ -205,9 +205,9 @@ Monday 00:00 UTC a new **Run** begins on a 3-act map. Your real events move you 
 
 | Act | Window | Target | Clear it → |
 |---|---|---|---|
-| Act I — **Scout** | Mon–Tue | 60% of your 8-week median weekly XP | Gold + Shop visit |
-| Act II — **Raid** | Wed–Thu | 100% | Gold + Shop visit + 1 free Pledge pack |
-| Act III — **Boss** | Fri–Sun | 150%, with a Boss modifier | Gold ×3 + Shop visit + **Renown +1** + Legendary offer every 4th Renown point |
+| Act I — **Scout** | Mon–Tue | 60% of your 8-week median weekly XP | Gold 20 + Shop visit |
+| Act II — **Raid** | Wed–Thu | 100% | Gold 40 + Shop visit + 1 free Pledge pack |
+| Act III — **Boss** | Fri–Sun | 150%, with a Boss modifier | Gold 100 + Shop visit + **Renown +1** + Legendary offer every 4th Renown point |
 
 New players use a flat 2,000 XP target until they have 3 weeks of history. Targets never exceed 2× the previous week's actual, so a vacation week doesn't wreck you. Missing a target costs nothing; you just don't get that act's gold and shop visit, and the run ends there.
 
@@ -223,7 +223,7 @@ Act III's boss is one of six **Moguls**, parody archetypes of tech executives. T
 | **The Leather Jacket** | Black leather jacket, grey hair, holding a glowing green brick | *The more you merge, the more you save.* Each successive reviewed merge this week adds +0.1 Power (cap +1.5); a solo merge resets the chain | Keynote catchphrase; compounding hardware demand |
 | **The Turtleneck** | Black turtleneck, round glasses, jeans, one hand raised | *One more thing.* PRs under 100 LoC score ×3; over 400 LoC score ×0.5; an approval you give with exactly one inline comment is a "design review" and scores ×2 | Obsession with small, perfect things |
 | **The Hoodie** | Grey tee, hoodie, VR goggles pushed up on forehead | *Move fast.* PRs merged within 48 hours of their first review score ×2; everything else ×0.75 and goes to the Metaverse | Move fast; nobody is in the metaverse |
-| **The Founder** | Grey crewneck, serene smile, cradling a glowing orb | *Non-profit to for-profit.* Points ×0.5 but gold ×4 all week. On Wednesday the Board "removes" one random Charm; it returns on Friday with +0.25 Power | The orb is "AGI". The Charm comes back stronger |
+| **The Founder** | Grey crewneck, serene smile, cradling a glowing orb | *Non-profit to for-profit.* Points ×0.5 but gold ×4 all week. On Wednesday the Board "removes" one random Charm; it returns on Friday with +0.25 Power (a Charm gains at most +1.0 over its base this way; its slot stays reserved, and a copy bought while it is away merges into it on return, up to two copies, the surplus sold) | The orb is "AGI". The Charm comes back stronger |
 | **The Two-Pizza Boss** | Bald, open-collar shirt, stack of pizza boxes, laughing | *Two-pizza teams.* Merges with ≥2 distinct human reviewers score ×2.5; solo merges ×0.25; party bonus points ×3 | Teams small enough to feed with two pizzas; also, day one |
 
 Modifiers are revealed Monday so you can plan Pledges around them. No modifier ever penalises closing a PR unmerged or rewards the hour of day (see game-design.md §8.3). The former dungeon bosses (Release Dragon, Silent Monolith) are now **elites** that can appear in Act II.
@@ -232,13 +232,13 @@ A one-line disclaimer sits in the Bestiary: *"The Moguls are fictional caricatur
 
 ### 6.3 Charms (Balatro Jokers)
 
-Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Twelve Charms, three of each rarity (Whetstone, Familiar Path and Long Lens were added by the content pass of task 24 under the same audit). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price. Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
+Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Twelve Charms, three of each rarity (Whetstone, Familiar Path and Long Lens were added by the content pass of task 24 under the same audit). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price (a copy the Founder's Board is holding counts toward the two). Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
 
 | Charm | Rarity | Effect |
 |---|---|---|
 | Rubber Duck | Common | +0.25 Power; +0.25 more on reviews with ≥3 inline comments |
 | Lantern | Common | +0.5 Power on the first scored event of each day |
-| Whetstone | Common | +0.5 Power on an approval, backed by ≥1 inline comment from you, of a PR whose author has fewer merges than you |
+| Whetstone | Common | +0.5 Power on an approval, backed by ≥1 inline comment from you, of a PR whose author is known to have fewer merges than you (an author who is not a player has no known count and does not qualify) |
 | Small Hands | Uncommon | Merges under 150 LoC gain +0.75 Power |
 | Second Pair of Eyes | Uncommon | Party bonus points 30 → 60 |
 | Familiar Path | Uncommon | +0.5 Power on any PR to a repo you've merged ≥10 times in |
@@ -255,16 +255,18 @@ Your deck starts with 5 basic Pledges. Each Monday you draw 5 and may **play up 
 
 | Pledge | Contract | Bonus |
 |---|---|---|
-| Strike | Merge 3 PRs this week | +300 points on the 3rd |
+| Strike | Merge 3 PRs this week that score in full (default branch, not a solo kill) | +300 points on the 3rd |
 | Defend | Submit 5 scoring reviews | +1 Power on all reviews for the rest of the week |
 | Big Game Hunter | Review a PR ≥ 800 LoC | That review ×3 |
-| Mentor | Approve 2 PRs from authors with fewer merges than you | +0.5 Power until Sunday |
-| Tidy | Merge 3 PRs each under 150 lines | +200 points on the 3rd |
+| Mentor | Approve 2 PRs from authors known to have fewer merges than you | +0.5 Power until Sunday |
+| Tidy | Merge 3 PRs each under 150 lines that score in full (default branch, not a solo kill) | +200 points on the 3rd |
 | Pair Up (Strike+) | Merge 3 PRs each with party bonus | +600 points |
 | Fine Comb | Submit 3 scoring reviews, each after ≥3 inline comments from you on that PR | +0.5 Power on all reviews for the rest of the week |
 | Well Reviewed | Merge 2 PRs that each drew ≥3 inline comments from a reviewer | +250 points on the 2nd |
 
-Cards upgrade (Strike → Strike+) when chosen as a Boss reward. Deck cap 20; remove cards at the Town shrine for gold.
+Cards upgrade (Strike → Strike+) when chosen as a Boss reward; Pledge packs offer the base cards only, never an upgraded one. Deck cap 20; remove cards at the Town shrine for gold.
+
+A flat point bonus is halved like the merge that completes it (off the default branch, solo kill), so it can never pay more than the merge itself scores. A PR whose size the app never saw (a review payload carries no size) satisfies no "under N lines" rule (Small Hands, Hot Potato, Tidy, Fast Hands, the Turtleneck), and an author whose merge count is unknown satisfies no "fewer merges than you" rule (Whetstone, Mentor).
 
 Fine Comb and Well Reviewed (task 24) reward reviews that were read and PRs that were read, never volume or speed; like every Pledge and Charm they follow the incentive audit of game-design.md §8.3.
 

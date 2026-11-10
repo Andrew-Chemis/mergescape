@@ -298,21 +298,94 @@ describe('Strike: merge 3 PRs, +300 points on the 3rd', () => {
     expect(player.pledges.progress).toEqual({ strike: 3 });
   });
 
-  it('counts a solo merge, and ignores a Pledge that was not played', () => {
-    const solo = merge(playing(AUTHOR_ID, 'strike'), 40, []);
-    expect(solo.player.pledges.progress).toEqual({ strike: 1 });
+  it('ignores a Pledge that was not played', () => {
     const unplayed = merge(settledPlayer(AUTHOR_ID), 40);
     expect(unplayed.result.counterUpdates.pledges).toBeUndefined();
   });
 
-  it('the bonus is not halved by the solo-kill or off-branch multipliers', () => {
-    const player: PlayerState = {
-      ...playing(AUTHOR_ID, 'strike'),
-      pledges: { played: [card('strike')], progress: { strike: 2 }, completed: [] },
-    };
+  it('counts only merges that score at full value: not a solo merge, not off the default branch', () => {
+    const player = playing(AUTHOR_ID, 'strike');
+    // A self-merged 1-line PR is a solo kill (halved), so it is no progress.
+    const solo = merge(player, 1, []);
+    expect(solo.result.skip).toBeNull();
+    expect(solo.player.pledges.progress).toEqual({});
+    expect(solo.result.counterUpdates.pledges).toBeUndefined();
+    // Nor is a reviewed merge into a non-default branch (halved).
+    const offBranch = mergedFacts({ stats: lines(40), baseRefIsDefault: false });
+    const stacked = step(
+      player,
+      mergedEvent(offBranch),
+      prStateFor(offBranch, { reviews: approved }),
+    );
+    expect(stacked.player.pledges.progress).toEqual({});
+    // A reviewed merge into the default branch is.
+    expect(merge(player, 1).player.pledges.progress).toEqual({ strike: 1 });
+    // A merge by a bot on the author's behalf with no human review is solo, so it is not either.
+    const queued = mergedFacts({ stats: lines(40), mergedBy: { id: 77, isBot: true } });
+    expect(step(player, mergedEvent(queued), prStateFor(queued)).player.pledges.progress).toEqual(
+      {},
+    );
+  });
+
+  it('cannot be farmed with three self-merged 1-line PRs into a scratch branch', () => {
+    let player = playing(AUTHOR_ID, 'strike', 'tidy');
+    let points = 0;
+    for (let index = 0; index < 3; index += 1) {
+      const pr = mergedFacts({ stats: lines(1), baseRefIsDefault: false });
+      const next = step(player, mergedEvent(pr), prStateFor(pr));
+      player = next.player;
+      points += next.result.points;
+    }
+    expect(player.pledges.completed).toEqual([]);
+    expect(points).toBeLessThan(100);
+  });
+});
+
+describe('the flat Pledge bonus is halved like the merge that completes it', () => {
+  const ready = (id: PledgeId, progress: number): PlayerState => ({
+    ...playing(AUTHOR_ID, id),
+    pledges: { played: [card(id)], progress: { [id]: progress }, completed: [] },
+  });
+
+  it('halves a bonus earned off the default branch', () => {
     const pr = mergedFacts({ stats: lines(40), baseRefIsDefault: false });
-    const result = step(player, mergedEvent(pr), prStateFor(pr)).result;
-    expect(result.breakdown.find((line) => line.label === 'Pledge: Strike')?.value).toBe(300);
+    const result = step(
+      ready('pair-up', 2),
+      mergedEvent(pr),
+      prStateFor(pr, { reviews: approved }),
+    ).result;
+    expect(result.breakdown).toContainEqual({
+      label: 'Pledge: Pair Up (non-default branch x0.5)',
+      value: 300,
+      kind: 'points',
+    });
+  });
+
+  it('halves a bonus earned on a solo kill', () => {
+    const pr = mergedFacts({ stats: lines(40) });
+    const read = {
+      reviewerCounters: { [String(REVIEWER_ID)]: { decisions: 0, comments: 0, inline: 3 } },
+    };
+    const result = step(ready('well-reviewed', 1), mergedEvent(pr), prStateFor(pr, read)).result;
+    expect(result.breakdown).toContainEqual({
+      label: 'Pledge: Well Reviewed (solo kill x0.5)',
+      value: 125,
+      kind: 'points',
+    });
+  });
+
+  it('is full on a reviewed merge into the default branch', () => {
+    const pr = mergedFacts({ stats: lines(40) });
+    const result = step(
+      ready('pair-up', 2),
+      mergedEvent(pr),
+      prStateFor(pr, { reviews: approved }),
+    ).result;
+    expect(result.breakdown).toContainEqual({
+      label: 'Pledge: Pair Up',
+      value: 600,
+      kind: 'points',
+    });
   });
 });
 
@@ -331,6 +404,30 @@ describe('Tidy: merge 3 PRs each under 150 lines, +200 points on the 3rd', () =>
       kind: 'points',
     });
     expect(third.player.pledges.completed).toEqual(['tidy']);
+  });
+
+  it('counts only merges that score at full value, like Strike', () => {
+    const player = playing(AUTHOR_ID, 'tidy');
+    expect(merge(player, 10, []).player.pledges.progress).toEqual({});
+    const offBranch = mergedFacts({ stats: lines(10), baseRefIsDefault: false });
+    const stacked = step(
+      player,
+      mergedEvent(offBranch),
+      prStateFor(offBranch, { reviews: approved }),
+    );
+    expect(stacked.player.pledges.progress).toEqual({});
+    expect(merge(player, 10).player.pledges.progress).toEqual({ tidy: 1 });
+  });
+
+  it('does not count a merge whose size the app never saw: unknown is not "under 150 lines"', () => {
+    const player = playing(AUTHOR_ID, 'tidy');
+    const pr = mergedFacts({ stats: null });
+    const unseen = { ...createPRState(pr), reviews: approved };
+    expect(unseen.sizeKnown).toBe(false);
+    expect(step(player, mergedEvent(pr), unseen).player.pledges.progress).toEqual({});
+    expect(
+      step(player, mergedEvent(pr), { ...unseen, sizeKnown: true }).player.pledges.progress,
+    ).toEqual({ tidy: 1 });
   });
 });
 
@@ -428,13 +525,20 @@ describe('Big Game Hunter: review a PR of 800+ lines, that review x3', () => {
 
   it('reads the size from the stored PR when the review payload has none', () => {
     const noStats = facts({ stats: null });
-    const pr = prStateFor(noStats, { additions: 900, deletions: 0 });
+    const pr = prStateFor(noStats, { additions: 900, deletions: 0, sizeKnown: true });
     const result = step(
       playing(REVIEWER_ID, 'big-game-hunter'),
       reviewEvent('APPROVED', human(REVIEWER_ID), noStats),
       pr,
     );
     expect(result.result.points).toBe(120);
+    // A size the app never saw is not 800 lines.
+    const unseen = step(
+      playing(REVIEWER_ID, 'big-game-hunter'),
+      reviewEvent('APPROVED', human(REVIEWER_ID), noStats),
+      createPRState(noStats),
+    );
+    expect(unseen.result.points).toBe(40);
   });
 
   it('pays once a week: the second big review is a normal review', () => {
@@ -449,7 +553,7 @@ describe('Mentor: approve 2 PRs from authors with fewer merges than you, +0.5 Po
     ...playing(id, 'mentor'),
     repoMerges: { '1001': 7, '2002': 3 },
   });
-  const approve = (player: PlayerState, authorMerges: number | undefined) =>
+  const approve = (player: PlayerState, authorMerges: number | null | undefined) =>
     step(
       player,
       reviewEvent('APPROVED'),
@@ -477,10 +581,11 @@ describe('Mentor: approve 2 PRs from authors with fewer merges than you, +0.5 Po
     expect(rookie.player.pledges.progress).toEqual({});
   });
 
-  it('treats an author with no known merge count as a newcomer', () => {
-    expect(approve(experienced(REVIEWER_ID), undefined).player.pledges.progress).toEqual({
-      mentor: 1,
-    });
+  it('counts a known newcomer with no merges, but not an author whose count is unknown', () => {
+    expect(approve(experienced(REVIEWER_ID), 0).player.pledges.progress).toEqual({ mentor: 1 });
+    // An author who is not a player has no known count: unknown must not read as a newcomer.
+    expect(approve(experienced(REVIEWER_ID), undefined).player.pledges.progress).toEqual({});
+    expect(approve(experienced(REVIEWER_ID), null).player.pledges.progress).toEqual({});
   });
 
   it('adds +0.5 Power to every event from the next one on', () => {

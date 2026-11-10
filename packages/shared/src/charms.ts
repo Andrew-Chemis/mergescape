@@ -8,7 +8,7 @@ import {
 } from './constants';
 import type { Rarity } from './constants';
 import { utcDay } from './calendar';
-import { eventLines, hoursBetween } from './facts';
+import { authorHasFewerMerges, eventLines, hoursBetween, linesAtLeast, linesUnder } from './facts';
 import { sumBy, tidy } from './math';
 import { lifetimeMerges } from './pledges';
 import { charmSlotCount } from './vouchers';
@@ -103,12 +103,12 @@ const lanternCondition: CharmCondition = (event, player, _pr, now) =>
   event.kind !== 'weekly_streak' && player.counters.dailyFirstDay !== utcDay(now);
 
 const smallHandsCondition: CharmCondition = (event, _player, pr) =>
-  event.kind === 'pr_merged' && eventLines(event.pr, pr) < CHARM_RULES.smallHandsMaxLoc;
+  event.kind === 'pr_merged' && linesUnder(eventLines(event.pr, pr), CHARM_RULES.smallHandsMaxLoc);
 
 const hotPotatoCondition: CharmCondition = (event, _player, pr) =>
   event.kind === 'review_submitted' &&
   event.state === 'APPROVED' &&
-  eventLines(event.pr, pr) < CHARM_RULES.hotPotatoMaxLoc &&
+  linesUnder(eventLines(event.pr, pr), CHARM_RULES.hotPotatoMaxLoc) &&
   (hoursBetween(event.pr.openedAt, event.submittedAt) ?? Infinity) <=
     CHARM_RULES.hotPotatoWindowHours;
 
@@ -127,7 +127,7 @@ const whetstoneCondition: CharmCondition = (event, player, pr) =>
   event.kind === 'review_submitted' &&
   event.state === 'APPROVED' &&
   inlineBy(event, pr) >= CHARM_RULES.whetstoneInlineComments &&
-  (pr.authorMerges ?? 0) < lifetimeMerges(player);
+  authorHasFewerMerges(pr, lifetimeMerges(player));
 
 const familiarPathCondition: CharmCondition = (event, player) =>
   'pr' in event &&
@@ -135,7 +135,7 @@ const familiarPathCondition: CharmCondition = (event, player) =>
 
 const longLensCondition: CharmCondition = (event, _player, pr) =>
   isDecision(event) &&
-  eventLines(event.pr, pr) >= CHARM_RULES.longLensMinLoc &&
+  linesAtLeast(eventLines(event.pr, pr), CHARM_RULES.longLensMinLoc) &&
   inlineBy(event, pr) >= CHARM_RULES.longLensInlineComments;
 
 export const CHARMS: readonly CharmDefinition[] = [
@@ -408,18 +408,26 @@ export type AddCharmResult = Result<
   'no_free_slot'
 >;
 
+/** Copies of a Charm the Founder's Board is holding for the player (0 when it holds another Charm). */
+function benchedCopies(player: PlayerState, id: string): number {
+  const benched = player.moguls.benched;
+  return benched !== null && benched.charm.id === id ? copiesOf(benched.charm) : 0;
+}
+
 /**
  * Give the player a Charm. A Charm they already hold stacks into the same slot once (two copies); a third
- * copy is auto-sold, returned as `sale` rather than credited here. A new Charm needs a free slot. A stacked
- * copy adds the held Charm's own per-copy Power.
+ * copy is auto-sold, returned as `sale` rather than credited here. Copies the Founder's Board is holding
+ * count toward the two, so a bench can never be used to hold three. A new Charm needs a free slot. A
+ * stacked copy adds the held Charm's own per-copy Power.
  */
 export function addCharm(player: PlayerState, charm: Charm): AddCharmResult {
   const index = player.charms.findIndex((held) => held.id === charm.id);
+  const heldCopies = index >= 0 ? copiesOf(player.charms[index] as Charm) : 0;
+  if (heldCopies + benchedCopies(player, charm.id) >= MAX_CHARM_COPIES) {
+    return { ok: true, player, outcome: 'auto_sold', sale: saleOf(charm, 'duplicate') };
+  }
   if (index >= 0) {
     const held = player.charms[index] as Charm;
-    if (copiesOf(held) >= MAX_CHARM_COPIES) {
-      return { ok: true, player, outcome: 'auto_sold', sale: saleOf(charm, 'duplicate') };
-    }
     const charms = player.charms.map((entry, at) =>
       at === index ? { ...held, copies: copiesOf(held) + 1 } : entry,
     );
@@ -433,6 +441,38 @@ export function addCharm(player: PlayerState, charm: Charm): AddCharmResult {
     player: { ...player, charms: [...player.charms, { ...charm, copies: 1 }] },
     outcome: 'added',
     sale: null,
+  };
+}
+
+/**
+ * Put a Charm the Founder's Board is returning back among the player's Charms. The Board kept its slot, so
+ * it needs no free slot. If the player holds the same Charm by now (a copy bought while it was away), the
+ * two merge into one slot of at most `MAX_CHARM_COPIES`, keeping the higher per-copy Power; the copies
+ * beyond the cap are returned as `sale` (the proceeds of all of them), auto-sold like a third copy anywhere
+ * else, for the caller to credit through economy.ts.
+ */
+export function restoreCharm(
+  player: PlayerState,
+  charm: Charm,
+): { player: PlayerState; sale: CharmSale | null } {
+  const index = player.charms.findIndex((held) => held.id === charm.id);
+  if (index < 0) {
+    return { player: { ...player, charms: [...player.charms, charm] }, sale: null };
+  }
+  const held = player.charms[index] as Charm;
+  const total = copiesOf(held) + copiesOf(charm);
+  const copies = Math.min(MAX_CHARM_COPIES, total);
+  const merged: Charm = { ...held, power: Math.max(held.power, charm.power), copies };
+  const surplus = total - copies;
+  return {
+    player: {
+      ...player,
+      charms: player.charms.map((entry, at) => (at === index ? merged : entry)),
+    },
+    sale:
+      surplus === 0
+        ? null
+        : { ...saleOf(charm, 'duplicate'), proceeds: charmSellPrice(charm.rarity) * surplus },
   };
 }
 

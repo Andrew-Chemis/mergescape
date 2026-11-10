@@ -478,6 +478,28 @@ function modifierSuffix(modifiers: string[]): string {
 }
 
 /**
+ * The halvings every points term of a PR shares, with the labels the Combat Log shows: the solo-kill
+ * halving (when `solo`) and the non-default-branch halving. Mogul and Pledge factors are applied on top by
+ * the caller, for terms only.
+ */
+function structuralHalvings(
+  solo: boolean,
+  offDefaultBranch: boolean,
+): { multiplier: number; modifiers: string[] } {
+  const modifiers: string[] = [];
+  let multiplier = 1;
+  if (solo) {
+    multiplier *= SOLO_KILL_MULTIPLIER;
+    modifiers.push(`solo kill x${SOLO_KILL_MULTIPLIER}`);
+  }
+  if (offDefaultBranch) {
+    multiplier *= NON_DEFAULT_BRANCH_MULTIPLIER;
+    modifiers.push(`non-default branch x${NON_DEFAULT_BRANCH_MULTIPLIER}`);
+  }
+  return { multiplier, modifiers };
+}
+
+/**
  * Score one event for one player. Pure: no I/O, no clock (`now` is epoch milliseconds), no mutation.
  *
  * `XP = floor(Points x Power x Zone)` with Zone `(level + 1) ^ exponent` at the level the player has
@@ -534,16 +556,9 @@ export function score(
   const breakdown: BreakdownLine[] = [];
   let points = 0;
   for (const term of outcome.terms) {
-    const modifiers: string[] = [];
-    let multiplier = 1;
-    if (outcome.soloKill && term.solo) {
-      multiplier *= SOLO_KILL_MULTIPLIER;
-      modifiers.push(`solo kill x${SOLO_KILL_MULTIPLIER}`);
-    }
-    if (offDefaultBranch) {
-      multiplier *= NON_DEFAULT_BRANCH_MULTIPLIER;
-      modifiers.push(`non-default branch x${NON_DEFAULT_BRANCH_MULTIPLIER}`);
-    }
+    const halvings = structuralHalvings(outcome.soloKill && term.solo === true, offDefaultBranch);
+    const modifiers = halvings.modifiers;
+    let multiplier = halvings.multiplier;
     for (const factor of factors) {
       if (factor.target === 'all' || term.party) {
         multiplier *= factor.factor;
@@ -554,10 +569,18 @@ export function score(
     points += value;
     breakdown.push({ label: term.label + modifierSuffix(modifiers), value, kind: 'points' });
   }
-  // A completed Pledge's bonus is flat: it is not subject to the multipliers above.
+  // A completed Pledge's bonus is flat: the Mogul and Pledge factors above do not touch it, but it is
+  // halved like the rest of the PR off the default branch and on a solo kill, so a bonus can never be
+  // collected at a rate the merge itself would not score.
   for (const bonus of pledge.bonuses) {
-    points += bonus.points;
-    breakdown.push({ label: bonus.label, value: bonus.points, kind: 'points' });
+    const halvings = structuralHalvings(outcome.soloKill, offDefaultBranch);
+    const value = Math.floor(bonus.points * halvings.multiplier);
+    points += value;
+    breakdown.push({
+      label: bonus.label + modifierSuffix(halvings.modifiers),
+      value,
+      kind: 'points',
+    });
   }
 
   // Daily first event: the first scored event of each UTC day earns +20 for Endurance. The weekly

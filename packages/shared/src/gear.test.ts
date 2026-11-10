@@ -446,18 +446,37 @@ describe('gear Power: Keen and Stout feed it conditionally', () => {
       'Gear',
       'Gear: Keen (review)',
     ]);
+    // 1 + 4 (Charms at their budget) + 2.25 (a full Dragon set) + 0.5 (Feats) + the Leather Jacket's
+    // 1.5 is 9.25: only a Mogul line can take the sources past 9.
+    const base = createPlayerState(1);
     const capped: PlayerState = {
-      ...createPlayerState(1),
-      charms: [charm(6)],
+      ...base,
+      charms: [charm(4)],
       gear: loadoutOf(fullSet('dragon')),
+      feats: { unlocked: [], powerBonus: 0.5 },
+      moguls: { ...base.moguls, current: 'leather-jacket', chain: 15 },
     };
-    expect(computePower(capped)).toBe(9);
-    expect(powerBreakdown(capped).at(-1)).toEqual({
+    const context = powerCtx(reviewEvent('APPROVED'));
+    expect(computePower(capped, context)).toBe(9);
+    expect(powerBreakdown(capped, context).at(-1)).toEqual({
       label: 'Power cap',
       value: -0.25,
       kind: 'power',
     });
     expect(POWER_CAP).toBe(9);
+  });
+
+  it('holds gear to +2.25 even with Keen pieces on a review', () => {
+    const dragon = fullSet('dragon').map((entry) => ({ ...entry, affix: 'keen' as const }));
+    const maxed: PlayerState = { ...createPlayerState(1), gear: loadoutOf(dragon) };
+    const lines = powerBreakdown(maxed, powerCtx(reviewEvent('APPROVED')));
+    expect(lines.map((line) => [line.label, line.value])).toEqual([
+      ['Base Power', 1],
+      ['Gear', 2.25],
+      ['Gear: Keen x5 (review)', 0.5],
+      ['Gear cap', -0.5],
+    ]);
+    expect(computePower(maxed, powerCtx(reviewEvent('APPROVED')))).toBe(3.25);
   });
 
   it('a full Dragon set under the best Charms and Feats still ends at 9', () => {
@@ -472,9 +491,13 @@ describe('gear Power: Keen and Stout feed it conditionally', () => {
         completed: [],
       },
     };
-    // 1 + 4 + 2.25 + 0.5 = 7.75; with the Pledge budget of +1 it would be 8.75, still under 9.
+    // 1 + 4 + 2.25 + 0.5 = 7.75; with the Pledge budget of +1 it would be 8.75, still under 9. More
+    // Charm Power than the +4 budget changes nothing.
     expect(computePower(all)).toBe(7.75);
-    expect(computePower({ ...all, charms: [charm(5)] })).toBe(8.75);
-    expect(computePower({ ...all, charms: [charm(6)] })).toBe(9);
+    expect(computePower({ ...all, charms: [charm(5)] })).toBe(7.75);
+    expect(computePower({ ...all, charms: [charm(6)] })).toBe(7.75);
+    const pledged = { ...all, pledges: { ...all.pledges, completed: ['mentor', 'defend'] } };
+    expect(computePower(pledged)).toBe(7.75 + 0.5);
+    expect(computePower(pledged, powerCtx(reviewEvent('APPROVED')))).toBe(8.75);
   });
 });

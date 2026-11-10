@@ -5,6 +5,7 @@ import { creditSale, spendGold } from './economy';
 import type { GoldEntry, GoldError } from './economy';
 import { MOGUL_COSMETICS } from './moguls';
 import { addToDeck, pledgeCard, PLEDGES, removeFromDeck } from './pledges';
+import type { PledgeDefinition } from './pledges';
 import { deriveSeed, mulberry32, shuffle, weightedPick } from './rng';
 import {
   applyVoucher,
@@ -36,6 +37,14 @@ import type {
  */
 
 export const PACK_KINDS: readonly PackKind[] = ['pledge', 'charm', 'mogul'];
+
+/**
+ * The Pledges a pack can offer: the base cards only. An upgraded card (Pair Up) comes from a Boss reward
+ * that upgrades the Strike already in the deck (design.md 6.4), never straight from a pack.
+ */
+const PACK_PLEDGES: readonly PledgeDefinition[] = PLEDGES.filter(
+  (definition) => !definition.upgraded,
+);
 
 export type ShopError =
   | 'shop_closed'
@@ -141,19 +150,43 @@ export function visitOf(run: RunState): number {
 }
 
 /**
+ * Stock the visit after an act clear: `fresh` is the new stock, `previous` the shop that was open (null
+ * when none was) and `previousVisit` its visit. A pack the player bought but has not yet picked from keeps
+ * its shelf slot, so clearing an act can never swallow the gold they paid; it is stamped with the visit it
+ * was stocked in, so its 3 options stay the ones they saw.
+ */
+export function carryPendingPacks(
+  fresh: ShopStock,
+  previous: ShopStock | null,
+  previousVisit: number,
+): ShopStock {
+  if (previous === null) {
+    return fresh;
+  }
+  const packs = fresh.packs.map((slot, at) => {
+    const old = previous.packs[at];
+    return old !== undefined && old.sold && old.picked !== true
+      ? { ...old, visit: old.visit ?? previousVisit }
+      : slot;
+  });
+  return { ...fresh, packs };
+}
+
+/**
  * The 3 options of a pack slot. A pure function of the week seed, the visit, the slot and the slot's
- * nonce, so the options are the same every time they are asked for, before and after buying. Null when the
- * shop is closed or the slot does not exist.
+ * nonce, so the options are the same every time they are asked for, before and after buying (and after the
+ * pack is carried into a later visit). Null when the shop is closed or the slot does not exist.
  */
 export function packOptions(run: RunState, index: number): PackOption[] | null {
   const slot = run.shop?.packs[index];
   if (run.shop === null || slot === undefined) {
     return null;
   }
-  const random = mulberry32(deriveSeed(run.shopSeed, 'pack', visitOf(run), slot.nonce ?? 0, index));
+  const visit = slot.visit ?? visitOf(run);
+  const random = mulberry32(deriveSeed(run.shopSeed, 'pack', visit, slot.nonce ?? 0, index));
   switch (slot.item) {
     case 'pledge':
-      return shuffle(PLEDGES, random)
+      return shuffle(PACK_PLEDGES, random)
         .slice(0, SHOP.packOptions)
         .map((definition) => ({ kind: 'pledge' as const, pledge: pledgeCard(definition) }));
     case 'charm':

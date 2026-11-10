@@ -63,7 +63,7 @@ Glossary: **Points** base score of an event · **Power** multiplier from Charms 
 
 1. THE scorer SHALL be a pure function `(event, playerState, prState, now) → ScoreResult` in a shared package with no I/O, usable from both Lambda and the browser.
 2. THE scorer SHALL award Points per event exactly as design.md §4.2: opened 10 (max 5 per UTC day), merged 90, size `round(40·log2(1+(additions+deletions)/50))` capped at 120, party bonus 30, approve or changes-requested review 40 (max 2 per PR per reviewer), comment-only review 15 (max 1 per PR per reviewer), inline comment 5 (max 10 per PR per reviewer), verified kill 25, riposte 15, daily first event 20, weekly streak 50 × consecutive weeks capped at 10.
-3. IF a merged PR has `merged_by_id == author_id` and no reviews by other humans THEN the scorer SHALL halve the merge, size and party points.
+3. IF the human credited for a merged PR (its author, or the human who merged a bot's PR) merged it themselves, or a bot merged it on their behalf, and no other human reviewed it THEN the scorer SHALL halve the merge, size and party points, and SHALL NOT award the credited human a verified kill or Riposte credit for it.
 4. IF a PR's base ref is not the repository default branch THEN the scorer SHALL halve all its points.
 5. THE scorer SHALL compute `Power = 1 + Σ(active Charm powers) + Σ(equipped gear power, incl. set bonus) + active Pledge bonus + Feat bonus`, capped at 9, starting at 1 for a new character.
 6. THE scorer SHALL compute `Zone = (L+1)^e` where L is the character level at scoring time and e is 1.6, or 1.65 when the Overclock voucher is owned.

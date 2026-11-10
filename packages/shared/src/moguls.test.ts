@@ -40,6 +40,7 @@ import {
 } from './test-builders';
 import { NAME_DENYLIST, productionSources, SOURCES } from './test-sources';
 import type {
+  Charm,
   GameEvent,
   MogulId,
   PlayerState,
@@ -459,6 +460,16 @@ describe('The Turtleneck: PRs under 100 lines x3, over 400 x0.5, one-comment app
     expect(large.breakdown[0]?.label).toBe('PR merged (The Turtleneck: over 400 lines x0.5)');
   });
 
+  it('applies no size multiplier to a merge whose size the app never saw', () => {
+    const pr = mergedFacts({ stats: null });
+    const unseen = createPRState(pr);
+    expect(mogulFactors('turtleneck', mergedEvent(pr), unseen)).toEqual([]);
+    const known = { ...unseen, additions: 20, sizeKnown: true };
+    expect(mogulFactors('turtleneck', mergedEvent(pr), known).map((entry) => entry.factor)).toEqual(
+      [3],
+    );
+  });
+
   it('an approval with exactly one inline comment is a design review and scores x2', () => {
     const approve = (inline: number, state: 'APPROVED' | 'CHANGES_REQUESTED' = 'APPROVED') =>
       score(
@@ -707,6 +718,97 @@ describe('The Founder: points x0.5, gold x4, and the Board takes a Charm on Wedn
       expect(copiesOf(removed.player.moguls.benched!.charm)).toBe(2);
       const back = settle(removed.player, FRIDAY);
       expect(copiesOf(back.player.charms[0]!)).toBe(2);
+    });
+
+    describe('the bench cannot be used to hold more than two copies of a Charm', () => {
+      /** A Founder week in which the Board has taken the only Charm, at Wednesday. */
+      const benched = (charm: Charm): PlayerState => {
+        const base = { ...under('founder'), charms: [charm] };
+        return settle(base, WEDNESDAY).player;
+      };
+
+      it('a copy bought while one is away is auto-sold when the pair would be a third', () => {
+        const away = benched(held('lantern', 2));
+        const bought = addCharm(away, held('lantern'));
+        expect(bought).toMatchObject({ ok: true, outcome: 'auto_sold' });
+        expect(bought.ok && bought.player.charms).toEqual([]);
+      });
+
+      it('a second copy bought while the first is away merges into one slot of two on return', () => {
+        const away = benched(held('lantern'));
+        const bought = addCharm(away, held('lantern'));
+        expect(bought).toMatchObject({ ok: true, outcome: 'added' });
+        if (!bought.ok) throw new Error('expected the copy to be added');
+        expect(bought.player.charms.map((entry) => copiesOf(entry))).toEqual([1]);
+        const back = settle(bought.player, FRIDAY);
+        expect(back.player.charms.map((entry) => [entry.id, copiesOf(entry)])).toEqual([
+          ['lantern', 2],
+        ]);
+        expect(back.player.moguls.benched).toBeNull();
+        expect(back.events).toEqual([
+          { kind: 'returned', charm: { ...held('lantern'), power: 0.25 } },
+        ]);
+        expect(back.player.gold).toBe(bought.player.gold);
+        // The merged stack keeps the Board's +0.25 per copy.
+        expect(back.player.charms[0]?.power).toBe(0.25);
+      });
+
+      it('merges on return into at most two copies and credits the surplus through the economy', () => {
+        // A state that reached three copies some other way (an older save): one held, a stack benched.
+        const base: PlayerState = {
+          ...under('hoodie'),
+          gold: 10,
+          charms: [held('hot-potato')],
+          moguls: {
+            ...under('hoodie').moguls,
+            benched: { charm: held('hot-potato', 2), weekKey: '2026-45' },
+            boardWeek: '2026-45',
+          },
+        };
+        const back = settle(base, NOW);
+        expect(back.player.charms.map((entry) => [entry.id, copiesOf(entry)])).toEqual([
+          ['hot-potato', 2],
+        ]);
+        expect(back.player.gold).toBe(10 + 60);
+        expect(back.events).toHaveLength(1);
+        expect(back.events[0]).toMatchObject({
+          kind: 'returned',
+          sale: { charmId: 'hot-potato', proceeds: 60, reason: 'duplicate' },
+        });
+        expect(back.player.moguls.benched).toBeNull();
+        expect(freeCharmSlots(back.player)).toBe(4);
+      });
+    });
+
+    describe('the +0.25 on return accumulates only up to +1.0 over the Charm base', () => {
+      const cycle = (charm: Charm): Charm => {
+        const away = settle({ ...under('founder'), charms: [charm] }, WEDNESDAY).player;
+        const back = settle(away, FRIDAY).player;
+        return back.charms[0] as Charm;
+      };
+
+      it('adds 0.25 each time the Board takes and returns it', () => {
+        let charm = held('rubber-duck');
+        const powers: number[] = [];
+        for (let week = 0; week < 6; week += 1) {
+          charm = cycle(charm);
+          powers.push(charm.power);
+        }
+        // Rubber Duck's base is 0.25; the ceiling is 0.25 + 1.0.
+        expect(powers).toEqual([0.5, 0.75, 1, 1.25, 1.25, 1.25]);
+      });
+
+      it('never lowers a Charm that is already above the ceiling', () => {
+        const strong = { ...held('lantern'), power: 3 };
+        expect(cycle(strong).power).toBe(3);
+        const almost = { ...held('lantern'), power: 0.9 };
+        expect(cycle(almost).power).toBe(1);
+      });
+
+      it('caps a Charm the catalogue does not know against a base of 0', () => {
+        const stat = { id: 'retired', name: 'Retired', rarity: 'rare' as const, power: 0.9 };
+        expect(cycle(stat).power).toBe(1);
+      });
     });
   });
 });

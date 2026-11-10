@@ -24,7 +24,7 @@ import pullRequestReviewDismissed from '../fixtures/webhooks/pull_request_review
 import pullRequestReviewCommentCreatedByBot from '../fixtures/webhooks/pull_request_review_comment.created.by-bot.json';
 import pullRequestReviewCommentCreated from '../fixtures/webhooks/pull_request_review_comment.created.json';
 import pullRequestReviewCommentEdited from '../fixtures/webhooks/pull_request_review_comment.edited.json';
-import { GAME_EVENT_KEYS, isBotAccount, normalize } from './normalize';
+import { GAME_EVENT_KEYS, isBotAccount, MAX_REPOSITORY_IDS, normalize } from './normalize';
 import { score } from './score';
 import { createPlayerState, createPRState } from './state';
 import { NOW } from './test-builders';
@@ -498,11 +498,11 @@ describe('normalize: facts and defaults', () => {
     expect(event?.kind === 'pr_opened' && event.pr.baseRefIsDefault).toBe(false);
   });
 
-  it('assumes the default branch when the payload does not say', () => {
+  it('does not assume the default branch when the payload does not say (it fails closed)', () => {
     const payload = clone(pullRequestOpened) as { pull_request: Record<string, unknown> };
     delete payload.pull_request.base;
     const [event] = normalize('pull_request', payload);
-    expect(event?.kind === 'pr_opened' && event.pr.baseRefIsDefault).toBe(true);
+    expect(event?.kind === 'pr_opened' && event.pr.baseRefIsDefault).toBe(false);
     const noDefault = clone(pullRequestOpened) as {
       repository: Record<string, unknown>;
       pull_request: { base: { repo: Record<string, unknown> } };
@@ -510,7 +510,7 @@ describe('normalize: facts and defaults', () => {
     delete noDefault.repository.default_branch;
     delete noDefault.pull_request.base.repo.default_branch;
     const [other] = normalize('pull_request', noDefault);
-    expect(other?.kind === 'pr_opened' && other.pr.baseRefIsDefault).toBe(true);
+    expect(other?.kind === 'pr_opened' && other.pr.baseRefIsDefault).toBe(false);
     const noRepositoryAtAll = clone(pullRequestOpenedNonDefaultBranch) as {
       repository?: unknown;
       pull_request: { base: { repo: Record<string, unknown> } };
@@ -518,7 +518,64 @@ describe('normalize: facts and defaults', () => {
     delete noRepositoryAtAll.repository;
     delete noRepositoryAtAll.pull_request.base.repo.default_branch;
     const [third] = normalize('pull_request', noRepositoryAtAll);
-    expect(third?.kind === 'pr_opened' && third.pr.baseRefIsDefault).toBe(true);
+    expect(third?.kind === 'pr_opened' && third.pr.baseRefIsDefault).toBe(false);
+    // Either source of the default branch is enough, and a missing base ref is just as unverifiable.
+    const onlyRepository = clone(pullRequestOpened) as {
+      pull_request: { base: { repo: Record<string, unknown> } };
+    };
+    delete onlyRepository.pull_request.base.repo.default_branch;
+    const [fourth] = normalize('pull_request', onlyRepository);
+    expect(fourth?.kind === 'pr_opened' && fourth.pr.baseRefIsDefault).toBe(true);
+    const noRef = clone(pullRequestOpened) as { pull_request: { base: Record<string, unknown> } };
+    delete noRef.pull_request.base.ref;
+    const [fifth] = normalize('pull_request', noRef);
+    expect(fifth?.kind === 'pr_opened' && fifth.pr.baseRefIsDefault).toBe(false);
+  });
+
+  it('keeps a timestamp only when it is an ISO-8601 instant, else null', () => {
+    const times = (value: unknown) => {
+      const payload = clone(pullRequestClosedMerged) as { pull_request: Record<string, unknown> };
+      payload.pull_request.created_at = value;
+      payload.pull_request.merged_at = value;
+      payload.pull_request.closed_at = value;
+      const [event] = normalize('pull_request', payload);
+      return event?.kind === 'pr_merged'
+        ? [event.pr.openedAt, event.pr.mergedAt, event.pr.closedAt]
+        : undefined;
+    };
+    for (const good of [
+      '2026-11-09T11:00:00Z',
+      '2026-11-09T11:00:00.123Z',
+      '2026-11-09T11:00:00+02:00',
+      '2026-11-09T11:00:00.123456789-05:30',
+    ]) {
+      expect(times(good)).toEqual([good, good, good]);
+    }
+    for (const bad of [
+      'yesterday',
+      '2026-11-09',
+      '2026-11-09 11:00:00Z',
+      '2026-11-09T11:00:00',
+      '2026-13-09T11:00:00Z',
+      '2026-11-09T25:00:00Z',
+      '2026-11-09T11:00:00Z; DROP TABLE',
+      `2026-11-09T11:00:00Z${'x'.repeat(10_000)}`,
+      '',
+      42,
+      {},
+      null,
+    ]) {
+      expect(times(bad)).toEqual([null, null, null]);
+    }
+  });
+
+  it('applies the same timestamp rule to a review submission time', () => {
+    const payload = clone(pullRequestReviewApproved) as { review: Record<string, unknown> };
+    for (const bad of ['soon', 'x'.repeat(5000), 1_700_000_000]) {
+      payload.review.submitted_at = bad;
+      const [event] = normalize('pull_request_review', payload);
+      expect(event?.kind === 'review_submitted' && event.submittedAt).toBeNull();
+    }
   });
 
   it('omits stats unless all four counts are present', () => {
@@ -598,6 +655,29 @@ describe('normalize: facts and defaults', () => {
     delete missing.repositories;
     const [none] = normalize('installation', missing);
     expect(none?.kind === 'installation' && none.repositoryIds).toEqual([]);
+  });
+
+  it('caps the repository ids one event may carry', () => {
+    const many = Array.from({ length: MAX_REPOSITORY_IDS + 500 }, (_, index) => ({
+      id: index + 1,
+    }));
+    const created = clone(installationCreated) as { repositories: unknown[] };
+    created.repositories = many;
+    const [event] = normalize('installation', created);
+    const ids = event?.kind === 'installation' ? event.repositoryIds : [];
+    expect(ids).toHaveLength(MAX_REPOSITORY_IDS);
+    expect(ids[0]).toBe(1);
+    expect(ids.at(-1)).toBe(MAX_REPOSITORY_IDS);
+    const added = clone(installationRepositoriesAdded) as { repositories_added: unknown[] };
+    added.repositories_added = many;
+    const [change] = normalize('installation_repositories', added);
+    expect(change?.kind === 'installation_repositories' && change.added).toHaveLength(
+      MAX_REPOSITORY_IDS,
+    );
+    // Malformed entries do not count toward the cap.
+    created.repositories = [...Array.from({ length: 50 }, () => null), ...many];
+    const [mixed] = normalize('installation', created);
+    expect(mixed?.kind === 'installation' && mixed.repositoryIds).toHaveLength(MAX_REPOSITORY_IDS);
   });
 });
 
