@@ -1,0 +1,194 @@
+name: Deploy
+
+# Deploys the CDK stack to AWS through the owner's landing zone, then publishes the client to GitHub Pages.
+# It runs only after the CI workflow has finished successfully for a push to main (`workflow_run`), on the
+# exact commit that CI tested, so a merge that fails lint, typecheck, tests or the template checks is never
+# deployed. `workflow_dispatch` stays for a manual redeploy of the branch it is started on.
+# GitHub OIDC, no long-lived AWS keys: the stack job assumes `lz-mergescape-deploy` in the Infrastructure
+# account. That role can do one thing, assume the CDK bootstrap roles (`cdk-hnb659fds-*`) of this app's
+# account, and `cdk deploy` works through them. Its trust is pinned to this repository on `refs/heads/main`
+# and to this workflow file, so the stack job must not use a GitHub `environment` (that changes the `sub`
+# claim) and the workflow must keep its name and path. See packages/infra/README.md for the one-time setup.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables):
+#   AWS_ACCOUNT_ID       required; the AWS account the landing zone vended for Mergescape. The stack job is
+#                        skipped while it is empty (forks, new clones)
+#   PAGES_ORIGIN         required; https://<owner>.github.io (CORS origin, client CSP). Must be lowercase (the
+#                        Lambdas compare it with new URL(x).origin); this workflow lowercases it before use
+#   ALERT_EMAIL          required; receives the AWS Budgets alerts
+#   CLIENT_BASE_PATH     optional; path of the client on Pages. Default: / for a repository named
+#                        <owner>.github.io, otherwise /<repository>/ (where a project site is served)
+#   APP_SLUG             optional; slug of your GitHub App (the install link). Default mergescape
+#   AWS_REGION           optional, default us-east-1 (the region the landing zone declares the account for)
+#   SSM_PREFIX           optional, default /mergescape
+#   STAGE                optional, default prod
+#   AWS_DEPLOY_ROLE_ARN  optional; only for a fork that deploys outside the landing zone. Default
+#                        arn:aws:iam::324404179305:role/lz-mergescape-deploy
+
+on:
+  workflow_run:
+    workflows: [CI] # the `name:` of .github/workflows/ci.yml
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  stack:
+    name: Deploy CDK stack
+    # AWS_ACCOUNT_ID gate first (forks, new clones). Then: a manual run, or a CI run that succeeded for a push
+    # to main. The `event` check matters: `branches: [main]` also matches a pull request from a fork's own
+    # `main`, and the weekly scheduled CI run (audit only) would otherwise redeploy main every Monday.
+    if: >-
+      ${{ vars.AWS_ACCOUNT_ID != '' && (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # OIDC token for aws-actions/configure-aws-credentials
+    outputs:
+      api_origin: ${{ steps.outputs.outputs.api_origin }}
+      ingest_url: ${{ steps.outputs.outputs.ingest_url }}
+      badge_domain: ${{ steps.outputs.outputs.badge_domain }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A workflow_run run starts on the tip of main, which may be newer than the commit CI approved.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm via corepack
+        run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check required variables
+        env:
+          PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          for name in PAGES_ORIGIN ALERT_EMAIL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Repository variable $name is not set (see packages/infra/README.md)."
+              exit 1
+            fi
+          done
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::324404179305:role/lz-mergescape-deploy' }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600 # the most a chained session can have
+          role-skip-session-tagging: true
+
+      # esbuild, which bundles the two Lambda functions, is the pinned devDependency of packages/infra;
+      # `pnpm exec` puts it on PATH. The synth step inside `cdk deploy` needs no AWS lookups.
+      - name: Deploy
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+          CLIENT_BASE_PATH: ${{ vars.CLIENT_BASE_PATH }}
+          SSM_PREFIX: ${{ vars.SSM_PREFIX || '/mergescape' }}
+          STAGE: ${{ vars.STAGE || 'prod' }}
+        run: |
+          # The Lambdas compare PAGES_ORIGIN with new URL(PAGES_ORIGIN).origin, which is always lowercase, and
+          # refuse to start on a mismatch: https://Owner.github.io would make every request a 500.
+          PAGES_ORIGIN="${PAGES_ORIGIN,,}"
+          base="$CLIENT_BASE_PATH"
+          if [ -z "$base" ]; then
+            repo="${GITHUB_REPOSITORY#*/}"
+            owner="${GITHUB_REPOSITORY%%/*}"
+            if [ "${repo,,}" = "${owner,,}.github.io" ]; then base="/"; else base="/${repo}/"; fi
+          fi
+          pnpm --filter @mergescape/infra exec cdk deploy --require-approval never --all \
+            --outputs-file "$RUNNER_TEMP/outputs.json" \
+            -c accountId="$ACCOUNT_ID" \
+            -c region="$AWS_REGION" \
+            -c pagesOrigin="$PAGES_ORIGIN" \
+            -c alertEmail="$ALERT_EMAIL" \
+            -c clientBasePath="$base" \
+            -c ssmPrefix="$SSM_PREFIX" \
+            -c stage="$STAGE"
+
+      - name: Read stack outputs
+        id: outputs
+        run: |
+          api_url=$(jq -r '[.[].ApiUrl][0] // empty' "$RUNNER_TEMP/outputs.json")
+          ingest_url=$(jq -r '[.[].IngestUrl][0] // empty' "$RUNNER_TEMP/outputs.json")
+          badge_domain=$(jq -r '[.[].BadgeDomain][0] // empty' "$RUNNER_TEMP/outputs.json")
+          case "$api_url" in
+            https://*) ;;
+            *) echo "::error::Stack output ApiUrl is missing or not an https URL: '$api_url'"; exit 1 ;;
+          esac
+          {
+            echo "api_origin=${api_url%/}"
+            echo "ingest_url=$ingest_url"
+            echo "badge_domain=$badge_domain"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Stack outputs"
+            echo "- GitHub App webhook URL (IngestUrl): \`$ingest_url\`"
+            echo "- GitHub App callback URL (ApiUrl + auth/callback): \`${api_url}auth/callback\`"
+            echo "- Badge domain (BadgeDomain): \`$badge_domain\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pages:
+    name: Publish client to GitHub Pages
+    needs: stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write # deploy-pages
+      id-token: write # deploy-pages verifies the deployment origin
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A workflow_run run starts on the tip of main, which may be newer than the commit CI approved.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm via corepack
+        run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build client
+        env:
+          VITE_API_ORIGIN: ${{ needs.stack.outputs.api_origin }}
+          VITE_GITHUB_APP_SLUG: ${{ vars.APP_SLUG }}
+        run: pnpm --filter @mergescape/client --if-present run build
+
+      # The client is optional until it exists: skip publishing instead of failing the workflow.
+      - name: Check for client build output
+        id: dist
+        run: |
+          if [ -f packages/client/dist/index.html ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::packages/client/dist/index.html not found, skipping the Pages deployment."
+          fi
+      - uses: actions/upload-pages-artifact@v5
+        if: steps.dist.outputs.exists == 'true'
+        with:
+          path: packages/client/dist
+      - id: deployment
+        uses: actions/deploy-pages@v5
+        if: steps.dist.outputs.exists == 'true'

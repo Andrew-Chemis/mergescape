@@ -1,0 +1,40 @@
+packages:
+  - packages/shared
+  - packages/backend
+  - packages/client
+  - packages/infra
+
+# Install scripts are denied unless listed here. esbuild works without its optional postinstall
+# (used by the CDK app to bundle the Lambda functions).
+allowBuilds:
+  esbuild: false
+
+# Single source of truth for pinned tool versions. Packages reference these as `catalog:`.
+catalog:
+  '@aws-sdk/client-dynamodb': 3.1164.0
+  '@aws-sdk/client-ssm': 3.1164.0
+  '@aws-sdk/lib-dynamodb': 3.1164.0
+  '@eslint/js': 10.0.1
+  '@sveltejs/vite-plugin-svelte': 7.3.1
+  '@testing-library/svelte': 5.4.2
+  '@types/aws-lambda': 8.10.164
+  '@types/node': 22.20.5
+  '@vitest/coverage-v8': 5.1.0
+  aws-cdk: 2.1142.0
+  aws-cdk-lib: 2.270.0
+  axe-core: 4.14.0
+  constructs: 10.8.1
+  esbuild: 0.28.2
+  eslint: 10.14.0
+  eslint-plugin-svelte: 3.24.1
+  jose: 6.2.13
+  jsdom: 28.1.0
+  prettier: 3.9.10
+  prettier-plugin-svelte: 4.1.1
+  svelte: 5.57.3
+  svelte-check: 4.7.8
+  tsx: 4.23.5
+  typescript: 5.9.3
+  typescript-eslint: 8.72.1
+  vite: 8.3.6
+  vitest: 5.1.0

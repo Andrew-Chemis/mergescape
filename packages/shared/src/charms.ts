@@ -1,0 +1,504 @@
+import {
+  CHARM_POWER_BY_RARITY,
+  CHARM_PRICE_BY_RARITY,
+  CHARM_RULES,
+  MAX_CHARM_COPIES,
+  POINTS,
+  SHOP,
+} from './constants';
+import type { Rarity } from './constants';
+import { utcDay } from './calendar';
+import { authorHasFewerMerges, eventLines, hoursBetween, linesAtLeast, linesUnder } from './facts';
+import { sumBy, tidy } from './math';
+import { lifetimeMerges } from './pledges';
+import { charmSlotCount } from './vouchers';
+import type {
+  BreakdownLine,
+  Charm,
+  GameEvent,
+  PlayerState,
+  PowerContext,
+  PRState,
+  Result,
+  ReviewSubmittedEvent,
+} from './types';
+
+/**
+ * The twelve Charms (design.md 6.3 as audited in game-design.md 8.3). The last three, Whetstone, Familiar
+ * Path and Long Lens, came with the content pass of task 24 and obey the same audit: none rewards excess,
+ * the hour of day, a rubber stamp or a closed PR. A definition carries:
+ * - `basePower`: Power the Charm always gives, per copy. 0 where the text only gives a conditional effect.
+ * - `condition` and `conditionalPower`: extra Power per copy on events where the condition holds.
+ * - `effects`: the rule changes (Second Pair of Eyes, Jester's Rebase, Loaded Dice, Oracle) as data. They are
+ *   read where the rule lives, through `hasCharmEffect` and `sumCharmEffect`: `partyBonusPoints`,
+ *   `riposteMultiplier` and the Riposte credit, power.ts, and `canSeeNextMogul`.
+ * Rarity (common +0.25, uncommon +0.5, rare +1, legendary +2) is the nominal tier; each Charm's actual
+ * numbers are the ones in its description, as in the design table.
+ */
+
+export type CharmId =
+  | 'rubber-duck'
+  | 'lantern'
+  | 'whetstone'
+  | 'small-hands'
+  | 'second-pair-of-eyes'
+  | 'familiar-path'
+  | 'hot-potato'
+  | 'grey-beard'
+  | 'long-lens'
+  | 'jesters-rebase'
+  | 'loaded-dice'
+  | 'oracle';
+
+/** A Charm's condition over the event being scored, the player before it, the PR before it, and the clock. */
+export type CharmCondition = (
+  event: GameEvent,
+  player: PlayerState,
+  pr: PRState,
+  now: number,
+) => boolean;
+
+/** The rules a Charm changes outright, as data. Absent keys mean the Charm does not touch that rule. */
+export interface CharmEffects {
+  /** Jester's Rebase: changes you request earn a Riposte when the PR merges, and Riposte points are multiplied. */
+  riposte?: true;
+  /** Second Pair of Eyes: extra party-bonus points per copy held. */
+  partyPoints?: number;
+  /** Oracle: next week's Mogul is revealed. */
+  seesNextMogul?: true;
+  /** Loaded Dice: once a week one event's Power is replaced. */
+  loadedDice?: true;
+}
+
+/** The effects that are a yes or no, read with `hasCharmEffect`. */
+export type CharmEffectKey = keyof CharmEffects;
+
+/** The effects that are an amount per copy, read with `sumCharmEffect`. */
+export type CharmEffectAmountKey = {
+  [K in CharmEffectKey]-?: NonNullable<CharmEffects[K]> extends number ? K : never;
+}[CharmEffectKey];
+
+export interface CharmDefinition {
+  id: CharmId;
+  name: string;
+  rarity: Rarity;
+  description: string;
+  /** Unconditional Power per copy. */
+  basePower: number;
+  /** Extra Power per copy when `condition` holds. 0 when the Charm has no conditional Power. */
+  conditionalPower: number;
+  /** Short phrase shown in the Combat Log when the condition fired, e.g. "first event of the day". */
+  conditionLabel: string;
+  condition?: CharmCondition;
+  /** Rule changes the Charm makes, for the Charms that are not (only) Power. */
+  effects?: CharmEffects;
+}
+
+const rubberDuckCondition: CharmCondition = (event, _player, pr) =>
+  event.kind === 'review_submitted' &&
+  (pr.reviewerCounters[String(event.actor.id)]?.inline ?? 0) >=
+    CHARM_RULES.rubberDuckInlineComments;
+
+const lanternCondition: CharmCondition = (event, player, _pr, now) =>
+  event.kind !== 'weekly_streak' && player.counters.dailyFirstDay !== utcDay(now);
+
+const smallHandsCondition: CharmCondition = (event, _player, pr) =>
+  event.kind === 'pr_merged' && linesUnder(eventLines(event.pr, pr), CHARM_RULES.smallHandsMaxLoc);
+
+const hotPotatoCondition: CharmCondition = (event, _player, pr) =>
+  event.kind === 'review_submitted' &&
+  event.state === 'APPROVED' &&
+  linesUnder(eventLines(event.pr, pr), CHARM_RULES.hotPotatoMaxLoc) &&
+  (hoursBetween(event.pr.openedAt, event.submittedAt) ?? Infinity) <=
+    CHARM_RULES.hotPotatoWindowHours;
+
+const greyBeardCondition: CharmCondition = (event, player) =>
+  'pr' in event && (player.repoMerges[String(event.pr.repoId)] ?? 0) >= CHARM_RULES.greyBeardMerges;
+
+/** How many inline comments the acting reviewer has left on the PR so far. */
+const inlineBy = (event: ReviewSubmittedEvent, pr: PRState): number =>
+  pr.reviewerCounters[String(event.actor.id)]?.inline ?? 0;
+
+/** A review that decides: an approval or a request for changes, never a bare comment. */
+const isDecision = (event: GameEvent): event is ReviewSubmittedEvent =>
+  event.kind === 'review_submitted' && event.state !== 'COMMENTED';
+
+const whetstoneCondition: CharmCondition = (event, player, pr) =>
+  event.kind === 'review_submitted' &&
+  event.state === 'APPROVED' &&
+  inlineBy(event, pr) >= CHARM_RULES.whetstoneInlineComments &&
+  authorHasFewerMerges(pr, lifetimeMerges(player));
+
+const familiarPathCondition: CharmCondition = (event, player) =>
+  'pr' in event &&
+  (player.repoMerges[String(event.pr.repoId)] ?? 0) >= CHARM_RULES.familiarPathMerges;
+
+const longLensCondition: CharmCondition = (event, _player, pr) =>
+  isDecision(event) &&
+  linesAtLeast(eventLines(event.pr, pr), CHARM_RULES.longLensMinLoc) &&
+  inlineBy(event, pr) >= CHARM_RULES.longLensInlineComments;
+
+export const CHARMS: readonly CharmDefinition[] = [
+  {
+    id: 'rubber-duck',
+    name: 'Rubber Duck',
+    rarity: 'common',
+    description: '+0.25 Power; +0.25 more on reviews with 3 or more inline comments.',
+    basePower: CHARM_POWER_BY_RARITY.common,
+    conditionalPower: CHARM_RULES.rubberDuckExtraPower,
+    conditionLabel: `${CHARM_RULES.rubberDuckInlineComments}+ inline comments`,
+    condition: rubberDuckCondition,
+  },
+  {
+    id: 'lantern',
+    name: 'Lantern',
+    rarity: 'common',
+    description: '+0.5 Power on the first scored event of each day.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.lanternPower,
+    conditionLabel: 'first event of the day',
+    condition: lanternCondition,
+  },
+  {
+    id: 'whetstone',
+    name: 'Whetstone',
+    rarity: 'common',
+    description:
+      '+0.5 Power on an approval, backed by at least one inline comment, of a PR from an author with fewer merges than you.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.whetstonePower,
+    conditionLabel: 'mentoring approval',
+    condition: whetstoneCondition,
+  },
+  {
+    id: 'small-hands',
+    name: 'Small Hands',
+    rarity: 'uncommon',
+    description: 'Merges under 150 lines gain +0.75 Power.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.smallHandsPower,
+    conditionLabel: `merge under ${CHARM_RULES.smallHandsMaxLoc} lines`,
+    condition: smallHandsCondition,
+  },
+  {
+    id: 'second-pair-of-eyes',
+    name: 'Second Pair of Eyes',
+    rarity: 'uncommon',
+    description: 'The party bonus is worth 60 points instead of 30.',
+    basePower: 0,
+    conditionalPower: 0,
+    conditionLabel: '',
+    effects: { partyPoints: CHARM_RULES.secondPairExtraPartyPoints },
+  },
+  {
+    id: 'familiar-path',
+    name: 'Familiar Path',
+    rarity: 'uncommon',
+    description: '+0.5 Power on any PR in a repository where you have merged 10 times or more.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.familiarPathPower,
+    conditionLabel: `${CHARM_RULES.familiarPathMerges}+ merges in this repo`,
+    condition: familiarPathCondition,
+  },
+  {
+    id: 'hot-potato',
+    name: 'Hot Potato',
+    rarity: 'rare',
+    description: 'Approving a PR under 200 lines within 2 hours of its opening gives +1.5 Power.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.hotPotatoPower,
+    conditionLabel: `approved within ${CHARM_RULES.hotPotatoWindowHours} h`,
+    condition: hotPotatoCondition,
+  },
+  {
+    id: 'grey-beard',
+    name: 'Grey Beard',
+    rarity: 'rare',
+    description: '+1.0 Power on any PR in a repository where you have merged 50 times or more.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.greyBeardPower,
+    conditionLabel: `${CHARM_RULES.greyBeardMerges}+ merges in this repo`,
+    condition: greyBeardCondition,
+  },
+  {
+    id: 'long-lens',
+    name: 'Long Lens',
+    rarity: 'rare',
+    description:
+      '+1.0 Power on an approval or a request for changes on a PR of 500 lines or more, after at least 3 inline comments from you.',
+    basePower: 0,
+    conditionalPower: CHARM_RULES.longLensPower,
+    conditionLabel: `thorough review of ${CHARM_RULES.longLensMinLoc}+ lines`,
+    condition: longLensCondition,
+  },
+  {
+    id: 'jesters-rebase',
+    name: "Jester's Rebase",
+    rarity: 'legendary',
+    description:
+      'Riposte points are multiplied by 4, and changes you request earn a Riposte when the PR merges.',
+    basePower: 0,
+    conditionalPower: 0,
+    conditionLabel: '',
+    effects: { riposte: true },
+  },
+  {
+    id: 'loaded-dice',
+    name: 'Loaded Dice',
+    rarity: 'legendary',
+    description: 'Once a week, one event has its Power replaced by 10.',
+    basePower: 0,
+    conditionalPower: 0,
+    conditionLabel: '',
+    effects: { loadedDice: true },
+  },
+  {
+    id: 'oracle',
+    name: 'Oracle',
+    rarity: 'legendary',
+    description: 'The Boss modifier is revealed a week early and you may ban one.',
+    basePower: 0,
+    conditionalPower: 0,
+    conditionLabel: '',
+    effects: { seesNextMogul: true },
+  },
+];
+
+const BY_ID: ReadonlyMap<string, CharmDefinition> = new Map(
+  CHARMS.map((charm) => [charm.id, charm]),
+);
+
+export function charmDefinition(id: string): CharmDefinition | undefined {
+  return BY_ID.get(id);
+}
+
+/** Definitions of one rarity, in catalogue order. */
+export function charmsOfRarity(rarity: Rarity): CharmDefinition[] {
+  return CHARMS.filter((charm) => charm.rarity === rarity);
+}
+
+/** A fresh held Charm for a definition: one copy, its base Power. */
+export function makeCharm(definition: CharmDefinition): Charm {
+  return {
+    id: definition.id,
+    name: definition.name,
+    rarity: definition.rarity,
+    power: definition.basePower,
+  };
+}
+
+/** Copies stacked in a held Charm (1 when absent). */
+export function copiesOf(charm: Charm): number {
+  return charm.copies ?? 1;
+}
+
+export function hasCharm(player: PlayerState, id: CharmId): boolean {
+  return player.charms.some((charm) => charm.id === id);
+}
+
+/** True when a held Charm carries the rule change `key`, however many copies and whichever Charm it is. */
+export function hasCharmEffect(player: PlayerState, key: CharmEffectKey): boolean {
+  return player.charms.some((charm) => charmDefinition(charm.id)?.effects?.[key] !== undefined);
+}
+
+/** The total of an amount effect across the held Charms: each Charm's amount times its copies. */
+export function sumCharmEffect(player: PlayerState, key: CharmEffectAmountKey): number {
+  return sumBy(
+    player.charms,
+    (charm) => (charmDefinition(charm.id)?.effects?.[key] ?? 0) * copiesOf(charm),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Power
+// ---------------------------------------------------------------------------------------------
+
+function copyLabel(name: string, copies: number): string {
+  return copies > 1 ? `${name} x${copies}` : name;
+}
+
+/**
+ * One Combat Log line per Charm that contributes Power to this event. Without a context (the baseline
+ * Power shown on the Character sheet) only the unconditional Power counts. Charms contributing nothing are
+ * omitted.
+ */
+export function charmPowerLines(player: PlayerState, ctx?: PowerContext): BreakdownLine[] {
+  const lines: BreakdownLine[] = [];
+  for (const charm of player.charms) {
+    const copies = copiesOf(charm);
+    const definition = charmDefinition(charm.id);
+    const fired =
+      ctx !== undefined && definition?.condition?.(ctx.event, player, ctx.pr, ctx.now) === true;
+    const extra = fired ? definition.conditionalPower * copies : 0;
+    const value = tidy(charm.power * copies + extra);
+    if (value !== 0) {
+      const name = copyLabel(charm.name, copies);
+      lines.push({
+        label: fired ? `${name} (${definition.conditionLabel})` : name,
+        value,
+        kind: 'power',
+      });
+    }
+  }
+  return lines;
+}
+
+/** True when Loaded Dice is held and this week's charge is unspent. */
+export function loadedDiceReady(player: PlayerState): boolean {
+  return hasCharmEffect(player, 'loadedDice') && !player.week.loadedDiceUsed;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Points rules held by Charms
+// ---------------------------------------------------------------------------------------------
+
+/** Points of the party bonus: 30, plus the party points of each Charm held per copy (30 for Second Pair of Eyes). */
+export function partyBonusPoints(player: PlayerState): number {
+  return POINTS.party + sumCharmEffect(player, 'partyPoints');
+}
+
+/** Multiplier on Riposte points: 4 with Jester's Rebase, otherwise 1. */
+export function riposteMultiplier(player: PlayerState): number {
+  return hasCharmEffect(player, 'riposte') ? CHARM_RULES.jestersRiposteMultiplier : 1;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slots, stacking and selling (Requirements 9.1 and 8.4)
+// ---------------------------------------------------------------------------------------------
+
+/** Charm slots in use, counting the one the Founder's Board is holding. */
+export function charmSlotsUsed(player: PlayerState): number {
+  return player.charms.length + (player.moguls.benched === null ? 0 : 1);
+}
+
+export function freeCharmSlots(player: PlayerState): number {
+  return Math.max(0, charmSlotCount(player) - charmSlotsUsed(player));
+}
+
+/** Gold a Charm of this rarity sells for: half its shop price, rounded down. */
+export function charmSellPrice(rarity: Rarity): number {
+  return Math.floor(CHARM_PRICE_BY_RARITY[rarity] * SHOP.sellFraction);
+}
+
+/** A Charm leaving the player for gold. The caller credits `proceeds` through economy.ts. */
+export interface CharmSale {
+  charmId: string;
+  name: string;
+  rarity: Rarity;
+  /** Gold the sale returns. */
+  proceeds: number;
+  /** `duplicate`: a third copy sold on arrival; `player`: the player chose to sell. */
+  reason: 'duplicate' | 'player';
+}
+
+function saleOf(charm: Charm, reason: CharmSale['reason']): CharmSale {
+  return {
+    charmId: charm.id,
+    name: charm.name,
+    rarity: charm.rarity,
+    proceeds: charmSellPrice(charm.rarity),
+    reason,
+  };
+}
+
+export type CharmOutcome = 'added' | 'stacked' | 'auto_sold';
+
+export type AddCharmResult = Result<
+  { player: PlayerState; outcome: CharmOutcome; sale: CharmSale | null },
+  'no_free_slot'
+>;
+
+/** Copies of a Charm the Founder's Board is holding for the player (0 when it holds another Charm). */
+function benchedCopies(player: PlayerState, id: string): number {
+  const benched = player.moguls.benched;
+  return benched !== null && benched.charm.id === id ? copiesOf(benched.charm) : 0;
+}
+
+/**
+ * Give the player a Charm. A Charm they already hold stacks into the same slot once (two copies); a third
+ * copy is auto-sold, returned as `sale` rather than credited here. Copies the Founder's Board is holding
+ * count toward the two, so a bench can never be used to hold three. A new Charm needs a free slot. A
+ * stacked copy adds the held Charm's own per-copy Power.
+ */
+export function addCharm(player: PlayerState, charm: Charm): AddCharmResult {
+  const index = player.charms.findIndex((held) => held.id === charm.id);
+  const heldCopies = index >= 0 ? copiesOf(player.charms[index] as Charm) : 0;
+  if (heldCopies + benchedCopies(player, charm.id) >= MAX_CHARM_COPIES) {
+    return { ok: true, player, outcome: 'auto_sold', sale: saleOf(charm, 'duplicate') };
+  }
+  if (index >= 0) {
+    const held = player.charms[index] as Charm;
+    const charms = player.charms.map((entry, at) =>
+      at === index ? { ...held, copies: copiesOf(held) + 1 } : entry,
+    );
+    return { ok: true, player: { ...player, charms }, outcome: 'stacked', sale: null };
+  }
+  if (freeCharmSlots(player) === 0) {
+    return { ok: false, error: 'no_free_slot' };
+  }
+  return {
+    ok: true,
+    player: { ...player, charms: [...player.charms, { ...charm, copies: 1 }] },
+    outcome: 'added',
+    sale: null,
+  };
+}
+
+/**
+ * Put a Charm the Founder's Board is returning back among the player's Charms. The Board kept its slot, so
+ * it needs no free slot. If the player holds the same Charm by now (a copy bought while it was away), the
+ * two merge into one slot of at most `MAX_CHARM_COPIES`, keeping the higher per-copy Power; the copies
+ * beyond the cap are returned as `sale` (the proceeds of all of them), auto-sold like a third copy anywhere
+ * else, for the caller to credit through economy.ts.
+ */
+export function restoreCharm(
+  player: PlayerState,
+  charm: Charm,
+): { player: PlayerState; sale: CharmSale | null } {
+  const index = player.charms.findIndex((held) => held.id === charm.id);
+  if (index < 0) {
+    return { player: { ...player, charms: [...player.charms, charm] }, sale: null };
+  }
+  const held = player.charms[index] as Charm;
+  const total = copiesOf(held) + copiesOf(charm);
+  const copies = Math.min(MAX_CHARM_COPIES, total);
+  const merged: Charm = { ...held, power: Math.max(held.power, charm.power), copies };
+  const surplus = total - copies;
+  return {
+    player: {
+      ...player,
+      charms: player.charms.map((entry, at) => (at === index ? merged : entry)),
+    },
+    sale:
+      surplus === 0
+        ? null
+        : { ...saleOf(charm, 'duplicate'), proceeds: charmSellPrice(charm.rarity) * surplus },
+  };
+}
+
+/** Sell one copy of a held Charm (the whole slot when it is the last copy). */
+export function sellCharm(
+  player: PlayerState,
+  charmId: string,
+): Result<{ player: PlayerState; sale: CharmSale }, 'not_held'> {
+  const index = player.charms.findIndex((held) => held.id === charmId);
+  if (index < 0) {
+    return { ok: false, error: 'not_held' };
+  }
+  const held = player.charms[index] as Charm;
+  const charms =
+    copiesOf(held) > 1
+      ? player.charms.map((entry, at) =>
+          at === index ? { ...held, copies: copiesOf(held) - 1 } : entry,
+        )
+      : player.charms.filter((_, at) => at !== index);
+  return { ok: true, player: { ...player, charms }, sale: saleOf(held, 'player') };
+}
+
+/**
+ * True when Loaded Dice fires on this event: it is held, this week's charge is unspent, and there is an
+ * event (a context). The baseline Power calculation never spends it.
+ */
+export function loadedDiceFires(player: PlayerState, ctx?: PowerContext): boolean {
+  return ctx !== undefined && loadedDiceReady(player);
+}
