@@ -146,12 +146,12 @@ Cost scales with installed-repo activity, not signed-in users. Dropping unlinked
 
 **ADR-9 Pure, shared scorer.** The same TypeScript runs in Lambda (authoritative) and the browser (for previews and tests), so the Combat Log breakdown is guaranteed to match what was stored.
 
-**ADR-10 UTC weeks.** Simplest correct behaviour; players in UTC−8 see Monday start Sunday afternoon. Documented, revisit in v1.1 with a timezone setting (needed for Night Owl anyway).
+**ADR-10 UTC weeks.** Simplest correct behaviour; players in UTC−8 see Monday start Sunday afternoon. Documented, revisit in v1.1 with a timezone setting (needed for Lantern and the time-of-day Feats anyway).
 
 ---
 
 ## 8. Open items for the implementer to decide (low stakes)
 
 1. Svelte 5 vs vanilla TS for the client. Research leaned Svelte for the number of screens; either satisfies the requirements. Pick one in task 1 and don't revisit.
-2. SAM vs CDK. SAM is lighter for two Lambdas and one table; CDK if you prefer TypeScript throughout. Requirements say "one SAM template"; CDK synthesising to one template is acceptable.
+2. SAM vs CDK. SAM is lighter for two Lambdas and one table; CDK if you prefer TypeScript throughout. **Resolved in task 25: CDK**, because the owner's landing zone grants deploys only through the CDK bootstrap roles (docs/decisions.md). Requirement 12.1 now says "one CDK stack".
 3. Whether the Flaky Test Wraith threshold (≥4 `synchronize` pushes) counts force-pushes separately. Not worth distinguishing in v1.

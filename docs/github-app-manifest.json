@@ -1,0 +1,17 @@
+{
+  "name": "Mergescape",
+  "url": "https://github.com/OWNER/mergescape",
+  "description": "A read-only App for the Mergescape idle RPG. It reads pull request metadata (counts and timestamps) and can never change anything on GitHub.",
+  "hook_attributes": {
+    "url": "https://INGEST-ID.lambda-url.REGION.on.aws/",
+    "active": true
+  },
+  "callback_urls": ["https://API-ID.lambda-url.REGION.on.aws/auth/callback"],
+  "public": true,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "pull_requests": "read",
+    "metadata": "read"
+  },
+  "default_events": ["pull_request", "pull_request_review", "pull_request_review_comment"]
+}

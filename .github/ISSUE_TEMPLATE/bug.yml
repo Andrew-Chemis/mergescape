@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in Mergescape does not work the way it should.
+title: '[bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two things before you start:
+
+        - **Security problems are not public issues.** If you think you found a vulnerability, read [SECURITY.md](../blob/main/SECURITY.md) and report it privately.
+        - **Keep private material out of this form.** Do not paste tokens, webhook payloads, code, pull request titles or comments, or private repository names. Pull request numbers and numeric ids are enough.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see? Include any message the page showed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps are best. If a Combat Log row is involved, say what the breakdown showed.
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is it
+      options:
+        - Client (a screen or a control)
+        - Scoring (a number in the Combat Log)
+        - Backend (sign-in, webhooks, export, delete, badge)
+        - Infrastructure or deployment
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where are you running it
+      options:
+        - The hosted game
+        - My own deployment
+        - Fixture mode (the client with demo data)
+        - Local development
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and system
+      description: For example "Firefox 140 on Windows 11". Add the commit if you run from source.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true
+        - label: I have not pasted tokens, code, titles, comments or private repository names.
+          required: true

@@ -1,0 +1,7 @@
+# cfn-lint settings for the template that `cdk synth` writes. Run from packages/infra: `cfn-lint`.
+templates:
+  - dist/cdk.out/Mergescape.template.json
+ignore_checks:
+  # "DependsOn already enforced by a GetAtt": CDK writes the function's role into DependsOn next to the Role
+  # property, for every Lambda function it synthesizes. It is redundant, not wrong, and not ours to change.
+  - W3005

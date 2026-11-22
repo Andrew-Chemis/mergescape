@@ -1,0 +1,63 @@
+name: Feature or Charm idea
+description: Suggest a Charm, Pledge, Feat, gear piece, Expedition or any other feature.
+title: '[idea] '
+labels: ['idea']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome, especially jokes with a healthy habit behind them. Before you write, skim the [game design](../blob/main/.kiro/specs/mergescape/game-design.md) section "Anti-patterns we refuse": no energy or stamina, no daily login rewards, no limited-time FOMO, no real-money purchases, no notifications, no leaderboard and no manager view.
+
+        Use invented names. Please do not name real people or companies.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of idea is it
+      options:
+        - Charm
+        - Pledge
+        - Feat
+        - Gear or pet
+        - Expedition region or loot
+        - Mogul (an invented caricature)
+        - Screen or interface
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Working name
+      description: Invented, and fine to change later.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What does it do, and what does it look or read like?
+    validations:
+      required: true
+  - type: textarea
+    id: habit
+    attributes:
+      label: What real habit does it reward or nudge
+      description: The best Charms and Feats are a joke and a good habit at once. Say how it could backfire, too.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: What data would it need
+      description: Can it be worked out from the stored fields alone (counts, ids and timestamps, see Requirement 3)? If you think it needs more, say what and why.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: It uses invented names and no real people, companies, logos or GitHub logins.
+          required: true
+        - label: It does not involve money, notifications, a leaderboard or a manager view.
+          required: true

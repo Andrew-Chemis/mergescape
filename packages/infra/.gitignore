@@ -1,0 +1,3 @@
+# Synthesized template and bundled Lambda assets (cdk.json "output"). The root tooling already ignores dist/.
+dist/
+cdk.context.json

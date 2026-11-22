@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+cdk.out
+pnpm-lock.yaml
+
+# Spec material and mocks are authored outside the code toolchain.
+.kiro
+SPEC.md
+mergescape-mocks.html

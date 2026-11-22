@@ -1,5 +1,5 @@
 # Mergescape — an idle RPG powered by your real code review work
-n> Canonical location for the implementer: `.kiro/specs/mergescape/` (requirements.md, research.md, design.md, tasks.md). This file is the same content as design.md.
+n> Canonical location for the implementer: `.kiro/specs/mergescape/` (requirements.md, game-design.md, research.md, design.md, tasks.md). This file is the same content as design.md.
 
 *Spec v0.1 · 2026-11-06 · decisions made deliberately; change any of them, but each has a reason.*
 
@@ -40,7 +40,7 @@ Merged PR #412 (+318 / -97, 2 reviewers)
         +  52  size (log-scaled)
         +  30  reviewed by another human
   ────────────
-         182  × Power 3.5  (Rubber Duck +1.5, Night Owl +1.0)
+         182  × Power 3.5  (Rubber Duck +1.5, Lantern +1.0)
          637  × Zone 41.6  (Level 23)
   ────────────
   26,499 XP   → Smithing 24!
@@ -71,21 +71,24 @@ Deliberately **not** requested: Contents, Issues, Discussions, Members, write an
 
 ### 3.3 Linking a player to events
 
-1. Player clicks **Sign in with GitHub** → App user-authorization flow (`/login/oauth/authorize` with the App's client id, `state` nonce stored server-side, code exchanged in Lambda). We store the numeric GitHub `user.id` and `login`, nothing else from the profile.
+1. Player clicks **Sign in with GitHub** → App user-authorization flow (`/login/oauth/authorize` with the App's client id, `state` a signed nonce-and-expiry token that is also bound to the browser by a cookie, so `/auth/login` needs no database write; code exchanged in Lambda). We store the numeric GitHub `user.id` and `login`, nothing else from the profile.
 2. Player installs the App on the repos they want counted (GitHub's install page; we deep-link to it after sign in).
 3. Every webhook carries `sender.id`, `pull_request.user.id`, `review.user.id`. An event credits a player only if that numeric id matches a signed-in player **and** the installation is one they can see (installation-to-user mapping stored on `installation` events, refreshed on login via `GET /user/installations`).
 
 Nothing is credited for repos without the App. If a teammate installs it on a shared repo, your reviews there count once you sign in; theirs never show on your profile.
+
+**PR metadata vs. player credit.** `PR#` items are shared facts, not credit. They are written when the PR's author, merger or the acting reviewer is a linked player, and they record every *human* review on that PR as `(reviewer_id, state)` even when the reviewer has never signed in, because the party bonus, solo-kill and Riposte rules depend on knowing a review happened. What is dropped for unlinked actors is the scoring: no `EVT#` row, no XP. Bot reviews are never recorded.
 
 ### 3.4 Stored fields (complete list)
 
 ```
 PR:      installation_id, repo_id, repo_private(bool), pr_number, author_id,
          opened_at, merged_at|closed_at, merged(bool), merged_by_id,
-         additions, deletions, changed_files, commits, review_round_count,
-         reviewer_ids[], draft(bool), base_ref_is_default(bool)
-Review:  pr_key, reviewer_id, state(APPROVED|CHANGES_REQUESTED|COMMENTED),
+         additions, deletions, changed_files, commits, review_round_count, sync_count,
+         draft(bool), base_ref_is_default(bool)
+Review:  pr_key, reviewer_id, reviewer_is_bot(bool), state(APPROVED|CHANGES_REQUESTED|COMMENTED),
          submitted_at, inline_comment_count
+(Per-reviewer caps are derived from the review records, not stored separately.)
 ```
 
 No titles, bodies, file paths, or comment text. Repo *names* are shown to the owner only, fetched live from GitHub when the owner is logged in (never persisted for private repos). The numeric `repo_id` is enough for the game.
@@ -116,23 +119,23 @@ Therefore an **agentic power user** is modelled as ≈10–15 merged PRs/week, 1
 | Event | Points | Skill credited | Notes / caps |
 |---|---|---|---|
 | PR opened (non-draft, to default branch) | 10 | Smithing | Max 5 opens/day earn points; drafts earn on `ready_for_review` |
-| PR merged (yours) | 90 | Smithing | Plus size points below; `merged_by == author` and zero other reviews → ×0.5 ("solo kill") |
+| PR merged (yours) | 90 | Smithing | Plus size points below; merged by the credited player (or by a bot on their behalf) with zero other human reviews → ×0.5 ("solo kill"). The credited player is the PR's author, or the human who merged a bot's PR |
 | Size points on merge | `round(40 · log2(1 + (adds+dels)/50))`, cap 120 | Smithing | 50 LoC → 40, 300 → 112, 1000+ → 120 (cap) |
 | Party bonus | +30 per merge | Smithing | ≥1 APPROVED review from a different human account |
 | Review: APPROVED or CHANGES_REQUESTED | 40 | Vigilance | Max 2 scoring reviews per PR per reviewer (re-review counts once) |
 | Review: COMMENTED | 15 | Vigilance | Max 1 per PR per reviewer |
 | Inline review comment | 5 | Oratory | Cap 10 per PR per reviewer (50 points) |
-| Verified kill | +25 | Vigilance | A PR you approved later merges |
+| Verified kill | +25 | Vigilance | A PR you approved later merges, when you are neither its author nor the human credited for the merge (the merger of a bot's PR earns the merge, not a kill on top of it) |
 | Riposte | +15 | Smithing | Your PR received CHANGES_REQUESTED and then merged (you addressed feedback) |
-| PR closed unmerged | 0 | — | No penalty; see Boss modifiers for flavour |
+| PR closed unmerged | 0 | — | Never penalised anywhere: closing a PR is healthy |
 | Daily first-event | +20 | Endurance | Once per UTC day |
 | Weekly streak | +50 × consecutive weeks (cap 10) | Endurance | Awarded at run end if ≥1 merged or ≥3 reviews that week |
 
-Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `Bot`; PRs to non-default branches are 50% (stacked-PR friendly, not zero); forks count normally.
+Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `Bot`; PRs to non-default branches are 50% (stacked-PR friendly, not zero; a payload that does not name its base branch is treated as non-default); forks count normally.
 
 ### 4.3 Power
 
-`Power = 1 + Σ(active Charm powers) + Pledge bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms for Power ≈ 2.5–3.5. Charms are collected via weekly rewards (section 6). Power is capped at 8.
+`Power = 1 + Σ(active Charm powers) + Σ(equipped gear power incl. set bonus) + Pledge bonus + Feat bonus`. New characters have Power 1. A typical 6-month character holds 4–6 Charms and a Silver or Mithril set for Power ≈ 3–4.5. Budget: Charms up to +4, gear up to +2.25, Pledges +1, Feats +0.5. Each source is clamped to its budget, and the Combat Log shows the clamp as a "Charm cap", "Gear cap", "Pledge cap" or "Feat cap" line. The sources alone therefore reach at most 8.75 (1 + 4 + 2.25 + 1 + 0.5); a Mogul's Power line can take it past that, and Power is capped at 9. See game-design.md §7.1.
 
 ### 4.4 Zone multiplier (Diablo scaling)
 
@@ -145,9 +148,9 @@ Excluded entirely: any account whose login ends in `[bot]` or whose `type` is `B
 | Situation | Points | Power | Level | XP |
 |---|---|---|---|---|
 | First merged PR, 120 LoC, solo | (90+71)×0.5 = 80 | 1 | 1 | 80 × 1 × 3.03 = **242** (48% to level 2) |
-| Merged 300 LoC PR, approved by teammate, lvl 23 | 90+112+30 = 232 | 3.5 | 23 | 232×3.5×162.6 = **132,000** |
-| Approve a PR, lvl 23 | 40 | 3.5 | 23 | **22,760** |
-| Approve + 6 inline comments, lvl 60 | 40 + 30 | 5 | 60 | 70×5×721 = **252,000** (next level needs 11M) |
+| Merged 300 LoC PR, approved by teammate, lvl 23 | 90+112+30 = 232 | 3.5 | 23 | 232×3.5×161.56 = **131,187** |
+| Approve a PR, lvl 23 | 40 | 3.5 | 23 | 40×3.5×161.56 = **22,618** |
+| Approve + 6 inline comments, lvl 60 | 40 + 30 | 5 | 60 | 70×5×718.67 = **251,529** (next level needs 11M) |
 
 ---
 
@@ -203,9 +206,9 @@ Monday 00:00 UTC a new **Run** begins on a 3-act map. Your real events move you 
 
 | Act | Window | Target | Clear it → |
 |---|---|---|---|
-| Act I — **Scout** | Mon–Tue | 60% of your 8-week median weekly XP | Gold + Shop visit |
-| Act II — **Raid** | Wed–Thu | 100% | Gold + Shop visit + 1 free Pledge pack |
-| Act III — **Boss** | Fri–Sun | 150%, with a Boss modifier | Gold ×3 + Shop visit + **Renown +1** + Legendary offer every 4th Renown point |
+| Act I — **Scout** | Mon–Tue | 60% of your 8-week median weekly XP | Gold 20 + Shop visit |
+| Act II — **Raid** | Wed–Thu | 100% | Gold 40 + Shop visit + 1 free Pledge pack |
+| Act III — **Boss** | Fri–Sun | 150%, with a Boss modifier | Gold 100 + Shop visit + **Renown +1** + Legendary offer every 4th Renown point |
 
 New players use a flat 2,000 XP target until they have 3 weeks of history. Targets never exceed 2× the previous week's actual, so a vacation week doesn't wreck you. Missing a target costs nothing; you just don't get that act's gold and shop visit, and the run ends there.
 
@@ -217,29 +220,32 @@ Act III's boss is one of six **Moguls**, parody archetypes of tech executives. T
 
 | Mogul | Look | Modifier | The joke |
 |---|---|---|---|
-| **The Rocket Man** | Silver flight suit, tiny rocket on his back, 3 am energy | *Hardcore week.* Deletions count double toward size points; events 22:00–06:00 local get +1 Power; any PR closed unmerged costs 5 gold | "The best part is no part." Ships at night, deletes code, fires people on a whim |
-| **The Leather Jacket** | Black leather jacket, grey hair, holding a glowing green brick | *The more you merge, the more you save.* Each successive merge this week adds +0.1 Power (cap +1.5); a PR closed unmerged resets the chain | Keynote catchphrase; compounding hardware demand |
+| **The Rocket Man** | Silver flight suit, tiny rocket on his back, 3 am energy | *Hardcore week.* Deletions count double toward size points; merges with net negative lines get +1 Power | "The best part is no part." Deletes code, ships rockets |
+| **The Leather Jacket** | Black leather jacket, grey hair, holding a glowing green brick | *The more you merge, the more you save.* Each successive reviewed merge this week adds +0.1 Power (cap +1.5); a solo merge resets the chain | Keynote catchphrase; compounding hardware demand |
 | **The Turtleneck** | Black turtleneck, round glasses, jeans, one hand raised | *One more thing.* PRs under 100 LoC score ×3; over 400 LoC score ×0.5; an approval you give with exactly one inline comment is a "design review" and scores ×2 | Obsession with small, perfect things |
-| **The Hoodie** | Grey tee, hoodie, VR goggles pushed up on forehead | *Move fast.* Only PRs merged within 24 hours of opening score; those score ×2. Everything else goes to the Metaverse (0 XP) | Move fast; nobody is in the metaverse |
-| **The Founder** | Grey crewneck, serene smile, cradling a glowing orb | *Non-profit to for-profit.* Points ×0.5 but gold ×4 all week. On Wednesday the Board "removes" one random Charm; it returns on Friday with +0.25 Power | The orb is "AGI". The Charm comes back stronger |
-| **The Two-Pizza Boss** | Bald, open-collar shirt, stack of pizza boxes, laughing | *Two-pizza teams.* Merges with ≥2 distinct human reviewers score ×2.5; solo merges score 0; party bonus points ×3 | Teams small enough to feed with two pizzas; also, day one |
+| **The Hoodie** | Grey tee, hoodie, VR goggles pushed up on forehead | *Move fast.* PRs merged within 48 hours of their first review score ×2; everything else ×0.75 and goes to the Metaverse | Move fast; nobody is in the metaverse |
+| **The Founder** | Grey crewneck, serene smile, cradling a glowing orb | *Non-profit to for-profit.* Points ×0.5 but gold ×4 all week. On Wednesday the Board "removes" one random Charm; it returns on Friday with +0.25 Power (a Charm gains at most +1.0 over its base this way; its slot stays reserved, and a copy bought while it is away merges into it on return, up to two copies, the surplus sold) | The orb is "AGI". The Charm comes back stronger |
+| **The Two-Pizza Boss** | Bald, open-collar shirt, stack of pizza boxes, laughing | *Two-pizza teams.* Merges with ≥2 distinct human reviewers score ×2.5; solo merges ×0.25; party bonus points ×3 | Teams small enough to feed with two pizzas; also, day one |
 
-Modifiers are revealed Monday so you can plan Pledges around them. The former dungeon bosses (Release Dragon, Silent Monolith) are now **elites** that can appear in Act II.
+Modifiers are revealed Monday so you can plan Pledges around them. No modifier ever penalises closing a PR unmerged or rewards the hour of day (see game-design.md §8.3). The former dungeon bosses (Release Dragon, Silent Monolith) are now **elites** that can appear in Act II.
 
 A one-line disclaimer sits in the Bestiary: *"The Moguls are fictional caricatures. Any resemblance to persons living, dead or on a podcast is satire."*
 
 ### 6.3 Charms (Balatro Jokers)
 
-Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price. Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
+Persistent passives; you hold up to 5 (a 6th slot comes from the Charm Belt voucher). Rarity: Common (+0.25 Power), Uncommon (+0.5), Rare (+1.0), Legendary (+2.0 or a rule change). Twelve Charms, three of each rarity (Whetstone, Familiar Path and Long Lens were added by the content pass of task 24 under the same audit). Charms are **bought in the Shop** (6.5) or granted by a Boss clear; duplicates stack once, then sell for half price (a copy the Founder's Board is holding counts toward the two). Selling is always possible, as in Balatro, so a build can be re-rolled over a few weeks.
 
 | Charm | Rarity | Effect |
 |---|---|---|
 | Rubber Duck | Common | +0.25 Power; +0.25 more on reviews with ≥3 inline comments |
-| Night Owl | Common | +0.5 Power on events 22:00–06:00 local |
+| Lantern | Common | +0.5 Power on the first scored event of each day |
+| Whetstone | Common | +0.5 Power on an approval, backed by ≥1 inline comment from you, of a PR whose author is known to have fewer merges than you (an author who is not a player has no known count and does not qualify) |
 | Small Hands | Uncommon | Merges under 150 LoC gain +0.75 Power |
 | Second Pair of Eyes | Uncommon | Party bonus points 30 → 60 |
-| Hot Potato | Rare | Approving a PR within 2 hours of its open: +1.5 Power |
+| Familiar Path | Uncommon | +0.5 Power on any PR to a repo you've merged ≥10 times in |
+| Hot Potato | Rare | Approving a PR under 200 lines within 2 hours of its open: +1.5 Power |
 | Grey Beard | Rare | +1.0 Power on any PR to a repo you've merged ≥50 times in |
+| Long Lens | Rare | +1.0 Power on an approval or a request for changes on a PR of ≥500 lines, after ≥3 inline comments from you |
 | Jester's Rebase | Legendary | Riposte points ×4; CHANGES_REQUESTED reviews you give also grant Riposte |
 | Loaded Dice | Legendary | Once per week, one event's Power is replaced by 10 |
 | Oracle | Legendary | The Boss modifier is revealed a week early and you may ban one |
@@ -250,14 +256,20 @@ Your deck starts with 5 basic Pledges. Each Monday you draw 5 and may **play up 
 
 | Pledge | Contract | Bonus |
 |---|---|---|
-| Strike | Merge 3 PRs this week | +300 points on the 3rd |
+| Strike | Merge 3 PRs this week that score in full (default branch, not a solo kill) | +300 points on the 3rd |
 | Defend | Submit 5 scoring reviews | +1 Power on all reviews for the rest of the week |
 | Big Game Hunter | Review a PR ≥ 800 LoC | That review ×3 |
-| Mentor | Approve 2 PRs from authors with fewer merges than you | +0.5 Power until Sunday |
-| Clean Sweep | Zero PRs closed unmerged this week | Chest upgrade |
+| Mentor | Approve 2 PRs from authors known to have fewer merges than you | +0.5 Power until Sunday |
+| Tidy | Merge 3 PRs each under 150 lines that score in full (default branch, not a solo kill) | +200 points on the 3rd |
 | Pair Up (Strike+) | Merge 3 PRs each with party bonus | +600 points |
+| Fine Comb | Submit 3 scoring reviews, each after ≥3 inline comments from you on that PR | +0.5 Power on all reviews for the rest of the week |
+| Well Reviewed | Merge 2 PRs that each drew ≥3 inline comments from a reviewer | +250 points on the 2nd |
 
-Cards upgrade (Strike → Strike+) when chosen as a Boss reward. Deck cap 20; remove cards at the Town shrine for gold.
+Cards upgrade (Strike → Strike+) when chosen as a Boss reward; Pledge packs offer the base cards only, never an upgraded one. Deck cap 20; remove cards at the Town shrine for gold.
+
+A flat point bonus is halved like the merge that completes it (off the default branch, solo kill), so it can never pay more than the merge itself scores. A PR whose size the app never saw (a review payload carries no size) satisfies no "under N lines" rule (Small Hands, Hot Potato, Tidy, Fast Hands, the Turtleneck), and an author whose merge count is unknown satisfies no "fewer merges than you" rule (Whetstone, Mentor).
+
+Fine Comb and Well Reviewed (task 24) reward reviews that were read and PRs that were read, never volume or speed; like every Pledge and Charm they follow the incentive audit of game-design.md §8.3.
 
 ### 6.5 Gold and the Shop (Balatro's shop, Mergescape's Grizzled Reviewer)
 
@@ -278,6 +290,18 @@ Design notes:
 * Overclock is the only voucher that touches XP math directly and is deliberately tiny; it exists so late-game players have something to save for.
 * Prices are tuned so a power user (≈1,200 gold/week) can afford one Rare or two Uncommons per week; a casual player (≈300/week) buys a Common or saves for a voucher. Balatro's tension (buy now vs. earn interest) is intact.
 * Everything in the shop is bought with earned gold. There is no real-money store in any version of this design.
+
+### 6.6 Supplies and Expeditions (summary; full rules in game-design.md §6)
+
+Every scored event also drops **supplies** (Ore, Timber, Lore, Ink, Provisions, Flux), independent of Power, banked without cap. The player spends Provisions to send the character on an **expedition** to a region for 4/12/24/48 real hours; on return a seeded loot roll yields materials, gear, Charm packs, rarely pets and uniques. Regions unlock by Renown: Koko Woods (0), Crossroads of Wix (2), Orrl Falls (8), Silverhall (16), Koko Deep Woods (24), Mazu Deep (32), Quu Spire (48), The Garbage Collector (64). Expeditions are the game's only timer and never block scoring.
+
+### 6.7 The Forge and gear (summary; full rules in game-design.md §7)
+
+Five gear slots (Weapon, Body, Cape, Trinket, Pet) in tiers Leather → Iron → Silver → Mithril → Rune → Dragon, each adding +0.05 to +0.40 Power, +0.25 for a full set, one affix per piece (Keen, Stout, Quick, Lucky, Hoarder). Three Town stations (Forge, Loom, Scriptorium) turn supplies into gear over 2 to 24 hours, one job each, collected whenever. Pets are cosmetic with one small passive.
+
+### 6.8 Feats (summary; full list in game-design.md §8)
+
+Measurement achievements over real work: Scale (a PR touching ≥1,000 files, 1M lines added in 30 days, −100k net lines lifetime), Craft (50 sub-50-line approved merges, 100 Ripostes), Endurance, World, and hidden humour entries. Scale Feats count only PRs approved by another human. Rewards are titles, unique gear or pets, and for a few a +0.1 Power bonus capped at +0.5 total. Never gold or XP. Three Feats can be pinned to the character and badge.
 
 ---
 
@@ -330,11 +354,14 @@ A 32×32 pixel sprite in OSRS proportions. Starts in a brown tunic. Visual tiers
 | 1 | **Landing** | Explain + sign in | Hero sprite, 3-step "Sign in → Install → Merge", privacy promise, sample log |
 | 2 | **Town** (home) | Daily glance | Character + biome, act progress bar (Scout / Raid / Boss), "Last kill" card, Shop-open banner, Pledge hand |
 | 2b | **Shop** | Spend gold | Balatro layout: 2 Charms, 2 Packs, 1 Voucher, Re-roll, Sell; gold and interest shown top-right |
+| 2c | **Expedition** | Send and collect | Region map gated by Renown, duration picker with Provisions cost, return timer, loot reveal |
+| 2d | **Forge** | Craft | Three stations with job slots, recipes from satchel, gear inventory and equip, affix application |
+| 2e | **Feats** | Collection | Visible Feats with progress, hidden as ???, pin up to three |
 | 3 | **Combat Log** | Verify the math | Reverse-chron list; each row = monster icon, repo (owner only), points × power × zone, XP; filter by skill/repo/week |
 | 4 | **Character** | Progress | D2-style XP bar with exact numbers, 4 skill panels OSRS-style, Vocation, equipped Charms (5 slots), gear tier preview |
 | 5 | **Run Map** | The week | 3-act node map (StS), current node pulsing, boss modifier card, Pledges in play |
 | 6 | **Bestiary** | Collection | Grid of monsters, kill counts, "first seen" |
-| 7 | **Settings** | Trust | Installations list (link to GitHub to add/remove), export JSON, delete character, timezone for Night Owl |
+| 7 | **Settings** | Trust | Installations list (link to GitHub to add/remove), export JSON, delete character, timezone for Lantern and the Hoodie |
 | 8 | **Share card / Badge** | Growth | `/badge/<login>.svg` (level, renown, vocation) for READMEs; PNG share card |
 
 Navigation: left rail on desktop (Town, Log, Character, Map, Bestiary, Settings), bottom tabs on mobile. Dark mode default (dungeon), light "parchment" mode.
@@ -351,7 +378,7 @@ Navigation: left rail on desktop (Town, Log, Character, Map, Bestiary, Settings)
 
 * No installations yet → Town shows the Maintainer pointing at the install button.
 * Event for an un-linked user → silently dropped (counted in metrics, not shown).
-* Webhook replay / duplicate → idempotent on `X-GitHub-Delivery`.
+* Webhook replay / duplicate → idempotent on `X-GitHub-Delivery` and on the hash of the signed body; a delivery that failed half way is finished by its redelivery, never credited twice.
 * Private repo → monster shows "a private repo" unless you're logged in as owner.
 
 ---
@@ -374,7 +401,7 @@ Browser (GitHub Pages SPA) ──HTTPS──▶ Lambda `api` (Function URL) ─�
 | Database | DynamoDB, **provisioned 5 RCU / 5 WCU** (not on-demand, which bills from request one) | 25 RCU/WCU + 25 GB always free |
 | Secrets | SSM Parameter Store SecureString (App private key, webhook secret, OAuth client secret, JWT key) | Standard params free |
 | Logs | CloudWatch, 14-day retention | 5 GB free |
-| IaC | One AWS SAM / CDK stack, deployed from GitHub Actions via OIDC (no long-lived AWS keys) | Free |
+| IaC | One AWS CDK v2 stack (TypeScript), deployed from GitHub Actions via OIDC and the landing zone's CDK bootstrap roles (no long-lived AWS keys) | Free |
 | Domain | `*.github.io` + `*.lambda-url.*.on.aws` | $0 (a custom domain adds ~$0.50/month for Route 53; optional) |
 
 Expected monthly cost for one user, and even a few hundred: **$0.00**. Set a $1 AWS budget alarm anyway.
@@ -388,10 +415,13 @@ Scheduled work (weekly run roll-over, auto-picks) runs as an EventBridge rule �
 | `USER#<gh_id>` | `PROFILE` | login, created, level cache, skill xp, charms[], deck[], gold, renown, settings |
 | `USER#<gh_id>` | `EVT#<iso_ts>#<delivery_id>` | one scored event (the Combat Log row) |
 | `USER#<gh_id>` | `WEEK#<yyyy-ww>` | run state: act, xp this week, act targets, mogul, pledges, shop stock + re-roll count |
+| `USER#<gh_id>` | `EXPEDITION#<iso_ts>` | region, duration, sent_at, returns_at, seed, collected(bool), loot[] once rolled |
+| `USER#<gh_id>` | `JOB#<station>` | current station job: recipe, started_at, done_at, collected(bool) |
+| `USER#<gh_id>` | `FEAT#<feat_id>` | unlocked_at, unlocking event key, pinned(bool) |
 | `PR#<repo_id>#<number>` | `META` | PR metadata from 3.4 (shared across users) |
 | `INSTALL#<installation_id>` | `META` | account id, repo ids, suspended flag |
-| `DELIVERY#<X-GitHub-Delivery>` | — | TTL 7 days, idempotency guard |
-| `STATE#<nonce>` | — | OAuth state, TTL 10 min |
+| `DELIVERY#<X-GitHub-Delivery>` | — | TTL 7 days, idempotency guard: `status` (`processing` with a 30 s lease, or `done`) and the ledger of what the delivery decided to credit, so a redelivery finishes it. `DELIVERY#body-<sha256>` guards the signed body the same way |
+| `STATE#<nonce>` | — | an OAuth state that has been used (single use), TTL 10 min; the state itself is signed, not stored |
 
 GSI1: `GSI1PK=LOGIN#<login>` for badge lookups.
 
@@ -402,7 +432,8 @@ GSI1: `GSI1PK=LOGIN#<login>` for badge lookups.
 | Threat | Mitigation |
 |---|---|
 | Forged webhooks | Verify `X-Hub-Signature-256` HMAC with timing-safe compare before parsing; reject if absent. Secret ≥ 32 random bytes in SSM |
-| Replay | `X-GitHub-Delivery` idempotency item with TTL |
+| Replay | `X-GitHub-Delivery` idempotency item with TTL, plus one on the SHA-256 of the signed body (the delivery id is not covered by the signature, so a captured body cannot be replayed under fresh ids). A claim is a 30 s lease, so a timed-out delivery can be redelivered; every credit carries a commit marker, so a redelivery never scores twice |
+| Login CSRF / state replay | The OAuth `state` is an HMAC over a nonce and an expiry (key derived from the JWT key), bound to the browser by an `HttpOnly; Secure; SameSite=Lax` `__Host-` cookie, and recorded as used once GitHub has accepted the code. `/auth/login` writes nothing, so it cannot be used to exhaust the table's write capacity |
 | XP farming via fake repos | Opens capped/day; merges require a real merge event; solo merges ×0.5; the Two-Pizza Boss zeroes them; **leaderboards are out of v1** so there's no incentive to cheat yourself |
 | Bot inflation | `type: Bot` and `[bot]` logins excluded as actors; agent PRs merged by *you* still count as your merge (that's the point) |
 | Token theft | No GitHub tokens are stored for users at all. The App private key lives in SSM, read at cold start, never logged. Installation tokens (backfill only) are minted on demand and discarded |
@@ -438,7 +469,7 @@ Metrics worth tracking (aggregate, CloudWatch custom metrics): activations (firs
 
 **v1 — "Spire" (+3 weekends).** Weekly Run with act targets, the Shop (Charms, packs, 6 vouchers, re-roll, sell), 6 Moguls, 12 Charms, 8 Pledges, Bestiary, badge, export/delete.
 
-**v1.1.** Backfill (Ancient Tomes), `issue_comment` opt-in, light theme, Night Owl timezone.
+**v1.1.** Backfill (Ancient Tomes), `issue_comment` opt-in, light theme, timezone setting.
 
 **v2.** Guild raids, more biomes, Legendary Charm season, PNG share card, custom domain.
 
@@ -500,7 +531,7 @@ Notes:
 
 1. Non-default-branch PRs at 50% or 100%? Stacked-diff workflows argue for 100%; farming argues for 50%. Start 50%, revisit with data.
 2. Per-skill Zone exponent (so Oratory can't carry a level)? Not for v1.
-3. Local-time features (Night Owl) need a timezone setting; default to the browser's on first login.
+3. Local-time features (Lantern, hidden time Feats) need a timezone setting; default to the browser's on first login.
 
 ---
 

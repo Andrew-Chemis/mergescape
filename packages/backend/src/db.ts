@@ -1,0 +1,2187 @@
+/**
+ * DynamoDB repository (tasks.md 6): typed accessors for every item type in design.md section 9.1.
+ *
+ * All writes go through `Db#put` / `Db#update`, which run the schema guard (`schema.ts`) first, so an
+ * attribute outside the per-item-type allow-list throws before anything is sent. Reads never mutate.
+ * Updates that add XP, skill XP, gold or counters use `ADD`, which DynamoDB applies atomically.
+ *
+ * IAM note (Requirement 12.2): the `ingest` role has only PutItem, GetItem, UpdateItem and Query. Every
+ * accessor the ingest handler uses therefore avoids DeleteItem and BatchWriteItem. Removing an
+ * installation is a TTL tombstone for that reason, and a failed delivery is "released" with an update.
+ */
+import {
+  BatchWriteCommand,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  ScanCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  DAY_MS,
+  emptySatchel,
+  emptySkillXp,
+  isRecord,
+  MATERIAL_KINDS,
+  MINUTE_MS,
+  SKILLS,
+  starterDeck,
+  WEEK_MS,
+} from '@mergescape/shared';
+import type {
+  ActId,
+  BenchedCharm,
+  BreakdownLine,
+  Charm,
+  ExpeditionState,
+  FeatCounters,
+  ForgeJob,
+  ForgeState,
+  GearPiece,
+  MogulId,
+  MonsterId,
+  PackKind,
+  PlayerCounters,
+  Pledge,
+  PullRequestFacts,
+  ReviewState,
+  RunState,
+  Satchel,
+  ShopStock,
+  Skill,
+  SkillXp,
+  Supplies,
+  VoucherId,
+} from '@mergescape/shared';
+import type { Vocation } from './api-types';
+import {
+  EVENT_SK_PREFIX,
+  GITHUB_LOGIN,
+  deliveryKey,
+  eventKey,
+  expeditionKey,
+  featKey,
+  inlineKey,
+  installKey,
+  jobKey,
+  loginPk,
+  prMetaKey,
+  prPk,
+  profileKey,
+  reviewKey,
+  stateKey,
+  userIdFromPk,
+  userPk,
+  weekKeyOf,
+} from './keys';
+import type { Key } from './keys';
+import { assertAttributesAllowed, assertItemAllowed } from './schema';
+import type { ItemKind } from './schema';
+
+/** The part of `DynamoDBDocumentClient` the repository uses (tests pass the in-memory fake). */
+export type DocClient = Pick<DynamoDBDocumentClient, 'send'>;
+
+type Attrs = Record<string, unknown>;
+
+// ---------------------------------------------------------------------------------------------
+// Constants (infrastructure, not game rules)
+// ---------------------------------------------------------------------------------------------
+
+const seconds = (ms: number): number => Math.floor(ms / 1000);
+
+/** Requirement 1.6: dedupe records expire after 7 days. */
+export const DELIVERY_TTL_SECONDS = seconds(WEEK_MS);
+/** Requirement 2.1: the OAuth state expires after 10 minutes (a consumed one is remembered that long). */
+export const OAUTH_STATE_TTL_SECONDS = seconds(10 * MINUTE_MS);
+/**
+ * How long a claimed delivery is held before another attempt may take it over. The ingest Lambda is killed
+ * at 10 s, so after 30 s the claimant is certainly gone (a timeout or an out-of-memory kill never releases).
+ */
+export const DELIVERY_LEASE_MS = 30_000;
+/** research.md section 6: scored event rows (the Combat Log) expire after 90 days. */
+export const EVENT_TTL_SECONDS = seconds(90 * DAY_MS);
+
+// ---------------------------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------------------------
+
+export function isConditionalCheckFailed(error: unknown): boolean {
+  return error instanceof Error && error.name === 'ConditionalCheckFailedException';
+}
+
+/** The profile changed between the read that fed the scorer and the write (optimistic lock). */
+export class VersionConflictError extends Error {
+  constructor() {
+    super('Profile version conflict');
+    this.name = 'VersionConflictError';
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Domain shapes
+// ---------------------------------------------------------------------------------------------
+
+export interface ProfileItem {
+  id: number;
+  login: string;
+  created: string;
+  /** Installation ids the player can see (from `GET /user/installations`). */
+  installations: number[];
+  xp: number;
+  /** Cache of `levelFor(xp)`; the XP is authoritative. */
+  level: number;
+  skillXp: SkillXp;
+  gold: number;
+  opensDay: string | null;
+  opensCount: number;
+  dailyFirstDay: string | null;
+  streakWeeks: number;
+  /** Lifetime Moguls beaten. */
+  renown: number;
+  /** Recomputed at each rollover (Requirement 5.3). */
+  vocation: Vocation;
+  vouchers: VoucherId[];
+  /** The Pledge deck; a profile that never stored one holds the starter deck. */
+  deck: Pledge[];
+  /** Ids of cosmetics kept from Mogul packs. */
+  cosmetics: string[];
+  charms: Charm[];
+  /** Lifetime scored merges per repository id (Grey Beard, Mentor). */
+  repoMerges: Record<string, number>;
+  /** The shuffled bag of Moguls still to come; `bag[0]` is next week's. */
+  mogulBag: MogulId[];
+  mogulBenched: BenchedCharm | null;
+  mogulBoardWeek: string | null;
+  /** The week key the profile has been rolled into (the run exists once this equals the current week). */
+  runWeek: string | null;
+  /** Weekly XP of the last 8 closed weeks, oldest first. */
+  history: number[];
+  /** Bestiary: kills per monster and the instant each was first seen. */
+  kills: Partial<Record<MonsterId, number>>;
+  firstSeen: Partial<Record<MonsterId, string>>;
+  /** Week-scoped scorer state; stale (another week) means empty. */
+  weekState: WeekScorerState | null;
+  /*
+   * The depth layers (tasks 20 to 22). A profile stored before they existed reads as empty everywhere.
+   */
+  /** Supplies and crafting materials; all ten counts present. */
+  satchel: Satchel;
+  /** The latest expedition, collected or not; null before the first one. */
+  expedition: ExpeditionState | null;
+  /** Gear owned and not worn. */
+  inventory: GearPiece[];
+  /** Gear worn and the cape colour chosen at the Loom (the set bonus is worked out on read). */
+  gear: { pieces: GearPiece[]; capeColor: string | null };
+  /** Pet ids owned; null when never stored (the character has the starter, the Linter Cat). */
+  pets: string[] | null;
+  /** Seeds of unopened Charm packs. */
+  charmPacks: number[];
+  /** The stations' current orders and the upgrades bought. */
+  forge: ForgeState;
+  /** Feats unlocked, titles earned and the (at most three) pinned Feats. */
+  featsUnlocked: string[];
+  titles: string[];
+  pinnedFeats: string[];
+  /** Rolling Feat counters; null before the first scored event after Feats existed. */
+  featCounters: FeatCounters | null;
+  /** The Old Coin has been found (what the badge shows beside the pinned Feats). */
+  oldCoin: boolean;
+  /** Minutes east of UTC; null means UTC. */
+  tzOffsetMinutes: number | null;
+  /** May the public badge show this player? `badge_public`; true unless the player turned it off (Requirement 11.4). */
+  badgePublic: boolean;
+  /**
+   * Proof that a write happened, committed in the same guarded profile write as the change itself (see
+   * `idempotent.ts` and `ingest.ts`): the client request ids of the last few player mutations, the
+   * (delivery, player) credits of the last few scored events, and the Act clears of this week whose
+   * payout has been paid. An id found here means "this was applied", whatever else happened to it.
+   */
+  appliedRequests: string[];
+  creditedDeliveries: string[];
+  actsPaid: string[];
+  /** Optimistic-lock counter, bumped by every score write. */
+  version: number;
+}
+
+/** Pledge progress, the Leather Jacket chain and Loaded Dice's charge, stamped with their week. */
+export interface WeekScorerState {
+  week: string;
+  pledgeProgress: Record<string, number>;
+  pledgesCompleted: string[];
+  mogulChain: number;
+  loadedDiceUsed: boolean;
+}
+
+/**
+ * Absolute values to SET on a profile. Every writer of these holds the profile `version` it read them at,
+ * so an absolute value can never overwrite a concurrent change. `null` removes an optional attribute.
+ */
+export interface ProfilePatch {
+  xp?: number;
+  skillXp?: SkillXp;
+  level?: number;
+  gold?: number;
+  counters?: Partial<PlayerCounters>;
+  renown?: number;
+  vocation?: Vocation;
+  vouchers?: readonly VoucherId[];
+  deck?: readonly Pledge[];
+  cosmetics?: readonly string[];
+  charms?: readonly Charm[];
+  repoMerges?: Readonly<Record<string, number>>;
+  mogulBag?: readonly MogulId[];
+  mogulBenched?: BenchedCharm | null;
+  mogulBoardWeek?: string | null;
+  runWeek?: string;
+  history?: readonly number[];
+  kills?: Readonly<Partial<Record<MonsterId, number>>>;
+  firstSeen?: Readonly<Partial<Record<MonsterId, string>>>;
+  weekState?: WeekScorerState;
+  // The depth layers: absolute values, like every other field of a patch.
+  satchel?: Readonly<Satchel>;
+  expedition?: ExpeditionState;
+  inventory?: readonly GearPiece[];
+  gear?: { pieces: readonly GearPiece[]; capeColor?: string };
+  pets?: readonly string[];
+  charmPacks?: readonly number[];
+  forge?: ForgeState;
+  featsUnlocked?: readonly string[];
+  titles?: readonly string[];
+  pinnedFeats?: readonly string[];
+  featCounters?: FeatCounters;
+  oldCoin?: boolean;
+  tzOffsetMinutes?: number;
+  badgePublic?: boolean;
+  /** The commit markers (see `ProfileItem`); the Act-clear one is cleared with `null` at the rollover. */
+  appliedRequests?: readonly string[];
+  creditedDeliveries?: readonly string[];
+  actsPaid?: null;
+}
+
+/** What one scored event changes on a profile. */
+export interface ScoreWrite {
+  xp: number;
+  skillXp: SkillXp;
+  /** Gold earned (added atomically). */
+  gold: number;
+  /** `levelFor(xp after this event)`. */
+  level: number;
+  counters: Partial<PlayerCounters>;
+  /** Further absolute values for the same guarded write (repository merges, week state, kills). */
+  patch?: Omit<ProfilePatch, 'xp' | 'skillXp' | 'gold' | 'level' | 'counters'>;
+}
+
+/** One Combat Log row (`EVT#`). */
+export interface EventRow {
+  userId: number;
+  /** ISO instant the event was scored. */
+  ts: string;
+  deliveryId: string;
+  /** The `GameEvent` kind that scored: pr_opened, pr_merged, review_submitted, and so on. */
+  kind: string;
+  /** Absent on rows that belong to no PR (the weekly streak). */
+  repoId?: number;
+  repoPrivate?: boolean;
+  prNumber?: number;
+  points: number;
+  power: number;
+  zone: number;
+  level: number;
+  xp: number;
+  skill: Skill;
+  /** XP credited to each skill by this event. */
+  skillXp: SkillXp;
+  /** Supplies dropped by this event (banked by a later task; kept so the log never re-computes). */
+  supplies: Supplies;
+  monster: MonsterId | null;
+  breakdown: BreakdownLine[];
+  /** Present on review rows. */
+  reviewState?: ReviewState;
+  /** Lines added and deleted, when the payload carried them. */
+  additions?: number;
+  deletions?: number;
+  /** Inline comments the acting reviewer has left on the PR, on review and comment rows. */
+  inlineComments?: number;
+}
+
+/** An `EventRow` as read back: `id` is the sort key without its `EVT#` prefix. */
+export interface StoredEventRow extends EventRow {
+  id: string;
+}
+
+/** The persisted PR facts of Requirement 3.1. */
+export interface PRMetaItem {
+  installationId: number | null;
+  repoId: number;
+  repoPrivate: boolean;
+  number: number;
+  authorId: number;
+  openedAt: string | null;
+  mergedAt: string | null;
+  closedAt: string | null;
+  merged: boolean;
+  mergedById: number | null;
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
+  commits: number | null;
+  reviewRoundCount: number;
+  syncCount: number;
+  draft: boolean;
+  baseRefIsDefault: boolean;
+}
+
+/** A human review kept on the PR (Requirement 3.2). */
+export interface ReviewItem {
+  reviewerId: number;
+  reviewerIsBot: boolean;
+  state: ReviewState;
+  submittedAt: string;
+}
+
+/** One scored inline comment kept on the PR; the sum per reviewer feeds the cap. */
+export interface InlineItem {
+  reviewerId: number;
+  count: number;
+}
+
+/** Everything stored under one `PR#<repo>#<number>` partition. */
+export interface PRBundle {
+  meta: PRMetaItem | null;
+  /** Reviews in arrival (sort-key) order. */
+  reviews: ReviewItem[];
+  inline: InlineItem[];
+}
+
+export interface InstallationItem {
+  id: number;
+  accountId: number;
+  repoIds: number[];
+  suspended: boolean;
+  /** Tombstoned by `installation.deleted` and waiting for the TTL sweep to remove it. */
+  deleted: boolean;
+}
+
+/** What the badge reads from GSI1 (the projected attributes, nothing else). Values are as stored, unchecked. */
+export interface BadgeProfile {
+  id: number;
+  login: string;
+  level: number;
+  renown: number;
+  vocation: string;
+  /** The pinned Feat ids (Requirement 17.7); the badge draws the ones it knows. */
+  pins: string[];
+  /** The Old Coin has been found. */
+  coin: boolean;
+  /** The player has not turned the public badge off (`badge_public`, true when never set). */
+  badgePublic: boolean;
+}
+
+/**
+ * What a scored event decided to credit to one player, written to the delivery's ledger before the credit
+ * is committed. It carries everything the steps after the commit need, so a later attempt can finish them
+ * without scoring again.
+ */
+export interface DeliveryCredit {
+  /** The week the XP belongs to. */
+  week: string;
+  xp: number;
+  merge: boolean;
+  review: boolean;
+  /** The Combat Log row of the event; null when it earned none. */
+  row: EventRow | null;
+  /** The credit changes the profile, so the profile carries its commit marker once it has happened. */
+  commits: boolean;
+}
+
+/** The ledger of a claimed delivery: the credits earlier attempts decided on, by credit id. */
+export interface DeliveryClaim {
+  credits: Record<string, DeliveryCredit>;
+}
+
+/** What `Db#deleteUser` removed. */
+export interface DeletionReport {
+  /** Items under the player's `USER#` partition. */
+  userItems: number;
+  /** Items of `PR#` partitions the player was the only actor of. */
+  prItems: number;
+}
+
+/** DynamoDB takes at most 25 requests per BatchWriteItem. */
+const BATCH_WRITE_LIMIT = 25;
+/** Rounds of re-sending `UnprocessedItems` (throttled deletes) before a delete gives up. */
+const MAX_DELETE_ATTEMPTS = 8;
+/** PR partitions read at a time while looking for the records only the deleted player appears in. */
+const PR_READ_CONCURRENCY = 8;
+
+// ---------------------------------------------------------------------------------------------
+// Attribute helpers
+// ---------------------------------------------------------------------------------------------
+
+function num(item: Attrs, name: string, fallback: number): number {
+  const value = item[name];
+  return typeof value === 'number' ? value : fallback;
+}
+
+function numOrNull(item: Attrs, name: string): number | null {
+  const value = item[name];
+  return typeof value === 'number' ? value : null;
+}
+
+function str(item: Attrs, name: string): string | null {
+  const value = item[name];
+  return typeof value === 'string' ? value : null;
+}
+
+function bool(item: Attrs, name: string, fallback: boolean): boolean {
+  const value = item[name];
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function list<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function record<T>(value: unknown): Record<string, T> {
+  return isRecord(value) ? (value as Record<string, T>) : {};
+}
+
+/** The player id in an item's `USER#<id>` partition key (NaN on a key that is not one: no reader meets it). */
+function userIdOf(item: Attrs): number {
+  return userIdFromPk(String(item.PK)) ?? Number.NaN;
+}
+
+/** A copy that is safe to marshal: no `undefined` members anywhere (the marshaller rejects them). */
+function clean<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** A copy of a stored value in JSON terms: DynamoDB sets become sorted arrays, so `JSON.stringify` keeps them. */
+function plain(value: unknown): unknown {
+  if (value instanceof Set) {
+    return [...(value as Set<number | string>)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
+  if (Array.isArray(value)) {
+    return value.map(plain);
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([name, entry]) => [name, plain(entry)]));
+  }
+  return value;
+}
+
+function keyOf(item: Attrs): Key {
+  return { PK: String(item.PK), SK: String(item.SK) };
+}
+
+/**
+ * True when `userId` is the only actor a PR partition refers to: the author, the merger, every reviewer and
+ * every inline commenter (Requirement 13.2). An attribute that is missing or not a number counts as an
+ * unknown actor, so a record this cannot read is kept rather than deleted.
+ */
+function referencesOnly(items: readonly Attrs[], userId: number): boolean {
+  let referenced = 0;
+  for (const item of items) {
+    const sk = String(item.SK);
+    const actors =
+      sk === 'META'
+        ? [item.author_id, ...(item.merged_by_id === undefined ? [] : [item.merged_by_id])]
+        : sk.startsWith('REVIEW#') || sk.startsWith('INLINE#')
+          ? [item.reviewer_id]
+          : [];
+    for (const id of actors) {
+      if (id !== userId) {
+        return false;
+      }
+      referenced += 1;
+    }
+  }
+  return referenced > 0;
+}
+
+function numberList(value: unknown): number[] {
+  const entries = value instanceof Set ? [...(value as Set<unknown>)] : [];
+  return entries
+    .filter((entry): entry is number => typeof entry === 'number')
+    .sort((a, b) => a - b);
+}
+
+const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T[\d:.]{8,12}(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** A timestamp string from a payload, kept only if it looks like an ISO instant. */
+function isoOrUndefined(value: string | null): string | undefined {
+  return value !== null && ISO_LIKE.test(value) ? value : undefined;
+}
+
+const SKILL_ATTRIBUTE: Readonly<Record<Skill, string>> = {
+  smithing: 'xp_smithing',
+  vigilance: 'xp_vigilance',
+  oratory: 'xp_oratory',
+  endurance: 'xp_endurance',
+};
+
+function toProfile(item: Attrs): ProfileItem {
+  const skillXp = emptySkillXp();
+  for (const skill of SKILLS) {
+    skillXp[skill] = num(item, SKILL_ATTRIBUTE[skill], 0);
+  }
+  return {
+    id: userIdOf(item),
+    login: str(item, 'login') ?? '',
+    created: str(item, 'created') ?? '',
+    installations: numberList(item.installations),
+    xp: num(item, 'xp', 0),
+    level: num(item, 'level', 1),
+    skillXp,
+    gold: num(item, 'gold', 0),
+    opensDay: str(item, 'opens_day'),
+    opensCount: num(item, 'opens_count', 0),
+    dailyFirstDay: str(item, 'daily_first_day'),
+    streakWeeks: num(item, 'streak_weeks', 0),
+    renown: num(item, 'renown', 0),
+    vocation: (str(item, 'vocation') as Vocation | null) ?? 'Journeyman',
+    vouchers: list<VoucherId>(item.vouchers),
+    deck: Array.isArray(item.deck) ? (item.deck as Pledge[]) : starterDeck(),
+    cosmetics: list<string>(item.cosmetics),
+    charms: list<Charm>(item.charms),
+    repoMerges: record<number>(item.repo_merges),
+    mogulBag: list<MogulId>(item.mogul_bag),
+    mogulBenched: isRecord(item.mogul_benched)
+      ? (item.mogul_benched as unknown as BenchedCharm)
+      : null,
+    mogulBoardWeek: str(item, 'mogul_board_week'),
+    runWeek: str(item, 'run_week'),
+    history: list<number>(item.history),
+    kills: record<number>(item.kills),
+    firstSeen: record<string>(item.first_seen),
+    weekState: toWeekState(item),
+    satchel: toSatchel(item.satchel),
+    expedition: isRecord(item.expedition) ? (item.expedition as unknown as ExpeditionState) : null,
+    inventory: list<GearPiece>(item.inventory),
+    gear: toGear(item.gear),
+    pets: Array.isArray(item.pets) ? stringList(item.pets) : null,
+    charmPacks: list<unknown>(item.charm_packs).filter(
+      (seed): seed is number => typeof seed === 'number',
+    ),
+    forge: toForge(item.forge),
+    featsUnlocked: stringList(item.feats_unlocked),
+    titles: stringList(item.titles),
+    pinnedFeats: stringList(item.pinned_feats),
+    featCounters: isRecord(item.feat_counters)
+      ? (item.feat_counters as unknown as FeatCounters)
+      : null,
+    oldCoin: bool(item, 'old_coin', false),
+    tzOffsetMinutes: numOrNull(item, 'tz_offset'),
+    badgePublic: bool(item, 'badge_public', true),
+    appliedRequests: stringList(item.applied_requests),
+    creditedDeliveries: stringList(item.credited),
+    actsPaid: stringSet(item.acts_paid),
+    version: num(item, 'version', 0),
+  };
+}
+
+/** The strings in a stored string set, sorted; anything else is ignored. */
+function stringSet(value: unknown): string[] {
+  const entries = value instanceof Set ? [...(value as Set<unknown>)] : [];
+  return entries.filter((entry): entry is string => typeof entry === 'string').sort();
+}
+
+/** The strings in a stored list; anything else in it is ignored. */
+function stringList(value: unknown): string[] {
+  return list<unknown>(value).filter((entry): entry is string => typeof entry === 'string');
+}
+
+/** All ten satchel counts; an absent or damaged count reads as zero. */
+function toSatchel(value: unknown): Satchel {
+  const stored = isRecord(value) ? value : {};
+  const satchel = emptySatchel();
+  for (const kind of MATERIAL_KINDS) {
+    satchel[kind] = Math.max(0, Math.floor(num(stored, kind, 0)));
+  }
+  return satchel;
+}
+
+function toGear(value: unknown): ProfileItem['gear'] {
+  const stored = isRecord(value) ? value : {};
+  return { pieces: list<GearPiece>(stored.pieces), capeColor: str(stored, 'capeColor') };
+}
+
+function toForge(value: unknown): ForgeState {
+  const stored = isRecord(value) ? value : {};
+  return {
+    stations: record<ForgeJob>(stored.stations) as ForgeState['stations'],
+    upgrades: stringList(stored.upgrades) as ForgeState['upgrades'],
+  };
+}
+
+function toWeekState(item: Attrs): WeekScorerState | null {
+  const week = str(item, 'wk_week');
+  if (week === null) {
+    return null;
+  }
+  return {
+    week,
+    pledgeProgress: record<number>(item.wk_progress),
+    pledgesCompleted: list<string>(item.wk_completed),
+    mogulChain: num(item, 'wk_chain', 0),
+    loadedDiceUsed: bool(item, 'wk_dice', false),
+  };
+}
+
+/** The credits a delivery item holds; an item without them (or with damaged ones) has none. */
+function toCredits(value: unknown): Record<string, DeliveryCredit> {
+  const credits: Record<string, DeliveryCredit> = {};
+  for (const [id, entry] of Object.entries(record<unknown>(value))) {
+    if (isRecord(entry) && typeof entry.week === 'string' && typeof entry.xp === 'number') {
+      credits[id] = {
+        week: entry.week,
+        xp: entry.xp,
+        merge: entry.merge === true,
+        review: entry.review === true,
+        row: isRecord(entry.row) ? (entry.row as unknown as EventRow) : null,
+        commits: entry.commits === true,
+      };
+    }
+  }
+  return credits;
+}
+
+function toEventRow(item: Attrs): StoredEventRow {
+  const skillXp = emptySkillXp();
+  const stored = item.skill_xp as Attrs | undefined;
+  for (const skill of SKILLS) {
+    skillXp[skill] = stored ? num(stored, skill, 0) : 0;
+  }
+  const storedSupplies = (item.supplies ?? {}) as Attrs;
+  const reviewState = str(item, 'review_state');
+  const additions = numOrNull(item, 'additions');
+  const deletions = numOrNull(item, 'deletions');
+  const inlineComments = numOrNull(item, 'inline_comments');
+  return {
+    id: String(item.SK).slice(EVENT_SK_PREFIX.length),
+    userId: userIdOf(item),
+    ts: str(item, 'ts') ?? '',
+    deliveryId: str(item, 'delivery_id') ?? '',
+    kind: str(item, 'kind') ?? '',
+    ...(numOrNull(item, 'repo_id') !== null ? { repoId: num(item, 'repo_id', 0) } : {}),
+    ...(typeof item.repo_private === 'boolean' ? { repoPrivate: item.repo_private } : {}),
+    ...(numOrNull(item, 'pr_number') !== null ? { prNumber: num(item, 'pr_number', 0) } : {}),
+    points: num(item, 'points', 0),
+    power: num(item, 'power', 1),
+    zone: num(item, 'zone', 1),
+    level: num(item, 'level', 1),
+    xp: num(item, 'xp', 0),
+    skill: (str(item, 'skill') ?? 'smithing') as Skill,
+    skillXp,
+    supplies: {
+      ore: num(storedSupplies, 'ore', 0),
+      timber: num(storedSupplies, 'timber', 0),
+      lore: num(storedSupplies, 'lore', 0),
+      ink: num(storedSupplies, 'ink', 0),
+      provisions: num(storedSupplies, 'provisions', 0),
+      flux: num(storedSupplies, 'flux', 0),
+    },
+    monster: (str(item, 'monster') as MonsterId | null) ?? null,
+    breakdown: Array.isArray(item.breakdown) ? (item.breakdown as BreakdownLine[]) : [],
+    ...(reviewState === 'APPROVED' ||
+    reviewState === 'CHANGES_REQUESTED' ||
+    reviewState === 'COMMENTED'
+      ? { reviewState }
+      : {}),
+    ...(additions !== null ? { additions } : {}),
+    ...(deletions !== null ? { deletions } : {}),
+    ...(inlineComments !== null ? { inlineComments } : {}),
+  };
+}
+
+function toPRMeta(item: Attrs): PRMetaItem {
+  return {
+    installationId: numOrNull(item, 'installation_id'),
+    repoId: num(item, 'repo_id', 0),
+    repoPrivate: bool(item, 'repo_private', true),
+    number: num(item, 'pr_number', 0),
+    authorId: num(item, 'author_id', 0),
+    openedAt: str(item, 'opened_at'),
+    mergedAt: str(item, 'merged_at'),
+    closedAt: str(item, 'closed_at'),
+    merged: bool(item, 'merged', false),
+    mergedById: numOrNull(item, 'merged_by_id'),
+    additions: numOrNull(item, 'additions'),
+    deletions: numOrNull(item, 'deletions'),
+    changedFiles: numOrNull(item, 'changed_files'),
+    commits: numOrNull(item, 'commits'),
+    reviewRoundCount: num(item, 'review_round_count', 0),
+    syncCount: num(item, 'sync_count', 0),
+    draft: bool(item, 'draft', false),
+    baseRefIsDefault: bool(item, 'base_ref_is_default', true),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Update expression builder
+// ---------------------------------------------------------------------------------------------
+
+export interface UpdateOps {
+  /** `SET attr = :v` */
+  set?: Attrs;
+  /** `SET attr = if_not_exists(attr, :v)` */
+  setIfAbsent?: Attrs;
+  /** `ADD attr :v` (atomic increment for numbers, union for sets) */
+  add?: Attrs;
+  /** `REMOVE attr` */
+  remove?: readonly string[];
+  /** `DELETE attr :v` (remove elements from a set) */
+  deleteFrom?: Attrs;
+}
+
+/** A condition with its own placeholders, which must not start with `#a` or `:a` (those are the update's). */
+export interface ConditionSpec {
+  expression: string;
+  names?: Record<string, string>;
+  values?: Record<string, unknown>;
+}
+
+/** Holds when the item is already stored. */
+const ITEM_EXISTS: ConditionSpec = { expression: 'attribute_exists(#c0)', names: { '#c0': 'PK' } };
+/** Holds when nothing is stored under the key yet. */
+const ITEM_ABSENT: ConditionSpec = {
+  expression: 'attribute_not_exists(#c0)',
+  names: { '#c0': 'PK' },
+};
+
+/** Holds when the item is not stored or its `collected` flag is `collected`. */
+const missingOrCollected = (collected: boolean): ConditionSpec => ({
+  expression: 'attribute_not_exists(#c0) OR #c1 = :c0',
+  names: { '#c0': 'PK', '#c1': 'collected' },
+  values: { ':c0': collected },
+});
+
+function buildUpdate(ops: UpdateOps): {
+  expression: string;
+  names: Record<string, string>;
+  values: Record<string, unknown>;
+} {
+  const names: Record<string, string> = {};
+  const values: Record<string, unknown> = {};
+  let nameCount = 0;
+  let valueCount = 0;
+  const nameRef = (attribute: string): string => {
+    const ref = `#a${nameCount}`;
+    nameCount += 1;
+    names[ref] = attribute;
+    return ref;
+  };
+  const valueRef = (value: unknown): string => {
+    const ref = `:a${valueCount}`;
+    valueCount += 1;
+    values[ref] = value;
+    return ref;
+  };
+  const sets: string[] = [];
+  for (const [attribute, value] of Object.entries(ops.set ?? {})) {
+    sets.push(`${nameRef(attribute)} = ${valueRef(value)}`);
+  }
+  for (const [attribute, value] of Object.entries(ops.setIfAbsent ?? {})) {
+    const ref = nameRef(attribute);
+    sets.push(`${ref} = if_not_exists(${ref}, ${valueRef(value)})`);
+  }
+  const adds = Object.entries(ops.add ?? {}).map(
+    ([attribute, value]) => `${nameRef(attribute)} ${valueRef(value)}`,
+  );
+  const removes = (ops.remove ?? []).map((attribute) => nameRef(attribute));
+  const deletes = Object.entries(ops.deleteFrom ?? {}).map(
+    ([attribute, value]) => `${nameRef(attribute)} ${valueRef(value)}`,
+  );
+  const sections = [
+    sets.length > 0 ? `SET ${sets.join(', ')}` : '',
+    adds.length > 0 ? `ADD ${adds.join(', ')}` : '',
+    removes.length > 0 ? `REMOVE ${removes.join(', ')}` : '',
+    deletes.length > 0 ? `DELETE ${deletes.join(', ')}` : '',
+  ].filter((section) => section !== '');
+  if (sections.length === 0) {
+    throw new RangeError('An update needs at least one operation');
+  }
+  return { expression: sections.join(' '), names, values };
+}
+
+function mergeCondition(
+  update: { names: Record<string, string>; values: Record<string, unknown> },
+  condition: ConditionSpec | undefined,
+): { names: Record<string, string>; values: Record<string, unknown> } {
+  const names = { ...update.names, ...(condition?.names ?? {}) };
+  const values = { ...update.values, ...(condition?.values ?? {}) };
+  return { names, values };
+}
+
+/** The SET and REMOVE operations that write a `ProfilePatch` (absolute values, nested data cleaned). */
+function profileOps(patch: ProfilePatch): { set: Attrs; remove: string[] } {
+  const set: Attrs = {};
+  const remove: string[] = [];
+  if (patch.xp !== undefined) {
+    set.xp = patch.xp;
+  }
+  if (patch.skillXp !== undefined) {
+    for (const skill of SKILLS) {
+      set[SKILL_ATTRIBUTE[skill]] = patch.skillXp[skill];
+    }
+  }
+  if (patch.level !== undefined) {
+    set.level = patch.level;
+  }
+  if (patch.gold !== undefined) {
+    set.gold = patch.gold;
+  }
+  const { opens, dailyFirstDay, streakWeeks } = patch.counters ?? {};
+  if (opens) {
+    set.opens_day = opens.day;
+    set.opens_count = opens.count;
+  }
+  if (dailyFirstDay !== undefined) {
+    if (dailyFirstDay === null) {
+      remove.push('daily_first_day');
+    } else {
+      set.daily_first_day = dailyFirstDay;
+    }
+  }
+  if (streakWeeks !== undefined) {
+    set.streak_weeks = streakWeeks;
+  }
+  const direct: [string, unknown][] = [
+    ['renown', patch.renown],
+    ['vocation', patch.vocation],
+    ['run_week', patch.runWeek],
+  ];
+  for (const [attribute, value] of direct) {
+    if (value !== undefined) {
+      set[attribute] = value;
+    }
+  }
+  const nested: [string, unknown][] = [
+    ['vouchers', patch.vouchers],
+    ['deck', patch.deck],
+    ['cosmetics', patch.cosmetics],
+    ['charms', patch.charms],
+    ['repo_merges', patch.repoMerges],
+    ['mogul_bag', patch.mogulBag],
+    ['history', patch.history],
+    ['kills', patch.kills],
+    ['first_seen', patch.firstSeen],
+    ['satchel', patch.satchel],
+    ['expedition', patch.expedition],
+    ['inventory', patch.inventory],
+    ['pets', patch.pets],
+    ['charm_packs', patch.charmPacks],
+    ['forge', patch.forge],
+    ['feats_unlocked', patch.featsUnlocked],
+    ['titles', patch.titles],
+    ['pinned_feats', patch.pinnedFeats],
+    ['feat_counters', patch.featCounters],
+    ['applied_requests', patch.appliedRequests],
+    ['credited', patch.creditedDeliveries],
+  ];
+  for (const [attribute, value] of nested) {
+    if (value !== undefined) {
+      set[attribute] = clean(value);
+    }
+  }
+  for (const [attribute, value] of [
+    ['mogul_benched', patch.mogulBenched],
+    ['mogul_board_week', patch.mogulBoardWeek],
+  ] as const) {
+    if (value === null) {
+      remove.push(attribute);
+    } else if (value !== undefined) {
+      set[attribute] = clean(value);
+    }
+  }
+  if (patch.gear !== undefined) {
+    set.gear = clean({
+      pieces: patch.gear.pieces,
+      ...(patch.gear.capeColor !== undefined ? { capeColor: patch.gear.capeColor } : {}),
+    });
+  }
+  if (patch.oldCoin !== undefined) {
+    set.old_coin = patch.oldCoin;
+  }
+  if (patch.tzOffsetMinutes !== undefined) {
+    set.tz_offset = patch.tzOffsetMinutes;
+  }
+  if (patch.badgePublic !== undefined) {
+    set.badge_public = patch.badgePublic;
+  }
+  if (patch.actsPaid === null) {
+    remove.push('acts_paid');
+  }
+  if (patch.weekState !== undefined) {
+    set.wk_week = patch.weekState.week;
+    set.wk_progress = clean(patch.weekState.pledgeProgress);
+    set.wk_completed = [...patch.weekState.pledgesCompleted];
+    set.wk_chain = patch.weekState.mogulChain;
+    set.wk_dice = patch.weekState.loadedDiceUsed;
+  }
+  return { set, remove };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The repository
+// ---------------------------------------------------------------------------------------------
+
+export class Db {
+  constructor(
+    private readonly client: DocClient,
+    private readonly tableName: string,
+    /** Waits between rounds of re-sent deletes; replaced in tests. */
+    private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((done) => setTimeout(done, ms)),
+  ) {}
+
+  // ----- the two write choke points (schema guard) -----
+
+  /** Guarded PutItem. Throws `SchemaViolationError` before sending when an attribute is not allowed. */
+  async put(kind: ItemKind, key: Key, attributes: Attrs, condition?: ConditionSpec): Promise<void> {
+    const item = { ...attributes, ...key };
+    assertItemAllowed(kind, item);
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: item,
+        ...(condition
+          ? {
+              ConditionExpression: condition.expression,
+              ...(condition.names ? { ExpressionAttributeNames: condition.names } : {}),
+              ...(condition.values ? { ExpressionAttributeValues: condition.values } : {}),
+            }
+          : {}),
+      }),
+    );
+  }
+
+  /** Guarded UpdateItem (upsert unless the condition says otherwise). Returns the new item. */
+  async update(
+    kind: ItemKind,
+    key: Key,
+    ops: UpdateOps,
+    condition?: ConditionSpec,
+  ): Promise<Attrs | undefined> {
+    assertItemAllowed(kind, { ...ops.set, ...ops.setIfAbsent, ...ops.add, ...ops.deleteFrom });
+    assertAttributesAllowed(kind, ops.remove ?? []);
+    const built = buildUpdate(ops);
+    const { names, values } = mergeCondition(built, condition);
+    const output = await this.client.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: key,
+        UpdateExpression: built.expression,
+        ...(condition ? { ConditionExpression: condition.expression } : {}),
+        ExpressionAttributeNames: names,
+        ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
+        ReturnValues: 'ALL_NEW',
+      }),
+    );
+    return output.Attributes as Attrs | undefined;
+  }
+
+  /**
+   * Run a write that carries a condition: true when it applied, false when the condition failed (nothing
+   * changed), any other error rethrown. The shape of every "once only" and "only if unchanged" write.
+   */
+  private async conditionalWrite(write: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await write();
+      return true;
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async getItem(key: Key, consistent: boolean): Promise<Attrs | undefined> {
+    const output = await this.client.send(
+      new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: consistent }),
+    );
+    return output.Item as Attrs | undefined;
+  }
+
+  private async queryAll(partition: string, consistent: boolean): Promise<Attrs[]> {
+    const items: Attrs[] = [];
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const output = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: '#pk = :pk',
+          ExpressionAttributeNames: { '#pk': 'PK' },
+          ExpressionAttributeValues: { ':pk': partition },
+          ConsistentRead: consistent,
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        }),
+      );
+      items.push(...((output.Items ?? []) as Attrs[]));
+      startKey = output.LastEvaluatedKey;
+    } while (startKey);
+    return items;
+  }
+
+  // ----- profile: USER#<id> / PROFILE -----
+
+  /** Strongly consistent when `consistent` (use it inside a read-modify-write); otherwise half the read cost. */
+  async getProfile(userId: number, consistent = false): Promise<ProfileItem | null> {
+    const item = await this.getItem(profileKey(userId), consistent);
+    return item ? toProfile(item) : null;
+  }
+
+  /**
+   * Create the profile on first sign-in or refresh it on later ones: login, the GSI1 login key and the
+   * accessible installation ids are overwritten, every game field keeps its value (`if_not_exists`).
+   */
+  async upsertProfileOnLogin(input: {
+    id: number;
+    login: string;
+    installations: readonly number[];
+    nowMs: number;
+  }): Promise<ProfileItem> {
+    if (!GITHUB_LOGIN.test(input.login)) {
+      throw new RangeError('login is not a valid GitHub login');
+    }
+    const installationIds = [...new Set(input.installations)];
+    const set: Attrs = {
+      login: input.login,
+      GSI1PK: loginPk(input.login),
+      GSI1SK: userPk(input.id),
+    };
+    if (installationIds.length > 0) {
+      set.installations = new Set(installationIds);
+    }
+    const attributes = await this.update('PROFILE', profileKey(input.id), {
+      set,
+      setIfAbsent: {
+        created: new Date(input.nowMs).toISOString(),
+        xp: 0,
+        xp_smithing: 0,
+        xp_vigilance: 0,
+        xp_oratory: 0,
+        xp_endurance: 0,
+        level: 1,
+        gold: 0,
+        streak_weeks: 0,
+        version: 0,
+      },
+      remove: installationIds.length > 0 ? [] : ['installations'],
+    });
+    if (!attributes) {
+      throw new Error('Profile upsert returned no item');
+    }
+    return toProfile(attributes);
+  }
+
+  /** Add an installation id to an existing profile (no-op, returns false, when there is no profile). */
+  async addProfileInstallation(userId: number, installationId: number): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.update(
+        'PROFILE',
+        profileKey(userId),
+        { add: { installations: new Set([installationId]) } },
+        ITEM_EXISTS,
+      ),
+    );
+  }
+
+  /**
+   * Apply one scored event: atomic `ADD` of XP, skill XP and gold, `SET` of the level cache, the counters
+   * the scorer changed and the further absolute values in `write.patch`, guarded by the profile
+   * `version` the scorer's inputs were read at.
+   * @throws VersionConflictError when another writer got there first (re-read and re-score).
+   */
+  async applyScore(userId: number, expectedVersion: number, write: ScoreWrite): Promise<void> {
+    const add: Attrs = { version: 1 };
+    if (write.xp > 0) {
+      add.xp = write.xp;
+    }
+    if (write.gold > 0) {
+      add.gold = write.gold;
+    }
+    for (const skill of SKILLS) {
+      if (write.skillXp[skill] > 0) {
+        add[SKILL_ATTRIBUTE[skill]] = write.skillXp[skill];
+      }
+    }
+    const { set, remove } = profileOps({
+      ...write.patch,
+      level: write.level,
+      counters: write.counters,
+    });
+    await this.guardedProfileUpdate(userId, { set, add, remove }, expectedVersion);
+  }
+
+  /**
+   * Replace fields of the profile with absolute values (shop purchases, the rollover, the Founder's Board),
+   * guarded by the `version` they were computed from, which this bumps.
+   * @param extra an additional condition with its own placeholders (they must not start with `#a`, `#c0`,
+   *   `#c1`, `:a` or `:c0`)
+   * @throws VersionConflictError when the version moved or `extra` does not hold.
+   */
+  async saveProfile(
+    userId: number,
+    expectedVersion: number,
+    patch: ProfilePatch,
+    extra?: ConditionSpec,
+  ): Promise<void> {
+    const { set, remove } = profileOps(patch);
+    await this.guardedProfileUpdate(
+      userId,
+      { set, add: { version: 1 }, remove },
+      expectedVersion,
+      extra,
+    );
+  }
+
+  private async guardedProfileUpdate(
+    userId: number,
+    ops: UpdateOps,
+    expectedVersion: number,
+    extra?: ConditionSpec,
+  ): Promise<void> {
+    const applied = await this.conditionalWrite(() =>
+      this.update('PROFILE', profileKey(userId), ops, {
+        expression: `attribute_exists(#c0) AND #c1 = :c0${extra ? ` AND (${extra.expression})` : ''}`,
+        names: { '#c0': 'PK', '#c1': 'version', ...extra?.names },
+        values: { ':c0': expectedVersion, ...extra?.values },
+      }),
+    );
+    if (!applied) {
+      throw new VersionConflictError();
+    }
+  }
+
+  /**
+   * Credit what an act clear paid: gold and Renown added atomically, with no version guard (addition
+   * commutes with a concurrent score), bumping the version so an in-flight score re-reads.
+   *
+   * It only ever credits a profile that exists (a deleted player must not come back as a ghost holding gold),
+   * and with `once` (the clear's own name, `<week>:<act>`) only once: the name is recorded in the same write,
+   * so a repeat of the clear finds it there and pays nothing.
+   * @returns `'paid'`; `'already'` when `once` was paid before; `'gone'` when there is no profile
+   */
+  async addPayout(
+    userId: number,
+    payout: { gold: number; renown: number },
+    once?: string,
+  ): Promise<'paid' | 'already' | 'gone'> {
+    const add: Attrs = { version: 1 };
+    if (payout.gold > 0) {
+      add.gold = payout.gold;
+    }
+    if (payout.renown > 0) {
+      add.renown = payout.renown;
+    }
+    if (once !== undefined) {
+      add.acts_paid = new Set([once]);
+    }
+    const paid = await this.conditionalWrite(() =>
+      this.update(
+        'PROFILE',
+        profileKey(userId),
+        { add },
+        once === undefined
+          ? ITEM_EXISTS
+          : {
+              expression: 'attribute_exists(#c0) AND NOT contains(#c1, :c0)',
+              names: { '#c0': 'PK', '#c1': 'acts_paid' },
+              values: { ':c0': once },
+            },
+      ),
+    );
+    if (paid) {
+      return 'paid';
+    }
+    return (await this.getItem(profileKey(userId), true)) ? 'already' : 'gone';
+  }
+
+  /**
+   * Every profile id, via a paginated Scan of GSI1 (the only Scan the api role may call, Requirement
+   * 12.2). GSI1 is sparse: only profiles carry its keys. Items arrive page by page.
+   */
+  async *scanProfileIds(pageSize = 100): AsyncGenerator<number> {
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const output = await this.client.send(
+        new ScanCommand({
+          TableName: this.tableName,
+          IndexName: 'GSI1',
+          Limit: pageSize,
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        }),
+      );
+      for (const item of (output.Items ?? []) as Attrs[]) {
+        const id = userIdFromPk(String(item.PK));
+        if (id !== null) {
+          yield id;
+        }
+      }
+      startKey = output.LastEvaluatedKey;
+    } while (startKey);
+  }
+
+  /**
+   * The badge's player for a login, read from GSI1 (`LOGIN#<lower-cased login>`), which projects exactly
+   * login, level, XP, Renown, Vocation, the pinned Feats, the Old Coin and `badge_public` (the stack's
+   * `GSI1_PROJECTED_ATTRIBUTES`). Null when nobody has signed in with that login.
+   * A login can sit on two profiles only after a GitHub rename; the newer account is the likelier holder.
+   */
+  async findBadgeByLogin(login: string): Promise<BadgeProfile | null> {
+    if (!GITHUB_LOGIN.test(login)) {
+      return null;
+    }
+    const output = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: 'GSI1',
+        KeyConditionExpression: '#pk = :pk',
+        ExpressionAttributeNames: { '#pk': 'GSI1PK' },
+        ExpressionAttributeValues: { ':pk': loginPk(login) },
+      }),
+    );
+    const players = ((output.Items ?? []) as Attrs[]).flatMap((item) => {
+      const id = userIdFromPk(String(item.PK));
+      return id === null
+        ? []
+        : [
+            {
+              id,
+              login: str(item, 'login') ?? login,
+              level: num(item, 'level', 1),
+              renown: num(item, 'renown', 0),
+              vocation: str(item, 'vocation') ?? 'Journeyman',
+              pins: stringList(item.pinned_feats),
+              coin: bool(item, 'old_coin', false),
+              badgePublic: bool(item, 'badge_public', true),
+            },
+          ];
+    });
+    return players.reduce<BadgeProfile | null>(
+      (best, player) => (best === null || player.id > best.id ? player : best),
+      null,
+    );
+  }
+
+  // ----- export and deletion (Requirement 13) -----
+
+  /**
+   * Every item under the player's `USER#` partition, paginated, as stored: raw attribute names, sets as
+   * sorted arrays, in sort-key order (profile, Combat Log, weeks and the rest). Eventually consistent: an
+   * export is a snapshot and costs half the read units.
+   */
+  async listUserItems(userId: number): Promise<Record<string, unknown>[]> {
+    return (await this.queryAll(userPk(userId), false)).map((item) => plain(item) as Attrs);
+  }
+
+  /**
+   * Delete everything stored about a player (Requirement 13.2): the `PR#` records they are the only actor
+   * of, then every `USER#` item. All deletes are BatchWriteItem in chunks of 25 (the `api` role has it; the
+   * `ingest` role never deletes).
+   *
+   * The order makes a failed run repeatable. The PR records are found through the player's Combat Log rows
+   * (`repo_id` and `pr_number`), so they go first; the profile goes last, so while it exists the player can
+   * sign in again and repeat the delete. A final pass removes anything written in between.
+   *
+   * Not deleted: a `PR#` record with another human on it (they are a participant too, and the record is a
+   * shared fact), and records whose Combat Log rows have already expired (90 days).
+   */
+  async deleteUser(userId: number): Promise<DeletionReport> {
+    const partition = userPk(userId);
+    const items = await this.queryAll(partition, true);
+    const prKeys = await this.soleOwnedPrKeys(userId, items);
+    await this.deleteKeys(prKeys);
+
+    const keys = items.map(keyOf);
+    await this.deleteKeys(keys.filter((key) => key.SK !== 'PROFILE'));
+    await this.deleteKeys(keys.filter((key) => key.SK === 'PROFILE'));
+    const late = (await this.queryAll(partition, true)).map(keyOf);
+    await this.deleteKeys(late);
+    return { userItems: keys.length + late.length, prItems: prKeys.length };
+  }
+
+  /** Keys of every item of the `PR#` partitions the player's Combat Log rows point at and nobody else is on. */
+  private async soleOwnedPrKeys(userId: number, userItems: readonly Attrs[]): Promise<Key[]> {
+    const partitions = new Set<string>();
+    for (const item of userItems) {
+      if (String(item.SK).startsWith(EVENT_SK_PREFIX)) {
+        const repoId = item.repo_id;
+        const number = item.pr_number;
+        if (typeof repoId === 'number' && typeof number === 'number') {
+          partitions.add(prPk(repoId, number));
+        }
+      }
+    }
+    const keys: Key[] = [];
+    const queue = [...partitions];
+    for (let start = 0; start < queue.length; start += PR_READ_CONCURRENCY) {
+      const batch = queue.slice(start, start + PR_READ_CONCURRENCY);
+      const read = await Promise.all(batch.map((partition) => this.queryAll(partition, true)));
+      for (const prItems of read) {
+        if (referencesOnly(prItems, userId)) {
+          keys.push(...prItems.map(keyOf));
+        }
+      }
+    }
+    return keys;
+  }
+
+  /** Delete items by key, 25 per BatchWriteItem, re-sending whatever DynamoDB reports as unprocessed. */
+  private async deleteKeys(keys: readonly Key[]): Promise<void> {
+    for (let start = 0; start < keys.length; start += BATCH_WRITE_LIMIT) {
+      let pending = keys
+        .slice(start, start + BATCH_WRITE_LIMIT)
+        .map((key) => ({ DeleteRequest: { Key: key } }));
+      for (let attempt = 0; pending.length > 0; attempt += 1) {
+        if (attempt >= MAX_DELETE_ATTEMPTS) {
+          throw new Error('BatchWriteItem left deletes unprocessed');
+        }
+        if (attempt > 0) {
+          await this.sleep(Math.min(100 * 2 ** (attempt - 1), 2000));
+        }
+        const output = await this.client.send(
+          new BatchWriteCommand({ RequestItems: { [this.tableName]: pending } }),
+        );
+        pending = (output.UnprocessedItems?.[this.tableName] ?? []) as typeof pending;
+      }
+    }
+  }
+
+  // ----- Combat Log: USER#<id> / EVT#<ts>#<delivery> -----
+
+  /** Idempotent: the key holds the delivery id, so a retry rewrites the same row. */
+  async putEvent(row: EventRow): Promise<void> {
+    const attributes: Attrs = {
+      ts: row.ts,
+      delivery_id: row.deliveryId,
+      kind: row.kind,
+      points: row.points,
+      power: row.power,
+      zone: row.zone,
+      level: row.level,
+      xp: row.xp,
+      skill: row.skill,
+      skill_xp: { ...row.skillXp },
+      supplies: { ...row.supplies },
+      breakdown: row.breakdown.map((line) => ({
+        label: line.label,
+        value: line.value,
+        kind: line.kind,
+      })),
+      ttl: seconds(Date.parse(row.ts)) + EVENT_TTL_SECONDS,
+    };
+    if (row.repoId !== undefined) {
+      attributes.repo_id = row.repoId;
+    }
+    if (row.repoPrivate !== undefined) {
+      attributes.repo_private = row.repoPrivate;
+    }
+    if (row.prNumber !== undefined) {
+      attributes.pr_number = row.prNumber;
+    }
+    if (row.monster !== null) {
+      attributes.monster = row.monster;
+    }
+    if (row.reviewState !== undefined) {
+      attributes.review_state = row.reviewState;
+    }
+    if (row.additions !== undefined) {
+      attributes.additions = row.additions;
+    }
+    if (row.deletions !== undefined) {
+      attributes.deletions = row.deletions;
+    }
+    if (row.inlineComments !== undefined) {
+      attributes.inline_comments = row.inlineComments;
+    }
+    await this.put('EVENT', eventKey(row.userId, row.ts, row.deliveryId), attributes);
+  }
+
+  /**
+   * Newest-first page of a player's Combat Log. `beforeSk` is the sort key of the last row of the
+   * previous page (exclusive); `nextSk` is the value to pass for the next page, or null at the end.
+   */
+  async listEvents(
+    userId: number,
+    options: { limit: number; beforeSk?: string },
+  ): Promise<{ rows: StoredEventRow[]; nextSk: string | null }> {
+    const output = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)',
+        ExpressionAttributeNames: { '#pk': 'PK', '#sk': 'SK' },
+        ExpressionAttributeValues: { ':pk': userPk(userId), ':prefix': EVENT_SK_PREFIX },
+        ScanIndexForward: false,
+        Limit: options.limit + 1,
+        ...(options.beforeSk
+          ? { ExclusiveStartKey: { PK: userPk(userId), SK: options.beforeSk } }
+          : {}),
+      }),
+    );
+    const items = (output.Items ?? []) as Attrs[];
+    const page = items.slice(0, options.limit);
+    const last = page[page.length - 1];
+    return {
+      rows: page.map(toEventRow),
+      nextSk: items.length > options.limit && last ? String(last.SK) : null,
+    };
+  }
+
+  // ----- PR facts and reviews: PR#<repo>#<n> -----
+
+  /** Strongly consistent read of the whole partition: META, REVIEW# and INLINE# items. */
+  async getPR(repoId: number, number: number): Promise<PRBundle> {
+    const items = await this.queryAll(prPk(repoId, number), true);
+    const bundle: PRBundle = { meta: null, reviews: [], inline: [] };
+    for (const item of items) {
+      const sk = String(item.SK);
+      if (sk === 'META') {
+        bundle.meta = toPRMeta(item);
+      } else if (sk.startsWith('REVIEW#')) {
+        const state = str(item, 'state');
+        if (state === 'APPROVED' || state === 'CHANGES_REQUESTED' || state === 'COMMENTED') {
+          bundle.reviews.push({
+            reviewerId: num(item, 'reviewer_id', 0),
+            reviewerIsBot: bool(item, 'reviewer_is_bot', false),
+            state,
+            submittedAt: str(item, 'submitted_at') ?? '',
+          });
+        }
+      } else if (sk.startsWith('INLINE#')) {
+        bundle.inline.push({
+          reviewerId: num(item, 'reviewer_id', 0),
+          count: num(item, 'inline_comment_count', 1),
+        });
+      }
+    }
+    return bundle;
+  }
+
+  /**
+   * Upsert the PR facts of Requirement 3.1 and add to the review-round and push counters.
+   * The facts never regress `merged`: an out-of-order event that says "not merged" cannot overwrite a
+   * stored merge. In that case only the counters are added and `'kept'` is returned.
+   *
+   * The counters are added once per delivery: `countedBy` (the delivery id) is recorded on the item in the
+   * same write that adds them, and a write that finds its id there adds nothing. A delivery that is
+   * processed again (its first attempt died, or GitHub redelivered it) therefore cannot count its push or
+   * review round twice.
+   */
+  async upsertPR(
+    facts: PullRequestFacts,
+    deltas: { syncCount?: number; reviewRoundCount?: number } = {},
+    countedBy?: string,
+  ): Promise<'written' | 'kept'> {
+    const key = prMetaKey(facts.repoId, facts.number);
+    const set: Attrs = {
+      repo_id: facts.repoId,
+      repo_private: facts.repoPrivate,
+      pr_number: facts.number,
+      author_id: facts.author.id,
+      merged: facts.merged,
+      draft: facts.draft,
+      base_ref_is_default: facts.baseRefIsDefault,
+    };
+    if (facts.installationId !== null) {
+      set.installation_id = facts.installationId;
+    }
+    const timestamps: [string, string | null][] = [
+      ['opened_at', facts.openedAt],
+      ['merged_at', facts.mergedAt],
+      ['closed_at', facts.closedAt],
+    ];
+    for (const [attribute, value] of timestamps) {
+      const iso = isoOrUndefined(value);
+      if (iso !== undefined) {
+        set[attribute] = iso;
+      }
+    }
+    if (facts.merged && facts.mergedBy !== null) {
+      set.merged_by_id = facts.mergedBy.id;
+    }
+    if (facts.stats !== null) {
+      set.additions = facts.stats.additions;
+      set.deletions = facts.stats.deletions;
+      set.changed_files = facts.stats.changedFiles;
+      set.commits = facts.stats.commits;
+    }
+    const add: Attrs = {};
+    if (deltas.syncCount) {
+      add.sync_count = deltas.syncCount;
+    }
+    if (deltas.reviewRoundCount) {
+      add.review_round_count = deltas.reviewRoundCount;
+    }
+    // Counters are only added by a delivery that has not added them yet.
+    const counting = countedBy !== undefined && Object.keys(add).length > 0;
+    if (counting) {
+      add.counted = new Set([countedBy]);
+    }
+    const notCounted = counting ? 'attribute_not_exists(#c2) OR NOT contains(#c2, :c1)' : undefined;
+    const notRegressed = facts.merged
+      ? undefined
+      : 'attribute_not_exists(#c0) OR attribute_not_exists(#c1) OR #c1 = :c0';
+    const clauses = [notRegressed, notCounted].filter((clause) => clause !== undefined);
+    const written = await this.conditionalWrite(() =>
+      this.update(
+        'PR',
+        key,
+        { set, add },
+        clauses.length === 0
+          ? undefined
+          : {
+              expression: clauses.map((clause) => `(${clause})`).join(' AND '),
+              names: {
+                ...(notRegressed ? { '#c0': 'PK', '#c1': 'merged' } : {}),
+                ...(counting ? { '#c2': 'counted' } : {}),
+              },
+              values: {
+                ...(notRegressed ? { ':c0': false } : {}),
+                ...(counting ? { ':c1': countedBy } : {}),
+              },
+            },
+      ),
+    );
+    if (written) {
+      return 'written';
+    }
+    if (Object.keys(add).length > 0) {
+      await this.conditionalWrite(() =>
+        this.update(
+          'PR',
+          key,
+          { add },
+          counting
+            ? {
+                expression: notCounted as string,
+                names: { '#c2': 'counted' },
+                values: { ':c1': countedBy },
+              }
+            : undefined,
+        ),
+      );
+    }
+    return 'kept';
+  }
+
+  /** Record a human review. Idempotent: the key holds the delivery id. */
+  async putReview(
+    repoId: number,
+    number: number,
+    review: ReviewItem & { deliveryId: string },
+  ): Promise<void> {
+    const key = reviewKey(repoId, number, review.submittedAt, review.reviewerId, review.deliveryId);
+    await this.put('REVIEW', key, {
+      pr_key: prPk(repoId, number),
+      reviewer_id: review.reviewerId,
+      reviewer_is_bot: review.reviewerIsBot,
+      state: review.state,
+      submitted_at: review.submittedAt,
+    });
+  }
+
+  /** Record one scored inline comment (count 1). Idempotent: the key holds the delivery id. */
+  async putInline(
+    repoId: number,
+    number: number,
+    inline: { reviewerId: number; reviewerIsBot: boolean; deliveryId: string },
+  ): Promise<void> {
+    await this.put('REVIEW', inlineKey(repoId, number, inline.reviewerId, inline.deliveryId), {
+      pr_key: prPk(repoId, number),
+      reviewer_id: inline.reviewerId,
+      reviewer_is_bot: inline.reviewerIsBot,
+      inline_comment_count: 1,
+    });
+  }
+
+  // ----- installations: INSTALL#<id> / META -----
+
+  /** The installation, or null when it was never seen (or its tombstone has been swept). */
+  async getInstallation(installationId: number, nowMs: number): Promise<InstallationItem | null> {
+    const item = await this.getItem(installKey(installationId), false);
+    if (!item) {
+      return null;
+    }
+    const ttl = numOrNull(item, 'ttl');
+    return {
+      id: installationId,
+      accountId: num(item, 'account_id', 0),
+      repoIds: numberList(item.repo_ids),
+      suspended: bool(item, 'suspended', false),
+      deleted: ttl !== null && ttl <= seconds(nowMs),
+    };
+  }
+
+  /** `installation.created`: replace the mapping (a reinstall also clears a tombstone). */
+  async upsertInstallation(input: {
+    id: number;
+    accountId: number;
+    repoIds: readonly number[];
+    suspended: boolean;
+  }): Promise<void> {
+    const repoIds = [...new Set(input.repoIds)];
+    await this.update('INSTALL', installKey(input.id), {
+      set: {
+        account_id: input.accountId,
+        suspended: input.suspended,
+        ...(repoIds.length > 0 ? { repo_ids: new Set(repoIds) } : {}),
+      },
+      remove: repoIds.length > 0 ? ['ttl'] : ['ttl', 'repo_ids'],
+    });
+  }
+
+  /** `installation_repositories`: add and remove repository ids (set operations are idempotent). */
+  async changeInstallationRepos(input: {
+    id: number;
+    accountId: number;
+    added: readonly number[];
+    removed: readonly number[];
+  }): Promise<void> {
+    const key = installKey(input.id);
+    const added = [...new Set(input.added)];
+    const removed = [...new Set(input.removed)];
+    // ADD and DELETE on one attribute cannot share an update expression.
+    if (added.length > 0 || removed.length === 0) {
+      await this.update('INSTALL', key, {
+        set: { account_id: input.accountId },
+        ...(added.length > 0 ? { add: { repo_ids: new Set(added) } } : {}),
+      });
+    }
+    if (removed.length > 0) {
+      await this.update('INSTALL', key, {
+        set: { account_id: input.accountId },
+        deleteFrom: { repo_ids: new Set(removed) },
+      });
+    }
+  }
+
+  async setInstallationSuspended(input: {
+    id: number;
+    accountId: number;
+    suspended: boolean;
+  }): Promise<void> {
+    await this.update('INSTALL', installKey(input.id), {
+      set: { account_id: input.accountId, suspended: input.suspended },
+    });
+  }
+
+  /**
+   * `installation.deleted`: remove the mapping. The ingest role has no DeleteItem, so the item is
+   * tombstoned instead (repo ids dropped, suspended, `ttl = now`): `getInstallation` reports it as
+   * `deleted` at once and DynamoDB's TTL sweep removes it within about two days.
+   */
+  async removeInstallation(installationId: number, nowMs: number): Promise<void> {
+    await this.update('INSTALL', installKey(installationId), {
+      set: { suspended: true, ttl: seconds(nowMs) },
+      remove: ['repo_ids'],
+    });
+  }
+
+  // ----- webhook idempotency: DELIVERY#<guid> -----
+
+  /**
+   * Claim a delivery for processing, with a lease. A claim succeeds when nothing is stored under the id, or
+   * when the stored claim is still `processing` and its lease has run out: the Lambda that held it timed out
+   * or was killed (neither releases anything), so GitHub's redelivery takes it over after `DELIVERY_LEASE_MS`.
+   * A delivery that finished (`done`) can never be claimed again, so a duplicate stops here (Requirement 1.5).
+   * @returns what the earlier attempts left (the credits they had decided on), or null when the delivery is
+   *   done or another attempt still holds the lease
+   */
+  async claimDelivery(deliveryId: string, nowMs: number): Promise<DeliveryClaim | null> {
+    const attributes = await this.claimed(() =>
+      this.update(
+        'DELIVERY',
+        deliveryKey(deliveryId),
+        {
+          set: {
+            status: 'processing',
+            lease_until: nowMs + DELIVERY_LEASE_MS,
+            ttl: seconds(nowMs) + DELIVERY_TTL_SECONDS,
+          },
+        },
+        {
+          expression: 'attribute_not_exists(#c0) OR (#c1 = :c0 AND #c2 < :c1)',
+          names: { '#c0': 'PK', '#c1': 'status', '#c2': 'lease_until' },
+          values: { ':c0': 'processing', ':c1': nowMs },
+        },
+      ),
+    );
+    return attributes === null ? null : { credits: toCredits(attributes.credits) };
+  }
+
+  /** Like `conditionalWrite` for an update: the new item, or null when the condition failed. */
+  private async claimed(write: () => Promise<Attrs | undefined>): Promise<Attrs | null> {
+    let item: Attrs | undefined;
+    const applied = await this.conditionalWrite(async () => {
+      item = await write();
+    });
+    return applied ? (item ?? {}) : null;
+  }
+
+  /**
+   * Remember what a claimed delivery has decided to credit, before any of it is written. A later attempt at
+   * the same delivery finishes these from the ledger instead of scoring again (see `ingest.ts`).
+   */
+  async saveDeliveryCredits(
+    deliveryId: string,
+    credits: Readonly<Record<string, DeliveryCredit>>,
+  ): Promise<void> {
+    await this.update('DELIVERY', deliveryKey(deliveryId), { set: { credits: clean(credits) } });
+  }
+
+  /** The delivery is fully processed: later attempts are duplicates. */
+  async completeDelivery(deliveryId: string): Promise<void> {
+    await this.update('DELIVERY', deliveryKey(deliveryId), { set: { status: 'done' } });
+  }
+
+  /**
+   * Give up a claim whose processing failed, so the next attempt can take it at once instead of waiting for
+   * the lease to run out. Does nothing to a delivery that has been completed in the meantime.
+   */
+  async releaseDelivery(deliveryId: string): Promise<void> {
+    await this.conditionalWrite(() =>
+      this.update(
+        'DELIVERY',
+        deliveryKey(deliveryId),
+        { set: { lease_until: 0 } },
+        {
+          expression: '#c1 = :c0',
+          names: { '#c1': 'status' },
+          values: { ':c0': 'processing' },
+        },
+      ),
+    );
+  }
+
+  // ----- OAuth state: STATE#<nonce> -----
+  //
+  // The state itself is stateless (an HMAC over a nonce and an expiry, see `oauth-state.ts`), so signing in
+  // starts without a write. A used state is remembered here, which is what makes it single use.
+
+  /**
+   * Record that the state with this nonce has been used. True the first time, false for a replay.
+   * @param expiresAtMs when the state stops being valid; the record outlives it by the TTL sweep's slack
+   */
+  async consumeOAuthState(nonce: string, expiresAtMs: number): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.put('STATE', stateKey(nonce), { ttl: seconds(expiresAtMs) + 60 }, ITEM_ABSENT),
+    );
+  }
+
+  // ----- expeditions, Forge orders and Feats: EXPEDITION#<ts>, JOB#<station>, FEAT#<id> -----
+  //
+  // The profile holds the state the scorer and the endpoints read (the latest expedition, the stations'
+  // orders, the unlocked Feats) and is the lock: it is written first, under its `version`. These items are
+  // the durable record of each event, written conditionally so that repeating a request cannot repeat it.
+
+  /** Record a sent expedition. False when one is already stored for that instant (a repeat of the send). */
+  async putExpedition(userId: number, expedition: ExpeditionState): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.put(
+        'EXPEDITION',
+        expeditionKey(userId, new Date(expedition.sentAt).toISOString()),
+        expeditionAttributes(expedition),
+        ITEM_ABSENT,
+      ),
+    );
+  }
+
+  /**
+   * Claim a returned expedition's loot: flip `collected` false to true and store the loot rolled from the
+   * seed, once. The item is created if the send never recorded it. False when it was already claimed, in
+   * which case nothing changed (the loot on the item is the same, because it is a function of the seed).
+   */
+  async claimExpedition(
+    userId: number,
+    collected: ExpeditionState,
+    nowMs: number,
+  ): Promise<boolean> {
+    const key = expeditionKey(userId, new Date(collected.sentAt).toISOString());
+    return this.claim(
+      (ops, condition) => this.update('EXPEDITION', key, ops, condition),
+      expeditionAttributes(collected),
+      nowMs,
+    );
+  }
+
+  /**
+   * Record a started order at its station, replacing the station's previous (collected) order. False when
+   * the station's stored order is still waiting to be collected, which the profile never allows.
+   */
+  async putJob(userId: number, job: ForgeJob): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.put('JOB', jobKey(userId, job.station), jobAttributes(job), missingOrCollected(true)),
+    );
+  }
+
+  /** Claim a finished order: flip `collected` false to true and store the piece it made. False if already claimed. */
+  async claimJob(userId: number, collected: ForgeJob, nowMs: number): Promise<boolean> {
+    const key = jobKey(userId, collected.station);
+    return this.claim(
+      (ops, condition) => this.update('JOB', key, ops, condition),
+      jobAttributes(collected),
+      nowMs,
+    );
+  }
+
+  /**
+   * The claim of an `EXPEDITION#` or `JOB#` item that is being collected: one conditional write that flips
+   * `collected` false to true with what the roll made, and is refused when it already is true. `write` is
+   * the guarded `update` of the item (each caller names its own item type there).
+   */
+  private async claim(
+    write: (ops: UpdateOps, condition: ConditionSpec) => Promise<unknown>,
+    collected: Attrs,
+    nowMs: number,
+  ): Promise<boolean> {
+    const set = { ...collected, collected: true, collected_at: new Date(nowMs).toISOString() };
+    return this.conditionalWrite(() => write({ set }, missingOrCollected(false)));
+  }
+
+  /** Record a Feat's unlock, once. False when it was already recorded (so a repeat never writes twice). */
+  async putFeat(
+    userId: number,
+    featId: string,
+    unlockedAtMs: number,
+    deliveryId: string,
+  ): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.put(
+        'FEAT',
+        featKey(userId, featId),
+        { unlocked_at: new Date(unlockedAtMs).toISOString(), delivery_id: deliveryId },
+        ITEM_ABSENT,
+      ),
+    );
+  }
+
+  /**
+   * When each Feat unlocked, from the `FEAT#<id>` records (written once, at the unlock): Feat id to the ISO
+   * instant. A Feat the profile lists as unlocked but whose record is missing (the record follows the
+   * profile write, so a crash between the two leaves none) simply has no entry.
+   */
+  async listFeatUnlocks(userId: number): Promise<Record<string, string>> {
+    const unlocks: Record<string, string> = {};
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const output = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)',
+          ExpressionAttributeNames: { '#pk': 'PK', '#sk': 'SK' },
+          ExpressionAttributeValues: { ':pk': userPk(userId), ':prefix': 'FEAT#' },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        }),
+      );
+      for (const item of (output.Items ?? []) as Attrs[]) {
+        const unlockedAt = str(item, 'unlocked_at');
+        if (unlockedAt !== null && !Number.isNaN(Date.parse(unlockedAt))) {
+          unlocks[String(item.SK).slice('FEAT#'.length)] = unlockedAt;
+        }
+      }
+      startKey = output.LastEvaluatedKey;
+    } while (startKey);
+    return unlocks;
+  }
+
+  // ----- weekly run: USER#<id> / WEEK#<yyyy-ww> -----
+
+  /** The run with its bookkeeping (lock version, request ids, counters, free pack, Legendary offer). */
+  async getWeekItem(userId: number, weekKey: string): Promise<WeekItem | null> {
+    const item = await this.getItem(weekKeyOf(userId, weekKey), true);
+    return item ? toWeekItem(item) : null;
+  }
+
+  /**
+   * Add a scored event's XP to the week, and count it toward the weekly streak, in one atomic update.
+   * Returns the week as it is afterwards, or null when there is no such week.
+   *
+   * With `id` (the credit's name) the credit is added once: the id is recorded in the same update, and an
+   * update that finds it there adds nothing and returns the week as it is, so finishing a credit again after
+   * a failure cannot count it twice.
+   */
+  async addWeekCredit(
+    userId: number,
+    weekKey: string,
+    credit: { xp: number; merge: boolean; review: boolean; id?: string },
+  ): Promise<WeekItem | null> {
+    const add: Attrs = { weekly_xp: credit.xp };
+    if (credit.merge) {
+      add.merges = 1;
+    }
+    if (credit.review) {
+      add.reviews = 1;
+    }
+    if (credit.id !== undefined) {
+      add.credited = new Set([credit.id]);
+    }
+    const written = await this.claimed(() =>
+      this.update(
+        'WEEK',
+        weekKeyOf(userId, weekKey),
+        { add },
+        credit.id === undefined
+          ? ITEM_EXISTS
+          : {
+              expression: 'attribute_exists(#c0) AND NOT contains(#c1, :c0)',
+              names: { '#c0': 'PK', '#c1': 'credited' },
+              values: { ':c0': credit.id },
+            },
+      ),
+    );
+    if (written !== null) {
+      return toWeekItem(written);
+    }
+    // Already added, or no such week.
+    return credit.id === undefined ? null : this.getWeekItem(userId, weekKey);
+  }
+
+  /**
+   * Change the mutable parts of an existing week and bump its `version`, provided it still has the
+   * `version` (and, for the act-clear claim, the current act) the caller read. Returns false when it does
+   * not, in which case nothing changed and the caller re-reads.
+   */
+  async saveWeek(
+    userId: number,
+    weekKey: string,
+    expect: { version?: number; act?: ActId },
+    patch: WeekPatch,
+  ): Promise<boolean> {
+    const set: Attrs = {};
+    const remove: string[] = [];
+    const assign = (attribute: string, value: unknown): void => {
+      if (value === null) {
+        remove.push(attribute);
+      } else if (value !== undefined) {
+        set[attribute] = clean(value);
+      }
+    };
+    assign('act', patch.act);
+    assign('cleared_acts', patch.clearedActs);
+    assign('played', patch.played);
+    assign('shop', patch.shop);
+    assign('free_pack', patch.freePack);
+    assign('legendary', patch.legendary);
+    assign('request_ids', patch.requestIds);
+    assign(
+      'pending',
+      patch.pending === null || (patch.pending && Object.keys(patch.pending).length === 0)
+        ? null
+        : patch.pending,
+    );
+    const clauses = ['attribute_exists(#c0)'];
+    const names: Record<string, string> = { '#c0': 'PK' };
+    const values: Record<string, unknown> = {};
+    if (expect.version !== undefined) {
+      // A week written before versions existed has no `version` attribute: that reads as 0.
+      clauses.push(expect.version === 0 ? '(attribute_not_exists(#c1) OR #c1 = :c1)' : '#c1 = :c1');
+      names['#c1'] = 'version';
+      values[':c1'] = expect.version;
+    }
+    if (expect.act !== undefined) {
+      clauses.push('#c2 = :c2');
+      names['#c2'] = 'act';
+      values[':c2'] = expect.act;
+    }
+    return this.conditionalWrite(() =>
+      this.update(
+        'WEEK',
+        weekKeyOf(userId, weekKey),
+        { set, add: { version: 1 }, remove },
+        { expression: clauses.join(' AND '), names, values },
+      ),
+    );
+  }
+
+  /** Create the week (rollover). Returns false when it already exists. */
+  async createWeek(userId: number, run: RunState): Promise<boolean> {
+    return this.conditionalWrite(() =>
+      this.put('WEEK', weekKeyOf(userId, run.weekKey), runToAttributes(run), ITEM_ABSENT),
+    );
+  }
+
+  /**
+   * Update an existing week: atomically add to the weekly XP and/or set fields. Returns false when
+   * the week does not exist. A `null` for `act` or `shop` removes the attribute.
+   */
+  async updateWeek(
+    userId: number,
+    weekKey: string,
+    patch: { addWeeklyXp?: number; set?: Partial<Omit<RunState, 'weekKey' | 'weeklyXp'>> },
+  ): Promise<boolean> {
+    const set: Attrs = {};
+    const remove: string[] = [];
+    for (const [field, value] of Object.entries(patch.set ?? {})) {
+      const attribute = WEEK_ATTRIBUTE[field] ?? field;
+      if (value === null) {
+        remove.push(attribute);
+      } else {
+        set[attribute] = value;
+      }
+    }
+    const add: Attrs = patch.addWeeklyXp ? { weekly_xp: patch.addWeeklyXp } : {};
+    return this.conditionalWrite(() =>
+      this.update('WEEK', weekKeyOf(userId, weekKey), { set, add, remove }, ITEM_EXISTS),
+    );
+  }
+}
+
+function expeditionAttributes(expedition: ExpeditionState): Attrs {
+  return {
+    region: expedition.region,
+    hours: expedition.hours,
+    forage: expedition.forage,
+    sent_at: expedition.sentAt,
+    returns_at: expedition.returnsAt,
+    seed: expedition.seed,
+    provisions_paid: expedition.provisionsPaid,
+    pack_bonus: expedition.packBonus,
+    collected: expedition.collected,
+    ...(expedition.loot !== undefined ? { loot: clean(expedition.loot) } : {}),
+  };
+}
+
+function jobAttributes(job: ForgeJob): Attrs {
+  return {
+    recipe: job.recipe,
+    station: job.station,
+    started_at: job.startedAt,
+    done_at: job.doneAt,
+    seed: job.seed,
+    collected: job.collected,
+    ...(job.piece !== undefined ? { piece: clean(job.piece) } : {}),
+    ...(job.output !== undefined ? { output: clean(job.output) } : {}),
+  };
+}
+
+/** A run plus what the endpoints keep beside it on the `WEEK#` item. */
+export interface WeekItem {
+  run: RunState;
+  /** Optimistic-lock counter of the shop and Pledge endpoints and the act-clear claim. */
+  version: number;
+  /** The last 20 client request ids that were applied, oldest first. */
+  requestIds: string[];
+  /**
+   * Requests that hold the week lock and have not been promoted to `requestIds` yet, by request id. Such a
+   * request is "applied" only once the profile carries its commit marker (see `idempotent.ts`).
+   */
+  pending: Record<string, PendingLock>;
+  /** Merged PRs and scored reviews this week (the weekly streak needs a merge or three reviews). */
+  merges: number;
+  reviews: number;
+  /** A free Pledge pack granted by the Raid clear and not yet picked. */
+  freePack: PackKind | null;
+  /** A Legendary Charm offered on a 4th Renown and not yet taken. */
+  legendary: Charm | null;
+}
+
+/** The fields of a week the shop, Pledge and clear writes change; `null` removes one. */
+export interface WeekPatch {
+  act?: ActId | null;
+  clearedActs?: readonly ActId[];
+  played?: readonly Pledge[];
+  shop?: ShopStock | null;
+  freePack?: PackKind | null;
+  legendary?: Charm | null;
+  requestIds?: readonly string[];
+  /** The whole map of locks; `null` (or an empty map) removes it. */
+  pending?: Readonly<Record<string, PendingLock>> | null;
+}
+
+/** The game fields of a week a mutation can change (everything in `WeekPatch` but the bookkeeping). */
+export type WeekFields = Omit<WeekPatch, 'requestIds' | 'pending'>;
+
+/** A request's hold on the week: when it took it, and the fields it changed, before and after. */
+export interface PendingLock {
+  /** Epoch milliseconds the lock was taken at. */
+  at: number;
+  before: WeekFields;
+  after: WeekFields;
+}
+
+const WEEK_ATTRIBUTE: Readonly<Record<string, string>> = {
+  weekKey: 'week_key',
+  act: 'act',
+  clearedActs: 'cleared_acts',
+  weeklyXp: 'weekly_xp',
+  targets: 'targets',
+  mogul: 'mogul',
+  hand: 'hand',
+  played: 'played',
+  shopSeed: 'shop_seed',
+  shop: 'shop',
+};
+
+function runToAttributes(run: RunState): Attrs {
+  const attributes: Attrs = {
+    version: 0,
+    request_ids: [],
+    merges: 0,
+    reviews: 0,
+    week_key: run.weekKey,
+    cleared_acts: run.clearedActs,
+    weekly_xp: run.weeklyXp,
+    targets: { ...run.targets },
+    mogul: run.mogul,
+    hand: run.hand.map((pledge) => ({ ...pledge })),
+    played: run.played.map((pledge) => ({ ...pledge })),
+    shop_seed: run.shopSeed,
+  };
+  if (run.act !== null) {
+    attributes.act = run.act;
+  }
+  if (run.shop !== null) {
+    attributes.shop = clean(run.shop);
+  }
+  return attributes;
+}
+
+function toRunState(item: Attrs): RunState {
+  return {
+    weekKey: str(item, 'week_key') ?? '',
+    act: (str(item, 'act') as RunState['act']) ?? null,
+    clearedActs: (Array.isArray(item.cleared_acts)
+      ? item.cleared_acts
+      : []) as RunState['clearedActs'],
+    weeklyXp: num(item, 'weekly_xp', 0),
+    targets: (item.targets ?? { scout: 0, raid: 0, boss: 0 }) as RunState['targets'],
+    mogul: str(item, 'mogul') as RunState['mogul'],
+    hand: (Array.isArray(item.hand) ? item.hand : []) as RunState['hand'],
+    played: (Array.isArray(item.played) ? item.played : []) as RunState['played'],
+    shopSeed: num(item, 'shop_seed', 0),
+    shop: (item.shop ?? null) as RunState['shop'],
+  };
+}
+
+function toPending(value: unknown): Record<string, PendingLock> {
+  const pending: Record<string, PendingLock> = {};
+  for (const [id, lock] of Object.entries(record<unknown>(value))) {
+    if (isRecord(lock) && typeof lock.at === 'number') {
+      pending[id] = {
+        at: lock.at,
+        before: (isRecord(lock.before) ? lock.before : {}) as WeekFields,
+        after: (isRecord(lock.after) ? lock.after : {}) as WeekFields,
+      };
+    }
+  }
+  return pending;
+}
+
+function toWeekItem(item: Attrs): WeekItem {
+  const freePack = str(item, 'free_pack');
+  return {
+    run: toRunState(item),
+    version: num(item, 'version', 0),
+    requestIds: list<string>(item.request_ids),
+    pending: toPending(item.pending),
+    merges: num(item, 'merges', 0),
+    reviews: num(item, 'reviews', 0),
+    freePack:
+      freePack === 'pledge' || freePack === 'charm' || freePack === 'mogul' ? freePack : null,
+    legendary: isRecord(item.legendary) ? (item.legendary as unknown as Charm) : null,
+  };
+}

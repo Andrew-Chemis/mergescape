@@ -1,0 +1,72 @@
+{
+  "action": "suspend",
+  "installation": {
+    "id": 777001,
+    "client_id": "FAKE_CLIENT_ID",
+    "account": {
+      "login": "example",
+      "id": 5005005,
+      "node_id": "U_FAKE_5005005",
+      "avatar_url": "https://github.example.invalid/avatars/5005005",
+      "gravatar_id": "",
+      "url": "https://api.github.example.invalid/users/example",
+      "html_url": "https://github.example.invalid/example",
+      "type": "Organization",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "repository_selection": "selected",
+    "access_tokens_url": "https://api.github.example.invalid/app/installations/777001/access_tokens",
+    "repositories_url": "https://api.github.example.invalid/installation/repositories",
+    "html_url": "https://github.example.invalid/organizations/example/settings/installations/777001",
+    "app_id": 123456,
+    "app_slug": "example-app",
+    "target_id": 5005005,
+    "target_type": "Organization",
+    "permissions": {
+      "metadata": "read",
+      "pull_requests": "read"
+    },
+    "events": ["pull_request", "pull_request_review", "pull_request_review_comment"],
+    "created_at": "2026-11-08T12:00:00Z",
+    "updated_at": "2026-11-08T12:00:00Z",
+    "single_file_name": null,
+    "has_multiple_single_files": false,
+    "single_file_paths": [],
+    "suspended_by": {
+      "login": "example-admin",
+      "id": 5005006,
+      "node_id": "U_FAKE_5005006",
+      "avatar_url": "https://github.example.invalid/avatars/5005006",
+      "gravatar_id": "",
+      "url": "https://api.github.example.invalid/users/example-admin",
+      "html_url": "https://github.example.invalid/example-admin",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "suspended_at": "2026-11-09T12:00:00Z"
+  },
+  "repositories": [
+    {
+      "id": 424242,
+      "node_id": "R_FAKE_424242",
+      "name": "repo",
+      "full_name": "example/repo",
+      "private": true
+    }
+  ],
+  "requester": null,
+  "sender": {
+    "login": "example-admin",
+    "id": 5005006,
+    "node_id": "U_FAKE_5005006",
+    "avatar_url": "https://github.example.invalid/avatars/5005006",
+    "gravatar_id": "",
+    "url": "https://api.github.example.invalid/users/example-admin",
+    "html_url": "https://github.example.invalid/example-admin",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  }
+}

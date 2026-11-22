@@ -1,0 +1,852 @@
+/**
+ * The `api` Lambda behind a Function URL (auth NONE; sessions are bearer JWTs).
+ *
+ * | Route                   | Origin check | Auth   | Purpose                                         |
+ * |-------------------------|--------------|--------|-------------------------------------------------|
+ * | GET /auth/login         | no           | none   | 302 to GitHub with a signed `state`, no write   |
+ * | GET /auth/callback      | no           | none   | exchange code, upsert profile, 302 with a JWT   |
+ * | GET /me                 | yes          | bearer | the player's profile and current run            |
+ * | GET /week               | yes          | bearer | the current run: acts, Pledges, the shop        |
+ * | GET /log?cursor=        | yes          | bearer | Combat Log page, newest first                   |
+ * | GET /installations      | yes          | bearer | the App installations the player can see        |
+ * | POST /shop/buy          | yes          | bearer | buy a Charm, pack or Voucher, or take the offer |
+ * | POST /shop/pick         | yes          | bearer | keep one of the 3 options of a bought pack     |
+ * | POST /shop/reroll       | yes          | bearer | re-roll the Charms and packs                    |
+ * | POST /shop/sell         | yes          | bearer | sell a held Charm for half its price            |
+ * | POST /shrine/remove     | yes          | bearer | remove a Pledge from the deck                   |
+ * | POST /pledges/play      | yes          | bearer | play a Pledge from the hand                     |
+ * | GET /expedition         | yes          | bearer | the latest trip, the regions and the choices    |
+ * | POST /expedition/send   | yes          | bearer | send the character on an expedition             |
+ * | POST /expedition/collect| yes          | bearer | collect a returned expedition's loot            |
+ * | GET /packs/:seed        | yes          | bearer | the 3 Charms of an unopened loot pack           |
+ * | POST /packs/open        | yes          | bearer | keep one Charm of a loot pack                   |
+ * | GET /forge              | yes          | bearer | the stations, recipes and upgrades              |
+ * | POST /forge/start       | yes          | bearer | start an order at a station                     |
+ * | POST /forge/collect     | yes          | bearer | collect a finished order                        |
+ * | POST /forge/upgrade     | yes          | bearer | buy Bellows, Dyes or Index; choose a cape colour|
+ * | POST /gear/equip        | yes          | bearer | wear a piece or a pet, or take a slot off       |
+ * | GET /feats              | yes          | bearer | every Feat with its progress                    |
+ * | POST /feats/pin         | yes          | bearer | pin or unpin a Feat (at most three)             |
+ * | POST /settings          | yes          | bearer | show or hide the public README badge            |
+ * | GET /export             | yes          | bearer | every item under the player's USER# partition   |
+ * | POST /delete            | yes          | bearer | delete the player's data (Requirement 13.2)     |
+ * | GET /badge/{login}.svg  | no           | none   | the README badge, public, cached six hours      |
+ *
+ * Mutations take `{ "requestId": "<client uuid>", ... }`, answer `{ me, week }` (the shop, `mutations.ts`) or
+ * the depth-layer shapes of docs/api-contract.md (`depth.ts`), and are idempotent per request id. A typed
+ * game error is a 409 with its code; bad input is a 400.
+ * The two auth routes are browser navigations, which carry no `Origin` header the page controls, so they
+ * are exempt from the Origin check (Requirement 12.3). Everything else must come from the Pages origin.
+ * The same Lambda also receives the weekly EventBridge input `{"action":"rollover"}` (see `rollover.ts`).
+ */
+import { randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import {
+  GEAR_SLOTS,
+  isCapeColor,
+  isExpeditionChoice,
+  isRecord,
+  isRegionId,
+  lootPackOptions,
+  STATION_IDS,
+  UPGRADE_IDS,
+} from '@mergescape/shared';
+import type {
+  CapeColor,
+  ExpeditionState,
+  GearSlot,
+  StationId,
+  UpgradeId,
+} from '@mergescape/shared';
+import { BADGE_CACHE_CONTROL, BADGE_CONTENT_TYPE, renderBadge } from '../badge';
+import type { Config } from '../config';
+import type { Db } from '../db';
+import { mutateDepth } from '../depth';
+import type { DepthContext, DepthRequest, DepthResult } from '../depth';
+import { authorizeUrl, SignInError, signInWithCode } from '../github';
+import type { FetchLike } from '../github';
+import { header, json, rawBody, redirect } from '../http';
+import type { FunctionUrlEvent, FunctionUrlResult } from '../http';
+import { signSessionToken, verifySessionToken } from '../jwt';
+import type { Refusal } from '../idempotent';
+import { GITHUB_LOGIN } from '../keys';
+import type { Logger } from '../log';
+import {
+  clearedStateCookie,
+  hasStateCookie,
+  signState,
+  stateCookie,
+  verifyState,
+} from '../oauth-state';
+import { getRuntime } from '../runtime';
+import { isRolloverEvent, runRollover } from '../rollover';
+import type { RolloverEvent, RolloverResult } from '../rollover';
+import { mutate } from '../mutations';
+import type { MutationRequest } from '../mutations';
+import { loadCurrent } from '../runs';
+import type { Current, RunContext } from '../runs';
+import { randomSeed } from '../seed';
+import type { Secrets } from '../secrets';
+import type {
+  ExpeditionCollectResponse,
+  ExpeditionSendResponse,
+  ForgeCollectResponse,
+  InstallationsResponse,
+  LogResponse,
+  MeResponse,
+  MeResult,
+  MutationResponse,
+  PackOptionsResponse,
+} from '../api-types';
+import {
+  decodeCursor,
+  encodeCursor,
+  toExpeditionView,
+  toFeatsView,
+  toForgeView,
+  toInstallationSummary,
+  toLogEntry,
+  toMeResponse,
+  toWeekSummary,
+} from '../views';
+
+/** Combat Log rows per page. */
+export const LOG_PAGE_SIZE = 20;
+
+const CODE_FORMAT = /^[A-Za-z0-9_-]{1,200}$/;
+const BEARER = /^Bearer ([A-Za-z0-9._-]+)$/i;
+
+/** A mutation body is a handful of short fields; anything larger is refused unread (413). */
+export const MAX_REQUEST_BYTES = 4 * 1024;
+const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const CONTENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const BUY_KINDS = ['charm', 'pack', 'voucher', 'legendary'] as const;
+/** A recipe id: `forge:weapon:iron` or `scriptorium:affix`. */
+const RECIPE_ID = /^[a-z]{1,16}(?::[a-z]{1,16}){1,2}$/;
+/** The largest unsigned 32-bit seed (a Charm pack's seed). */
+const MAX_SEED = 0xffff_ffff;
+
+/**
+ * The largest export body sent, gzipped when the client accepts it. A Function URL response is capped at
+ * 6 MB, base64 included, so 4 MiB of payload leaves room for the encoding.
+ */
+export const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
+
+/** `GET /badge/{login}.svg`: the login is one path segment; anything else under /badge/ is a 404. */
+const BADGE_PATH = /^\/badge\/([^/]+)\.svg$/;
+
+/** `GET /packs/:seed`: one path segment after `/packs/`. */
+const PACK_PATH = /^\/packs\/([^/]+)$/;
+
+/** The sort-key prefix of each group of `USER#` items in the export; anything else goes to `other`. */
+const EXPORT_GROUPS = [
+  ['EVT#', 'events'],
+  ['WEEK#', 'weeks'],
+  ['FEAT#', 'feats'],
+  ['EXPEDITION#', 'expeditions'],
+  ['JOB#', 'jobs'],
+] as const;
+
+type ExportGroup = (typeof EXPORT_GROUPS)[number][1];
+
+// ---------------------------------------------------------------------------------------------
+// Request bodies
+// ---------------------------------------------------------------------------------------------
+
+type Body = Record<string, unknown>;
+
+/** Reads a typed request out of a body, or null when the body is not valid. */
+type Parser<R> = (body: Body) => R | null;
+
+/** The client's request id in a mutation body, or null when it is missing or not a UUID-like token. */
+function parseRequestId(body: Body): string | null {
+  const { requestId } = body;
+  return typeof requestId === 'string' && REQUEST_ID.test(requestId) ? requestId : null;
+}
+
+/** A content id (a Charm, Pledge, piece, Feat or pet id) as a short URL-safe token. */
+function text(value: unknown): string | null {
+  return typeof value === 'string' && CONTENT_ID.test(value) ? value : null;
+}
+
+/** A small whole number from `min` to 99 (a shelf slot or a pack option). */
+function whole(value: unknown, min: number): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= 99
+    ? value
+    : null;
+}
+
+function member<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  return allowed.find((candidate) => candidate === value) ?? null;
+}
+
+// The shop, shrine and Pledge requests (`mutations.ts`).
+
+const parseBuy: Parser<MutationRequest> = (body) => {
+  const kind = BUY_KINDS.find((candidate) => candidate === body.kind);
+  if (kind === undefined) {
+    return null;
+  }
+  if (kind === 'voucher' || kind === 'legendary') {
+    return { type: 'buy', kind };
+  }
+  const index = whole(body.index, 0);
+  return index === null ? null : { type: 'buy', kind, index };
+};
+
+const parsePick: Parser<MutationRequest> = (body) => {
+  const index = whole(body.index, -1);
+  const option = whole(body.option, 0);
+  return index === null || option === null ? null : { type: 'pick', index, option };
+};
+
+const parseReroll: Parser<MutationRequest> = () => ({ type: 'reroll' });
+
+const parseSell: Parser<MutationRequest> = (body) => {
+  const charmId = text(body.charmId);
+  return charmId === null ? null : { type: 'sell', charmId };
+};
+
+const parsePledge =
+  (type: 'shrine' | 'play'): Parser<MutationRequest> =>
+  (body) => {
+    const pledgeId = text(body.pledgeId);
+    return pledgeId === null ? null : { type, pledgeId };
+  };
+
+// The depth-layer requests (`depth.ts`).
+
+const parseExpeditionSend: Parser<DepthRequest> = ({ region, choice }) =>
+  isRegionId(region) && isExpeditionChoice(choice)
+    ? { type: 'expedition_send', region, choice }
+    : null;
+
+const parseExpeditionCollect: Parser<DepthRequest> = () => ({ type: 'expedition_collect' });
+
+const parsePackOpen: Parser<DepthRequest> = ({ seed, charmId: rawCharmId }) => {
+  const charmId = text(rawCharmId);
+  return typeof seed === 'number' &&
+    Number.isInteger(seed) &&
+    seed >= 0 &&
+    seed <= MAX_SEED &&
+    charmId !== null
+    ? { type: 'pack_open', seed, charmId }
+    : null;
+};
+
+const parseForgeStart: Parser<DepthRequest> = ({ recipeId, pieceId: rawPieceId }) => {
+  if (typeof recipeId !== 'string' || !RECIPE_ID.test(recipeId)) {
+    return null;
+  }
+  if (rawPieceId === undefined) {
+    return { type: 'forge_start', recipeId };
+  }
+  const pieceId = text(rawPieceId);
+  return pieceId === null ? null : { type: 'forge_start', recipeId, pieceId };
+};
+
+const parseForgeCollect: Parser<DepthRequest> = (body) => {
+  const station: StationId | null = member(body.station, STATION_IDS);
+  return station === null ? null : { type: 'forge_collect', station };
+};
+
+const parseForgeUpgrade: Parser<DepthRequest> = (body) => {
+  // Either an upgrade to buy or a cape colour to choose (null for the natural cape), never both.
+  const dyeing = Object.hasOwn(body, 'capeColor');
+  if (dyeing === (body.upgrade !== undefined)) {
+    return null;
+  }
+  if (dyeing) {
+    const color = body.capeColor;
+    return color === null || isCapeColor(color)
+      ? { type: 'forge_dye', capeColor: color as CapeColor | null }
+      : null;
+  }
+  const upgrade: UpgradeId | null = member(body.upgrade, UPGRADE_IDS);
+  return upgrade === null ? null : { type: 'forge_upgrade', upgrade };
+};
+
+const parseGearEquip: Parser<DepthRequest> = (body) => {
+  // Exactly one of: a piece to wear, a slot to take off, a pet to wear.
+  const given = ['pieceId', 'unequip', 'petId'].filter((name) => body[name] !== undefined);
+  if (given.length !== 1) {
+    return null;
+  }
+  if (given[0] === 'unequip') {
+    const slot: GearSlot | null = member(body.unequip, GEAR_SLOTS);
+    return slot === null ? null : { type: 'unequip', slot };
+  }
+  const id = text(given[0] === 'pieceId' ? body.pieceId : body.petId);
+  if (id === null) {
+    return null;
+  }
+  return given[0] === 'pieceId' ? { type: 'equip', pieceId: id } : { type: 'equip_pet', petId: id };
+};
+
+const parseFeatPin: Parser<DepthRequest> = (body) => {
+  const featId = text(body.featId);
+  return featId === null || typeof body.pinned !== 'boolean'
+    ? null
+    : { type: 'pin', featId, pinned: body.pinned };
+};
+
+const parseSettings: Parser<DepthRequest> = (body) =>
+  typeof body.badgePublic === 'boolean'
+    ? { type: 'settings', badgePublic: body.badgePublic }
+    : null;
+
+// What each depth route answers beyond `me` (docs/api-contract.md); every other one answers `{ me }`.
+
+/** The trip a send or collect answers with: the plan always holds one, and a replay reads it from the profile. */
+const tripOf = (result: DepthResult): ExpeditionState => result.expedition as ExpeditionState;
+
+const answerSend = (me: MeResponse, result: DepthResult): ExpeditionSendResponse => ({
+  me,
+  expedition: tripOf(result),
+});
+
+const answerCollect = (me: MeResponse, result: DepthResult): ExpeditionCollectResponse => ({
+  me,
+  expedition: tripOf(result),
+  loot: result.loot,
+  applied: result.applied,
+  featsUnlocked: result.featsUnlocked,
+});
+
+const answerForgeCollect = (me: MeResponse, result: DepthResult): ForgeCollectResponse => ({
+  me,
+  piece: result.piece,
+  applied: result.applied,
+});
+
+const answerMe = (me: MeResponse): MeResult => ({ me });
+
+// ---------------------------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------------------------
+
+/** What a route handler is given: the signed-in player, the request, and the path parameter if any. */
+interface Call {
+  userId: number;
+  event: FunctionUrlEvent;
+  /** The capture group of a route's pattern; empty for an exact path. */
+  param: string;
+}
+
+interface Route {
+  method: 'GET' | 'POST';
+  /** An exact path, or a pattern with one capture group (`GET /packs/:seed` is the only one). */
+  path: string | RegExp;
+  handle: (call: Call) => Promise<FunctionUrlResult>;
+}
+
+const get = (path: string | RegExp, handle: Route['handle']): Route => ({
+  method: 'GET',
+  path,
+  handle,
+});
+
+const post = (path: string, handle: Route['handle']): Route => ({ method: 'POST', path, handle });
+
+/** The route for a path, and its path parameter. An exact path wins over a pattern. */
+function matchRoute(
+  routes: readonly Route[],
+  path: string,
+): { route: Route; param: string } | undefined {
+  const exact = routes.find((route) => route.path === path);
+  if (exact) {
+    return { route: exact, param: '' };
+  }
+  for (const route of routes) {
+    const param = route.path instanceof RegExp ? route.path.exec(path)?.[1] : undefined;
+    if (param !== undefined) {
+      return { route, param };
+    }
+  }
+  return undefined;
+}
+
+/** The answer for a mutation that was refused: its status and error code. */
+const refused = ({ status, error }: Refusal): FunctionUrlResult => json(status, { error });
+
+/** The JSON object in a request body: `handle` runs on it, or the 413 / 400 answer is sent instead. */
+async function withJsonBody(
+  event: FunctionUrlEvent,
+  handle: (body: Body) => Promise<FunctionUrlResult>,
+): Promise<FunctionUrlResult> {
+  const raw = rawBody(event, MAX_REQUEST_BYTES);
+  if (raw === 'too_large') {
+    return json(413, { error: 'payload_too_large' });
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw.toString('utf8'));
+  } catch {
+    return json(400, { error: 'invalid_json' });
+  }
+  return isRecord(body) ? handle(body) : json(400, { error: 'invalid_request' });
+}
+
+export interface ApiDeps {
+  db: Db;
+  secrets: Secrets;
+  config: Config;
+  log: Logger;
+  /** Epoch milliseconds. */
+  now?: () => number;
+  /** The HTTP client for GitHub calls (global `fetch` in production). */
+  fetch?: FetchLike;
+  /** Seeds for a run started by a player's first request of a week (a random uint32 in production). */
+  newSeed?: () => number;
+  /** A fresh unguessable token for the nonce of the OAuth `state`. */
+  nonce?: () => string;
+  /** The seed of an expedition or Forge order a request starts (a random uint32 in production). */
+  rollSeed?: () => number;
+}
+
+export function createApiHandler(
+  deps: ApiDeps,
+): (event: FunctionUrlEvent) => Promise<FunctionUrlResult> {
+  const { db, secrets, config, log } = deps;
+  const now = deps.now ?? Date.now;
+  const fetchFn: FetchLike = deps.fetch ?? ((input, init) => fetch(input, init));
+  const nonce = deps.nonce ?? (() => randomBytes(32).toString('base64url'));
+  const clientUrl = `${config.pagesOrigin}${config.clientBasePath}`;
+
+  /**
+   * The browser is sent back to the client; the outcome is in the fragment so it never reaches a server. The
+   * sign-in is over, however it went, so the state cookie goes too.
+   */
+  const toClient = (fragment: string): FunctionUrlResult =>
+    redirect(`${clientUrl}${fragment}`, { 'referrer-policy': 'no-referrer' }, [
+      clearedStateCookie(),
+    ]);
+
+  // ----- /auth/login -----
+
+  /**
+   * Anyone can call this, so it writes nothing: the `state` is signed (`oauth-state.ts`), and its nonce goes
+   * to the browser in a cookie that the callback must see again.
+   */
+  async function login(): Promise<FunctionUrlResult> {
+    try {
+      const [clientId, key] = await Promise.all([
+        secrets.get('github-oauth-client-id'),
+        secrets.get('jwt-key'),
+      ]);
+      const value = nonce();
+      return redirect(
+        authorizeUrl(clientId, signState(key, value, now())),
+        { 'referrer-policy': 'no-referrer' },
+        [stateCookie(value)],
+      );
+    } catch (error) {
+      log.error('api.login_failed', {}, error);
+      return toClient('#error=server_error');
+    }
+  }
+
+  // ----- /auth/callback -----
+
+  async function callback(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
+    const params = event.queryStringParameters ?? {};
+    try {
+      // Requirement 2.1: the state is signed, expires after ten minutes and belongs to this browser (the
+      // cookie the login set). It is single use too, which is recorded once GitHub has accepted the code.
+      const jwtKey = await secrets.get('jwt-key');
+      const state = params.state ? verifyState(jwtKey, params.state, now()) : null;
+      if (!state || !hasStateCookie(event, state.nonce)) {
+        return toClient('#error=invalid_state');
+      }
+      if (params.error) {
+        // The user declined, or GitHub refused. The error text is never echoed.
+        return toClient('#error=access_denied');
+      }
+      const code = params.code;
+      if (!code || !CODE_FORMAT.test(code)) {
+        return toClient('#error=invalid_request');
+      }
+
+      const [clientId, clientSecret] = await Promise.all([
+        secrets.get('github-oauth-client-id'),
+        secrets.get('github-oauth-client-secret'),
+      ]);
+      // The user token exists only inside this call (Requirement 2.2).
+      const identity = await signInWithCode(fetchFn, { clientId, clientSecret, code });
+      if (!(await db.consumeOAuthState(state.nonce, state.expiresAtMs))) {
+        return toClient('#error=invalid_state');
+      }
+      const profile = await db.upsertProfileOnLogin({
+        id: identity.id,
+        login: identity.login,
+        installations: identity.installations,
+        nowMs: now(),
+      });
+      const token = await signSessionToken(jwtKey, profile.id, now());
+      return toClient(`#token=${token}`);
+    } catch (error) {
+      if (error instanceof SignInError) {
+        return toClient(
+          error.reason === 'unavailable' ? '#error=github_unavailable' : '#error=auth_failed',
+        );
+      }
+      log.error('api.callback_failed', {}, error);
+      return toClient('#error=server_error');
+    }
+  }
+
+  // ----- authenticated routes -----
+
+  async function authenticate(event: FunctionUrlEvent): Promise<number | null> {
+    const match = BEARER.exec(header(event, 'authorization') ?? '');
+    if (!match?.[1]) {
+      return null;
+    }
+    const result = await verifySessionToken(await secrets.get('jwt-key'), match[1], now());
+    return result.ok ? result.userId : null;
+  }
+
+  /** The player with this week's run, started on the spot if the rollover has not reached them. */
+  function runContext(): RunContext {
+    return { db, now: now(), newSeed: deps.newSeed ?? randomSeed };
+  }
+
+  /** Answer for the player's current state, or 404 when they have no profile. */
+  async function withCurrent(
+    userId: number,
+    respond: (current: Current, now: number) => FunctionUrlResult | Promise<FunctionUrlResult>,
+  ): Promise<FunctionUrlResult> {
+    const context = runContext();
+    const current = await loadCurrent(context, userId);
+    return current ? respond(current, context.now) : json(404, { error: 'no_profile' });
+  }
+
+  /** A GET route that answers with a view of the player's current state. */
+  const view = (
+    path: string,
+    build: (current: Current, now: number, userId: number) => unknown,
+  ): Route =>
+    get(path, ({ userId }) =>
+      withCurrent(userId, async (current, at) => json(200, await build(current, at, userId))),
+    );
+
+  /**
+   * What every mutation route does around the mutation itself: read the body, take the request id and the
+   * typed request out of it (400 when either is invalid), and run `run` with the context the mutation needs.
+   */
+  function runMutation<R>(
+    event: FunctionUrlEvent,
+    parse: Parser<R>,
+    run: (context: DepthContext, requestId: string, request: R) => Promise<FunctionUrlResult>,
+  ): Promise<FunctionUrlResult> {
+    return withJsonBody(event, async (body) => {
+      const requestId = parseRequestId(body);
+      const request = parse(body);
+      if (requestId === null || request === null) {
+        return json(400, { error: 'invalid_request' });
+      }
+      const context = { ...runContext(), log, ...(deps.rollSeed ? { seed: deps.rollSeed } : {}) };
+      return run(context, requestId, request);
+    });
+  }
+
+  /** A shop, shrine or Pledge route (`mutations.ts`): it answers the new profile and week. */
+  const shopRoute = (path: string, parse: Parser<MutationRequest>): Route =>
+    post(path, ({ userId, event }) =>
+      runMutation(event, parse, async (context, requestId, request) => {
+        const outcome = await mutate(context, userId, requestId, request);
+        if (outcome.status !== 200) {
+          return refused(outcome);
+        }
+        const body: MutationResponse = {
+          me: toMeResponse(outcome.current, context.now),
+          week: toWeekSummary(outcome.current, context.now),
+        };
+        return json(200, body);
+      }),
+    );
+
+  /** A depth-layer route (expeditions, packs, the Forge, gear, Feats): see `depth.ts`. */
+  const depthRoute = (
+    path: string,
+    parse: Parser<DepthRequest>,
+    answer: (me: MeResponse, result: DepthResult) => object = answerMe,
+  ): Route =>
+    post(path, ({ userId, event }) =>
+      runMutation(event, parse, async (context, requestId, request) => {
+        const outcome = await mutateDepth(context, userId, requestId, request);
+        return outcome.status === 200
+          ? json(200, answer(toMeResponse(outcome.current, context.now), outcome.result))
+          : refused(outcome);
+      }),
+    );
+
+  /** `GET /packs/:seed`: the 3 Charms of an unopened pack (a pure function of the seed, kept by the player). */
+  async function packOptions(userId: number, rawSeed: string): Promise<FunctionUrlResult> {
+    const seed = /^\d{1,10}$/.test(rawSeed) ? Number(rawSeed) : Number.NaN;
+    if (!Number.isSafeInteger(seed) || seed > MAX_SEED) {
+      return json(400, { error: 'invalid_request' });
+    }
+    return withCurrent(userId, ({ player }) => {
+      if (!(player.charmPacks ?? []).includes(seed)) {
+        return json(409, { error: 'no_such_pack' });
+      }
+      const body: PackOptionsResponse = { options: lootPackOptions(seed) };
+      return json(200, body);
+    });
+  }
+
+  async function combatLog(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
+    const cursor = event.queryStringParameters?.cursor;
+    let beforeSk: string | undefined;
+    if (cursor) {
+      const rowId = decodeCursor(cursor);
+      if (rowId === null) {
+        return json(400, { error: 'invalid_cursor' });
+      }
+      beforeSk = `EVT#${rowId}`;
+    }
+    const { rows, nextSk } = await db.listEvents(userId, {
+      limit: LOG_PAGE_SIZE,
+      ...(beforeSk ? { beforeSk } : {}),
+    });
+    const body: LogResponse = {
+      entries: rows.map(toLogEntry),
+      nextCursor: nextSk ? encodeCursor(nextSk.slice('EVT#'.length)) : null,
+    };
+    return json(200, body);
+  }
+
+  async function installations(userId: number): Promise<FunctionUrlResult> {
+    const profile = await db.getProfile(userId, true);
+    if (!profile) {
+      return json(404, { error: 'no_profile' });
+    }
+    const at = now();
+    const found = await Promise.all(profile.installations.map((id) => db.getInstallation(id, at)));
+    // An installation the webhook has not reported (or that was deleted) has nothing to show.
+    const body: InstallationsResponse = {
+      installations: found.flatMap((item) =>
+        item && !item.deleted ? [toInstallationSummary(item)] : [],
+      ),
+    };
+    return json(200, body);
+  }
+
+  // ----- badge (public) -----
+
+  /**
+   * The README badge: no auth and no Origin check, because an `<img>` in someone's README sends neither.
+   * It reads GSI1 for level, Vocation and Renown and nothing else. An unknown or malformed login gets the
+   * neutral "unranked" badge with the same caching (Requirement 11.3) and is never echoed. So does a player
+   * who turned their badge off in Settings (Requirement 11.4): it is indistinguishable from an unknown login.
+   */
+  async function badge(login: string): Promise<FunctionUrlResult> {
+    const found = GITHUB_LOGIN.test(login) ? await db.findBadgeByLogin(login) : null;
+    const player = found?.badgePublic === false ? null : found;
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': BADGE_CONTENT_TYPE,
+        'cache-control': BADGE_CACHE_CONTROL,
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'none'; sandbox",
+      },
+      body: renderBadge(
+        player,
+        player ? { login: player.login, pins: player.pins, coin: player.coin } : {},
+      ),
+    };
+  }
+
+  // ----- export and deletion (Requirement 13) -----
+
+  /**
+   * Every item under the player's `USER#` partition, raw attribute names, grouped by kind. Gzipped when the
+   * client accepts it (browsers do), so a long history stays under the Function URL's 6 MB response cap.
+   */
+  async function exportData(userId: number, event: FunctionUrlEvent): Promise<FunctionUrlResult> {
+    const items = await db.listUserItems(userId);
+    const profile = items.find((item) => item.SK === 'PROFILE');
+    if (!profile) {
+      return json(404, { error: 'no_profile' });
+    }
+    type Item = Record<string, unknown>;
+    const groups = Object.fromEntries(
+      EXPORT_GROUPS.map(([, name]) => [name, [] as Item[]]),
+    ) as Record<ExportGroup, Item[]>;
+    const other: Item[] = [];
+    for (const item of items) {
+      const sk = String(item.SK);
+      const group = EXPORT_GROUPS.find(([prefix]) => sk.startsWith(prefix));
+      if (group) {
+        groups[group[1]].push(item);
+      } else if (sk !== 'PROFILE') {
+        other.push(item);
+      }
+    }
+    const text = JSON.stringify({
+      exportedAt: new Date(now()).toISOString(),
+      profile,
+      ...groups,
+      // Only present if a kind of item was added without teaching the export about it.
+      ...(other.length > 0 ? { other } : {}),
+    });
+    const login =
+      typeof profile.login === 'string' && GITHUB_LOGIN.test(profile.login)
+        ? profile.login
+        : 'player';
+    const headers = {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'content-disposition': `attachment; filename="mergescape-${login}.json"`,
+    };
+    const compress = /\bgzip\b/i.test(header(event, 'accept-encoding') ?? '');
+    const payload = compress ? gzipSync(text) : Buffer.from(text, 'utf8');
+    if (payload.length > MAX_EXPORT_BYTES) {
+      return json(413, { error: 'export_too_large' });
+    }
+    return compress
+      ? {
+          statusCode: 200,
+          headers: { ...headers, 'content-encoding': 'gzip' },
+          body: payload.toString('base64'),
+          isBase64Encoded: true,
+        }
+      : { statusCode: 200, headers, body: text };
+  }
+
+  /**
+   * `POST /delete { requestId, confirmLogin }`: 204 once everything is gone, 400 `confirm_mismatch` unless
+   * `confirmLogin` equals the player's login (case-insensitive). A player with no profile has nothing left to
+   * confirm against, so a repeat of a delete that succeeded answers 204 again (it also sweeps any item a
+   * concurrent webhook wrote after the profile went, which a new character would otherwise inherit).
+   */
+  async function deleteAccount(
+    userId: number,
+    event: FunctionUrlEvent,
+  ): Promise<FunctionUrlResult> {
+    return withJsonBody(event, async (body) => {
+      const { confirmLogin } = body;
+      if (
+        parseRequestId(body) === null ||
+        typeof confirmLogin !== 'string' ||
+        confirmLogin.length > 100
+      ) {
+        return json(400, { error: 'invalid_request' });
+      }
+      const profile = await db.getProfile(userId, true);
+      if (profile && confirmLogin.toLowerCase() !== profile.login.toLowerCase()) {
+        return json(400, { error: 'confirm_mismatch' });
+      }
+      await db.deleteUser(userId);
+      return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+    });
+  }
+
+  // ----- router -----
+
+  const routes: readonly Route[] = [
+    view('/me', toMeResponse),
+    view('/week', toWeekSummary),
+    get('/log', ({ userId, event }) => combatLog(userId, event)),
+    get('/installations', ({ userId }) => installations(userId)),
+    get('/export', ({ userId, event }) => exportData(userId, event)),
+    view('/expedition', toExpeditionView),
+    view('/forge', toForgeView),
+    view('/feats', async (current, at, userId) =>
+      toFeatsView(current, at, await db.listFeatUnlocks(userId)),
+    ),
+    get(PACK_PATH, ({ userId, param }) => packOptions(userId, param)),
+    shopRoute('/shop/buy', parseBuy),
+    shopRoute('/shop/pick', parsePick),
+    shopRoute('/shop/reroll', parseReroll),
+    shopRoute('/shop/sell', parseSell),
+    shopRoute('/shrine/remove', parsePledge('shrine')),
+    shopRoute('/pledges/play', parsePledge('play')),
+    depthRoute('/expedition/send', parseExpeditionSend, answerSend),
+    depthRoute('/expedition/collect', parseExpeditionCollect, answerCollect),
+    depthRoute('/packs/open', parsePackOpen),
+    depthRoute('/forge/start', parseForgeStart),
+    depthRoute('/forge/collect', parseForgeCollect, answerForgeCollect),
+    depthRoute('/forge/upgrade', parseForgeUpgrade),
+    depthRoute('/gear/equip', parseGearEquip),
+    depthRoute('/feats/pin', parseFeatPin),
+    depthRoute('/settings', parseSettings),
+    post('/delete', ({ userId, event }) => deleteAccount(userId, event)),
+  ];
+
+  return async (event) => {
+    const method = event.requestContext.http.method;
+    const path = event.rawPath;
+    try {
+      if (method === 'GET' && path === '/auth/login') {
+        return await login();
+      }
+      if (method === 'GET' && path === '/auth/callback') {
+        return await callback(event);
+      }
+
+      // The badge is public: a README's <img> sends no Origin and no token (Requirement 11).
+      if (path.startsWith('/badge/')) {
+        if (method !== 'GET' && method !== 'HEAD') {
+          return json(405, { error: 'method_not_allowed' }, { allow: 'GET, HEAD' });
+        }
+        const login = BADGE_PATH.exec(path)?.[1];
+        return login ? await badge(login) : json(404, { error: 'not_found' });
+      }
+
+      // Everything below is the client's API: it must come from the Pages origin (Requirement 12.3).
+      if (header(event, 'origin') !== config.pagesOrigin) {
+        return json(403, { error: 'forbidden_origin' });
+      }
+      if (method === 'OPTIONS') {
+        // Function URL CORS answers preflights itself; this is the fallback if one reaches the code.
+        return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+      }
+      const matched = matchRoute(routes, path);
+      if (matched === undefined) {
+        return json(404, { error: 'not_found' });
+      }
+      const { route, param } = matched;
+      if (method !== route.method) {
+        return json(405, { error: 'method_not_allowed' }, { allow: route.method });
+      }
+      const userId = await authenticate(event);
+      if (userId === null) {
+        return json(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
+      }
+      return await route.handle({ userId, event, param });
+    } catch (error) {
+      log.error('api.failed', {}, error);
+      return json(500, { error: 'internal_error' });
+    }
+  };
+}
+
+let defaultHandler: ((event: FunctionUrlEvent) => Promise<FunctionUrlResult>) | undefined;
+
+/** Lambda entry point (the `api` function of the CDK stack): HTTP requests and the weekly schedule. */
+export const handler = (
+  event: FunctionUrlEvent | RolloverEvent,
+): Promise<FunctionUrlResult | RolloverResult> => {
+  if (isRolloverEvent(event)) {
+    const runtime = getRuntime();
+    return runRollover({
+      db: runtime.db,
+      log: runtime.log,
+      now: Date.now,
+      newSeed: randomSeed,
+    });
+  }
+  if (!defaultHandler) {
+    const runtime = getRuntime();
+    defaultHandler = createApiHandler({
+      db: runtime.db,
+      secrets: runtime.secrets,
+      config: runtime.config,
+      log: runtime.log,
+    });
+  }
+  return defaultHandler(event);
+};
